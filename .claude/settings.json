@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod init:*)",
+      "Bash(go build:*)",
+      "Bash(go doc:*)",
+      "Bash(./blecli:*)",
+      "Bash(make:*)",
+      "Bash(go list:*)",
+      "Bash(go test:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
