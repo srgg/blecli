@@ -43,17 +43,13 @@ Example:
 
 var (
 	bridgeServiceUUID    string
-	bridgeTxCharUUID     string
-	bridgeRxCharUUID     string
 	bridgeConnectTimeout time.Duration
 	bridgeVerbose        bool
 	bridgeLuaScript      string
 )
 
 func init() {
-	bridgeCmd.Flags().StringVar(&bridgeServiceUUID, "service", "6E400001-B5A3-F393-E0A9-E50E24DCCA9E", "BLE service UUID for serial communication")
-	bridgeCmd.Flags().StringVar(&bridgeTxCharUUID, "tx-char", "6E400003-B5A3-F393-E0A9-E50E24DCCA9E", "TX characteristic UUID (device -> client)")
-	bridgeCmd.Flags().StringVar(&bridgeRxCharUUID, "rx-char", "6E400002-B5A3-F393-E0A9-E50E24DCCA9E", "RX characteristic UUID (client -> device)")
+	bridgeCmd.Flags().StringVar(&bridgeServiceUUID, "service", "6E400001-B5A3-F393-E0A9-E50E24DCCA9E", "BLE service UUID to bridge with")
 	bridgeCmd.Flags().DurationVar(&bridgeConnectTimeout, "connect-timeout", 30*time.Second, "Connection timeout")
 	bridgeCmd.Flags().BoolVarP(&bridgeVerbose, "verbose", "v", false, "Verbose output")
 	bridgeCmd.Flags().StringVar(&bridgeLuaScript, "script", "", "Lua script file with ble_to_tty() and tty_to_ble() functions")
@@ -70,18 +66,8 @@ func runBridge(cmd *cobra.Command, args []string) error {
 
 	logger := cfg.NewLogger()
 
-	// Parse UUIDs
+	// Parse service UUID
 	serviceUUID, err := parseUUID(bridgeServiceUUID, "service")
-	if err != nil {
-		return err
-	}
-
-	txCharUUID, err := parseUUID(bridgeTxCharUUID, "tx-char")
-	if err != nil {
-		return err
-	}
-
-	rxCharUUID, err := parseUUID(bridgeRxCharUUID, "rx-char")
 	if err != nil {
 		return err
 	}
@@ -104,8 +90,6 @@ func runBridge(cmd *cobra.Command, args []string) error {
 		DeviceAddress:  deviceAddress,
 		ConnectTimeout: bridgeConnectTimeout,
 		ServiceUUID:    serviceUUID,
-		TxCharUUID:     txCharUUID,
-		RxCharUUID:     rxCharUUID,
 	}
 
 	conn := connection.NewConnection(connOpts, logger)
@@ -163,12 +147,15 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	defer bridge.Stop()
 
 	// Display connection info
+	characteristics := conn.GetCharacteristics()
 	fmt.Printf("\n=== BLE-PTY Bridge Active ===\n")
 	fmt.Printf("Device: %s\n", deviceAddress)
 	fmt.Printf("PTY: %s\n", bridge.GetPTYName())
 	fmt.Printf("Service: %s\n", serviceUUID.String())
-	fmt.Printf("TX Char: %s\n", txCharUUID.String())
-	fmt.Printf("RX Char: %s\n", rxCharUUID.String())
+	fmt.Printf("Characteristics: %d\n", len(characteristics))
+	for uuid := range characteristics {
+		fmt.Printf("  - %s\n", uuid)
+	}
 	fmt.Printf("\nBridge is running. Connect your application to %s\n", bridge.GetPTYName())
 	fmt.Printf("Press Ctrl+C to stop the bridge.\n\n")
 

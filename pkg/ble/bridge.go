@@ -385,32 +385,94 @@ func (b *Bridge) GetStats() map[string]interface{} {
 
 func defaultBLEToTTYScript() string {
 	return `
--- BLE→TTY transformation script
--- Read characteristic value and append to TTY buffer
+-- BLE→TTY transformation function - prints all characteristics in human-readable format
+function ble_to_tty()
+    local chars = ble:list()
+    if #chars == 0 then
+        return nil, "no characteristics available"
+    end
 
-local temp_val = ble["2A6E"] -- Temperature characteristic
-if temp_val and #temp_val > 0 then
-    -- Transform to TTY bytes (example: pack as big-endian short)
-    local tty_bytes = string.pack(">h", string.unpack("f", temp_val))
-    buffer:append(tty_bytes)
+    local output = "\n=== BLE Characteristics ==="
+    for i, uuid in ipairs(chars) do
+        local char = ble.get(uuid)
+        if char then
+            output = output .. "\n[" .. i .. "] " .. uuid .. ":"
+
+            -- Show properties
+            local props = {}
+            if char.properties then
+                for prop, enabled in pairs(char.properties) do
+                    if enabled then
+                        table.insert(props, prop)
+                    end
+                end
+            end
+            if #props > 0 then
+                output = output .. " (" .. table.concat(props, ", ") .. ")"
+            end
+
+            -- Show value in hex and ASCII
+            if char.value and #char.value > 0 then
+                local hex = ""
+                local ascii = ""
+                for j = 1, #char.value do
+                    local byte = string.byte(char.value, j)
+                    hex = hex .. string.format("%02x ", byte)
+                    ascii = ascii .. (byte >= 32 and byte <= 126 and string.char(byte) or ".")
+                end
+                output = output .. "\n    Value: " .. hex .. "(" .. ascii .. ")"
+            else
+                output = output .. "\n    Value: (empty)"
+            end
+
+            -- Show descriptors if any
+            if char.descriptors then
+                local desc_count = 0
+                for _ in pairs(char.descriptors) do desc_count = desc_count + 1 end
+                if desc_count > 0 then
+                    output = output .. "\n    Descriptors: " .. desc_count
+                end
+            end
+        end
+    end
+    output = output .. "\n========================\n"
+
+    buffer:append(output)
 end
 `
 }
 
 func defaultTTYToBLEScript() string {
 	return `
--- TTY→BLE transformation script
--- Read from buffer and update BLE characteristic
+-- TTY→BLE transformation function - echoes TTY input as hex to first writable characteristic
+function tty_to_ble()
+    local chunk = buffer:peek(1)
+    if #chunk < 1 then
+        return nil, "waiting for more data"
+    end
 
--- Peek buffer to see if enough data
-local chunk = buffer:peek(2)
-if #chunk < 2 then
-    return nil, "waiting for more data"
+    -- Find first writable characteristic
+    local chars = ble:list()
+    local target_uuid = nil
+
+    for i, uuid in ipairs(chars) do
+        local char = ble.get(uuid)
+        if char and char.properties and (char.properties.write or char.properties.write_without_response) then
+            target_uuid = uuid
+            break
+        end
+    end
+
+    if target_uuid then
+        -- Convert input to hex representation and write to BLE
+        local byte = string.byte(chunk, 1)
+        local hex_str = string.format("TTY->BLE: 0x%02x (%s)\n", byte,
+            (byte >= 32 and byte <= 126) and string.char(byte) or ".")
+        ble.set(target_uuid, hex_str)
+        buffer:consume(1)
+    else
+        return nil, "no writable characteristics found"
+    end
 end
-
--- Decode value (example: unpack big-endian short)
-local val = string.unpack(">h", chunk)
-ble["2A6E"] = string.pack("f", val) -- Update temperature characteristic
-buffer:consume(2)
 `
 }
