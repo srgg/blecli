@@ -5,15 +5,20 @@ BINARY_NAME=blecli
 COVERAGE_DIR=coverage
 GO_PACKAGES=$(shell go list ./...)
 
+# Global LuaJIT flags for maximum performance (all builds use LuaJIT)
+export CGO_LDFLAGS := -L/opt/homebrew/lib
+export PKG_CONFIG_PATH := /opt/homebrew/lib/pkgconfig
+BUILD_FLAGS := -tags luajit
+
 # Default target
 .PHONY: all
 all: build test
 
-# Build the application
+# Build the application with LuaJIT (Go-LuaHit for maximum performance)
 .PHONY: build
 build:
-	@echo "Building $(BINARY_NAME)..."
-	go build -o $(BINARY_NAME) ./cmd/blecli
+	@echo "Building $(BINARY_NAME) with LuaJIT for maximum performance..."
+	go build $(BUILD_FLAGS) -o $(BINARY_NAME) ./cmd/blecli
 
 # Clean build artifacts
 .PHONY: clean
@@ -22,24 +27,29 @@ clean:
 	rm -f $(BINARY_NAME)
 	rm -rf $(COVERAGE_DIR)
 
-# Run all tests
+# Run all tests or specific test by name
 .PHONY: test
 test:
-	@echo "Running tests..."
-	go test -v ./...
+	@if [ -z "$(TEST)" ]; then \
+		echo "Running all tests..."; \
+		go test $(BUILD_FLAGS) -v ./...; \
+	else \
+		echo "Running specific test: $(TEST)..."; \
+		go test $(BUILD_FLAGS) -v -run $(TEST) ./...; \
+	fi
 
 # Run tests with race detection
 .PHONY: test-race
 test-race:
 	@echo "Running tests with race detection..."
-	go test -race -v ./...
+	go test $(BUILD_FLAGS) -race -v ./...
 
 # Run tests with coverage
 .PHONY: test-coverage
 test-coverage:
 	@echo "Running tests with coverage..."
 	mkdir -p $(COVERAGE_DIR)
-	go test -coverprofile=$(COVERAGE_DIR)/coverage.out ./...
+	go test $(BUILD_FLAGS) -coverprofile=$(COVERAGE_DIR)/coverage.out ./...
 	go tool cover -html=$(COVERAGE_DIR)/coverage.out -o $(COVERAGE_DIR)/coverage.html
 	@echo "Coverage report generated: $(COVERAGE_DIR)/coverage.html"
 
@@ -53,14 +63,14 @@ coverage: test-coverage
 .PHONY: bench
 bench:
 	@echo "Running benchmarks..."
-	go test -bench=. -benchmem ./...
+	go test $(BUILD_FLAGS) -bench=. -benchmem ./...
 
 # Run benchmarks with CPU profiling
 .PHONY: bench-cpu
 bench-cpu:
 	@echo "Running benchmarks with CPU profiling..."
 	mkdir -p $(COVERAGE_DIR)
-	go test -bench=. -benchmem -cpuprofile=$(COVERAGE_DIR)/cpu.prof ./...
+	go test $(BUILD_FLAGS) -bench=. -benchmem -cpuprofile=$(COVERAGE_DIR)/cpu.prof ./...
 	@echo "CPU profile saved: $(COVERAGE_DIR)/cpu.prof"
 
 # Run benchmarks with memory profiling
@@ -68,7 +78,7 @@ bench-cpu:
 bench-mem:
 	@echo "Running benchmarks with memory profiling..."
 	mkdir -p $(COVERAGE_DIR)
-	go test -bench=. -benchmem -memprofile=$(COVERAGE_DIR)/mem.prof ./...
+	go test $(BUILD_FLAGS) -bench=. -benchmem -memprofile=$(COVERAGE_DIR)/mem.prof ./...
 	@echo "Memory profile saved: $(COVERAGE_DIR)/mem.prof"
 
 # Lint the code
@@ -126,40 +136,40 @@ install-tools:
 .PHONY: test-device
 test-device:
 	@echo "Running device package tests..."
-	go test -v ./pkg/device
+	go test $(BUILD_FLAGS) -v ./pkg/device
 
 .PHONY: test-ble
 test-ble:
 	@echo "Running BLE package tests..."
-	go test -v ./pkg/ble
+	go test $(BUILD_FLAGS) -v ./pkg/ble
 
 .PHONY: test-config
 test-config:
 	@echo "Running config package tests..."
-	go test -v ./pkg/config
+	go test $(BUILD_FLAGS) -v ./pkg/config
 
 .PHONY: test-cli
 test-cli:
 	@echo "Running CLI tests..."
-	go test -v ./cmd/blecli
+	go test $(BUILD_FLAGS) -v ./cmd/blecli
 
 # Package-specific benchmarks
 .PHONY: bench-device
 bench-device:
 	@echo "Running device package benchmarks..."
-	go test -bench=. -benchmem ./pkg/device
+	go test $(BUILD_FLAGS) -bench=. -benchmem ./pkg/device
 
 .PHONY: bench-ble
 bench-ble:
 	@echo "Running BLE package benchmarks..."
-	go test -bench=. -benchmem ./pkg/ble
+	go test $(BUILD_FLAGS) -bench=. -benchmem ./pkg/ble
 
 # Help target
 .PHONY: help
 help:
 	@echo "Available targets:"
 	@echo "  build          - Build the application"
-	@echo "  test           - Run all tests"
+	@echo "  test           - Run all tests or specific test (TEST=<test_name>)"
 	@echo "  test-race      - Run tests with race detection"
 	@echo "  test-coverage  - Run tests with coverage report"
 	@echo "  coverage       - Show coverage summary"

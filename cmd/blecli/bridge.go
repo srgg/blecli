@@ -47,6 +47,7 @@ var (
 	bridgeRxCharUUID     string
 	bridgeConnectTimeout time.Duration
 	bridgeVerbose        bool
+	bridgeLuaScript      string
 )
 
 func init() {
@@ -55,6 +56,7 @@ func init() {
 	bridgeCmd.Flags().StringVar(&bridgeRxCharUUID, "rx-char", "6E400002-B5A3-F393-E0A9-E50E24DCCA9E", "RX characteristic UUID (client -> device)")
 	bridgeCmd.Flags().DurationVar(&bridgeConnectTimeout, "connect-timeout", 30*time.Second, "Connection timeout")
 	bridgeCmd.Flags().BoolVarP(&bridgeVerbose, "verbose", "v", false, "Verbose output")
+	bridgeCmd.Flags().StringVar(&bridgeLuaScript, "script", "", "Lua script file with ble_to_tty() and tty_to_ble() functions")
 }
 
 func runBridge(cmd *cobra.Command, args []string) error {
@@ -108,29 +110,55 @@ func runBridge(cmd *cobra.Command, args []string) error {
 
 	conn := connection.NewConnection(connOpts, logger)
 
-	// Create PTY bridge
+	// Create Lua-based PTY bridge
 	bridge := ble2.NewBridge(logger)
 	bridgeOpts := ble2.DefaultBridgeOptions()
 
-	// Set up data handlers
-	conn.SetDataHandler(func(data []byte) {
-		// Data from BLE device -> PTY
-		if err := bridge.WriteFromDevice(data); err != nil {
-			logger.WithError(err).Error("Failed to write data to PTY")
+	// Load Lua script if provided
+	if bridgeLuaScript != "" {
+		logger.WithField("script", bridgeLuaScript).Info("Loading Lua transformation script...")
+		if err := bridge.GetEngine().LoadScriptFile(bridgeLuaScript); err != nil {
+			return fmt.Errorf("failed to load Lua script: %w", err)
 		}
-	})
+	}
 
-	// Connect to BLE device
+	// Connect to BLE device first to discover characteristics
 	logger.WithField("address", deviceAddress).Info("Connecting to BLE device...")
 	if err := conn.Connect(ctx, connOpts); err != nil {
 		return fmt.Errorf("failed to connect to BLE device: %w", err)
 	}
 	defer conn.Disconnect()
 
-	// Start PTY bridge
-	logger.Info("Starting PTY bridge...")
-	if err := bridge.Start(ctx, bridgeOpts, conn.Write); err != nil {
-		return fmt.Errorf("failed to start PTY bridge: %w", err)
+	// Add BLE characteristics to the bridge
+	logger.Info("Adding BLE characteristics to Lua bridge...")
+	profile := conn.GetProfile()
+	if profile != nil {
+		for _, service := range profile.Services {
+			if service.UUID.Equal(*serviceUUID) {
+				for _, char := range service.Characteristics {
+					bridge.AddBLECharacteristic(char)
+					logger.WithField("uuid", char.UUID.String()).Debug("Added characteristic to bridge")
+				}
+				break
+			}
+		}
+	}
+
+	// Set up BLE write callback
+	bridge.SetBLEWriteCallback(func(uuid string, data []byte) error {
+		return conn.WriteToCharacteristic(uuid, data)
+	})
+
+	// Set up data handlers for incoming BLE data
+	conn.SetDataHandlerWithUUID(func(uuid string, data []byte) {
+		// Raw BLE data -> Lua engine
+		bridge.UpdateCharacteristic(uuid, data)
+	})
+
+	// Start Lua bridge
+	logger.Info("Starting Lua-based PTY bridge...")
+	if err := bridge.Start(ctx, bridgeOpts); err != nil {
+		return fmt.Errorf("failed to start Lua bridge: %w", err)
 	}
 	defer bridge.Stop()
 

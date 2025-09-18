@@ -40,6 +40,7 @@ func init() {
 	// Add subcommands
 	rootCmd.AddCommand(scanCmd)
 	rootCmd.AddCommand(bridgeCmd)
+	rootCmd.AddCommand(inspectCmd)
 
 	// Global flags
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose output")

@@ -3,7 +3,7 @@
 This document describes an Agile-friendly architecture for a **bidirectional BLE↔TTY transformation engine**. 
 It focuses on **maximizing flexibility**, **keeping Go as a dumb engine**, and leaving **all protocol logic in Lua scripts**.
 
-**Preferred Lua runtime:** Go-LuaHit for maximum performance.
+Let's do not create example, but create a test 
 
 ---
 

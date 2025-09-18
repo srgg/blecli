@@ -13,6 +13,11 @@ import (
 	"github.com/srg/blecli/pkg/device"
 )
 
+// DeviceFactory creates BLE device instances - can be overridden in tests
+var DeviceFactory = func() (ble.Device, error) {
+	return darwin.NewDevice()
+}
+
 // Scanner handles BLE device discovery
 type Scanner struct {
 	devices     map[string]*device.Device
@@ -24,11 +29,11 @@ type Scanner struct {
 
 // ScanOptions configures the scanning behavior
 type ScanOptions struct {
-	Duration    time.Duration // How long to scan (0 = indefinite)
-	DuplicateFilter bool      // Filter duplicate advertisements
-	ServiceUUIDs []ble.UUID   // Only discover devices advertising these services
-	AllowList   []string      // Only include devices with these addresses
-	BlockList   []string      // Exclude devices with these addresses
+	Duration        time.Duration // How long to scan (0 = indefinite)
+	DuplicateFilter bool          // Filter duplicate advertisements
+	ServiceUUIDs    []ble.UUID    // Only discover devices advertising these services
+	AllowList       []string      // Only include devices with these addresses
+	BlockList       []string      // Exclude devices with these addresses
 }
 
 // DefaultScanOptions returns sensible default scanning options
@@ -48,8 +53,8 @@ func NewScanner(logger *logrus.Logger) (*Scanner, error) {
 		logger = logrus.New()
 	}
 
-	// Initialize BLE device for macOS
-	d, err := darwin.NewDevice()
+	// Initialize BLE device using factory (allows mocking in tests)
+	d, err := DeviceFactory()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create BLE device: %w", err)
 	}
@@ -125,9 +130,9 @@ func (s *Scanner) handleAdvertisement(adv ble.Advertisement) {
 		newDevice := device.NewDevice(adv)
 		s.devices[deviceID] = newDevice
 		s.logger.WithFields(logrus.Fields{
-			"device": newDevice.DisplayName(),
+			"device":  newDevice.DisplayName(),
 			"address": newDevice.Address,
-			"rssi":   newDevice.RSSI,
+			"rssi":    newDevice.RSSI,
 		}).Info("Discovered new device")
 	}
 }

@@ -3,57 +3,92 @@ package ble
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/creack/pty"
+	"github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/term"
+	"github.com/srg/blecli/pkg/ble/internal"
 )
 
-// Bridge represents a PTY bridge for BLE serial communication
+// Bridge represents the Lua-based bidirectional BLE↔TTY transformation engine
+// This implements the "dumb Go engine" + "smart Lua scripts" architecture
 type Bridge struct {
-	ptyMaster   *os.File
-	ptySlave    *os.File
+	engine      *internal.LuaEngine
+	ttyDevice   *os.File // Simple TTY device - no master/slave
 	logger      *logrus.Logger
-	writeFunc   func([]byte) error
 	isRunning   bool
 	runMutex    sync.RWMutex
 	stopChan    chan struct{}
 	stoppedChan chan struct{}
+
+	// BLE connection callbacks
+	onBLEWrite func(uuid string, data []byte) error
+
+	// Configuration
+	transformInterval time.Duration
 }
 
-// BridgeOptions configures the PTY bridge
+// BridgeOptions configures the bridge
 type BridgeOptions struct {
-	PTYName    string // Optional: custom PTY name
-	BufferSize int    // Buffer size for data transfer
+	PTYName           string        // Optional: custom PTY name
+	BufferSize        int           // Buffer size for data transfer
+	TransformInterval time.Duration // How often to run transformations
+	BLEToTTYScript    string        // Lua script for BLE→TTY transformation
+	TTYToBLEScript    string        // Lua script for TTY→BLE transformation
 }
 
-// DefaultBridgeOptions returns sensible defaults for PTY bridge
+// DefaultBridgeOptions returns sensible defaults for bridge
 func DefaultBridgeOptions() *BridgeOptions {
 	return &BridgeOptions{
-		PTYName:    "", // Let system assign
-		BufferSize: 1024,
+		PTYName:           "", // Let system assign
+		BufferSize:        1024,
+		TransformInterval: 50 * time.Millisecond, // 20Hz transformation rate
+		BLEToTTYScript:    defaultBLEToTTYScript(),
+		TTYToBLEScript:    defaultTTYToBLEScript(),
 	}
 }
 
-// NewBridge creates a new PTY bridge
+// NewBridge creates a new Lua-based bridge
 func NewBridge(logger *logrus.Logger) *Bridge {
 	if logger == nil {
 		logger = logrus.New()
 	}
 
 	return &Bridge{
-		logger:      logger,
-		isRunning:   false,
-		stopChan:    make(chan struct{}),
-		stoppedChan: make(chan struct{}),
+		engine:            internal.NewLuaEngine(logger),
+		logger:            logger,
+		isRunning:         false,
+		stopChan:          make(chan struct{}),
+		stoppedChan:       make(chan struct{}),
+		transformInterval: 50 * time.Millisecond,
 	}
 }
 
-// Start creates and starts the PTY bridge
-func (b *Bridge) Start(ctx context.Context, opts *BridgeOptions, writeFunc func([]byte) error) error {
+// SetBLEWriteCallback sets the callback for writing to BLE characteristics
+func (b *Bridge) SetBLEWriteCallback(callback func(uuid string, data []byte) error) {
+	b.onBLEWrite = callback
+}
+
+// AddBLECharacteristic adds a BLE characteristic to the bridge
+func (b *Bridge) AddBLECharacteristic(char *ble.Characteristic) {
+	b.engine.GetBLEAPI().AddCharacteristic(char)
+	b.logger.WithField("uuid", char.UUID.String()).Debug("Added BLE characteristic to bridge")
+}
+
+// UpdateCharacteristic updates a characteristic value (raw data from BLE device)
+func (b *Bridge) UpdateCharacteristic(uuid string, value []byte) {
+	b.engine.GetBLEAPI().UpdateCharacteristicValue(uuid, value)
+	b.logger.WithFields(logrus.Fields{
+		"uuid":  uuid,
+		"bytes": len(value),
+	}).Debug("Updated characteristic value in BLE API")
+}
+
+// Start creates and starts the Lua bridge
+func (b *Bridge) Start(ctx context.Context, opts *BridgeOptions) error {
 	b.runMutex.Lock()
 	defer b.runMutex.Unlock()
 
@@ -61,89 +96,83 @@ func (b *Bridge) Start(ctx context.Context, opts *BridgeOptions, writeFunc func(
 		return fmt.Errorf("bridge is already running")
 	}
 
-	if writeFunc == nil {
-		return fmt.Errorf("write function is required")
+	// Set a transformation interval
+	b.transformInterval = opts.TransformInterval
+
+	// Load Lua scripts
+	b.engine.SetScripts(opts.BLEToTTYScript, opts.TTYToBLEScript)
+
+	if err := b.engine.LoadScript(opts.BLEToTTYScript, "BLE→TTY"); err != nil {
+		return fmt.Errorf("failed to load BLE→TTY script: %w", err)
 	}
 
-	b.writeFunc = writeFunc
+	if err := b.engine.LoadScript(opts.TTYToBLEScript, "TTY→BLE"); err != nil {
+		return fmt.Errorf("failed to load TTY→BLE script: %w", err)
+	}
 
-	// Create PTY
-	master, slave, err := pty.Open()
+	// Create a simple TTY device (no master/slave complexity)
+	_, slave, err := pty.Open()
 	if err != nil {
-		return fmt.Errorf("failed to create PTY: %w", err)
+		return fmt.Errorf("failed to create TTY device: %w", err)
 	}
 
-	b.ptyMaster = master
-	b.ptySlave = slave
-
-	// Get the PTY name
-	ptyName := b.ptySlave.Name()
-	b.logger.WithField("pty", ptyName).Info("Created PTY bridge")
-
-	// Make the slave PTY raw (disable line buffering, echo, etc.)
-	if _, err := term.MakeRaw(int(b.ptySlave.Fd())); err != nil {
-		b.logger.WithError(err).Warn("Failed to set PTY to raw mode")
-	}
+	b.ttyDevice = slave
+	ttyName := b.ttyDevice.Name()
+	b.logger.WithField("tty", ttyName).Info("Created TTY device for Lua bridge")
 
 	b.isRunning = true
 
-	// Start the bridge goroutines
-	go b.readFromPTY(ctx, opts.BufferSize)
+	// Start the engine goroutines
+	go b.runTransformationEngine(ctx)
+	go b.handleTTYIO(ctx, opts.BufferSize)
 	go b.monitorContext(ctx)
 
-	b.logger.WithField("pty", ptyName).Info("PTY bridge started successfully")
-	fmt.Printf("PTY bridge created at: %s\n", ptyName)
-	fmt.Printf("Connect your application to this device file\n")
+	b.logger.WithField("tty", ttyName).Info("Lua bridge started successfully")
 
 	return nil
 }
 
-// WriteToDevice writes data from PTY to the BLE device
-func (b *Bridge) WriteToDevice(data []byte) error {
-	b.runMutex.RLock()
-	writeFunc := b.writeFunc
-	running := b.isRunning
-	b.runMutex.RUnlock()
+// runTransformationEngine runs the bidirectional transformation loop
+// This is the "dumb Go engine" that calls Lua transformations
+func (b *Bridge) runTransformationEngine(ctx context.Context) {
+	defer func() {
+		b.stoppedChan <- struct{}{}
+	}()
 
-	if !running {
-		return fmt.Errorf("bridge is not running")
+	ticker := time.NewTicker(b.transformInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			b.logger.Debug("Transformation engine stopping due to context cancellation")
+			return
+		case <-b.stopChan:
+			b.logger.Debug("Transformation engine stopping due to stop signal")
+			return
+		case <-ticker.C:
+			// BLE→TTY: Raw BLE data → Lua script → TTY buffer
+			if err := b.engine.TransformBLEToTTY(); err != nil {
+				b.handleTransformError(err, "BLE→TTY")
+			} else {
+				// Flush TTY buffer to TTY device
+				b.flushTTYBufferToDevice()
+			}
+
+			// TTY→BLE: TTY buffer → Lua script → BLE characteristics
+			if err := b.engine.TransformTTYToBLE(); err != nil {
+				b.handleTransformError(err, "TTY→BLE")
+			} else {
+				// Flush BLE updates to BLE device
+				b.flushBLEUpdates()
+			}
+		}
 	}
-
-	if writeFunc == nil {
-		return fmt.Errorf("write function not set")
-	}
-
-	b.logger.WithField("bytes", len(data)).Debug("Writing data to BLE device")
-	return writeFunc(data)
 }
 
-// WriteFromDevice writes data from BLE device to PTY
-func (b *Bridge) WriteFromDevice(data []byte) error {
-	b.runMutex.RLock()
-	master := b.ptyMaster
-	running := b.isRunning
-	b.runMutex.RUnlock()
-
-	if !running {
-		return fmt.Errorf("bridge is not running")
-	}
-
-	if master == nil {
-		return fmt.Errorf("PTY master not available")
-	}
-
-	b.logger.WithField("bytes", len(data)).Debug("Writing data to PTY")
-
-	_, err := master.Write(data)
-	if err != nil {
-		return fmt.Errorf("failed to write to PTY: %w", err)
-	}
-
-	return nil
-}
-
-// readFromPTY reads data from PTY and sends it to the BLE device
-func (b *Bridge) readFromPTY(ctx context.Context, bufferSize int) {
+// handleTTYIO handles reading/writing to the TTY device
+// This feeds raw TTY data into the TTY buffer for Lua processing
+func (b *Bridge) handleTTYIO(ctx context.Context, bufferSize int) {
 	defer func() {
 		b.stoppedChan <- struct{}{}
 	}()
@@ -153,20 +182,23 @@ func (b *Bridge) readFromPTY(ctx context.Context, bufferSize int) {
 	for {
 		select {
 		case <-ctx.Done():
-			b.logger.Debug("PTY read goroutine stopping due to context cancellation")
+			b.logger.Debug("TTY I/O goroutine stopping due to context cancellation")
 			return
 		case <-b.stopChan:
-			b.logger.Debug("PTY read goroutine stopping due to stop signal")
+			b.logger.Debug("TTY I/O goroutine stopping due to stop signal")
 			return
 		default:
-			// Read from PTY master
-			n, err := b.ptyMaster.Read(buffer)
+			// Set read timeout to make it non-blocking
+			b.ttyDevice.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+
+			// Read raw data from TTY device
+			n, err := b.ttyDevice.Read(buffer)
 			if err != nil {
-				if err == io.EOF {
-					b.logger.Debug("PTY closed")
-					return
+				if os.IsTimeout(err) {
+					// Timeout is normal, continue loop
+					continue
 				}
-				b.logger.WithError(err).Error("Error reading from PTY")
+				b.logger.WithError(err).Error("Error reading from TTY device")
 				continue
 			}
 
@@ -174,19 +206,91 @@ func (b *Bridge) readFromPTY(ctx context.Context, bufferSize int) {
 				data := make([]byte, n)
 				copy(data, buffer[:n])
 
-				// Send data to BLE device
-				if err := b.WriteToDevice(data); err != nil {
-					b.logger.WithError(err).Error("Failed to write data to BLE device")
-				}
+				// Feed raw TTY data into buffer for Lua processing
+				b.engine.GetBLEBuffer().Append(data)
+
+				b.logger.WithField("bytes", n).Debug("Read raw data from TTY into buffer")
 			}
 		}
+	}
+}
+
+// flushTTYBufferToDevice writes data from TTY buffer to TTY device
+// This sends Lua-transformed data out to the TTY
+func (b *Bridge) flushTTYBufferToDevice() {
+	ttyBuffer := b.engine.GetTTYBuffer()
+	if ttyBuffer.Len() == 0 {
+		return
+	}
+
+	// Read all data from TTY buffer (Lua put it there)
+	data := ttyBuffer.Read(ttyBuffer.Len())
+	if len(data) == 0 {
+		return
+	}
+
+	b.runMutex.RLock()
+	device := b.ttyDevice
+	running := b.isRunning
+	b.runMutex.RUnlock()
+
+	if !running || device == nil {
+		return
+	}
+
+	// Write to TTY device
+	if _, err := device.Write(data); err != nil {
+		b.logger.WithError(err).Error("Failed to write to TTY device")
+	} else {
+		b.logger.WithField("bytes", len(data)).Debug("Wrote Lua-transformed data to TTY")
+	}
+}
+
+// flushBLEUpdates writes Lua-updated BLE characteristic values to BLE device
+func (b *Bridge) flushBLEUpdates() {
+	if b.onBLEWrite == nil {
+		return
+	}
+
+	bleAPI := b.engine.GetBLEAPI()
+
+	// Check each characteristic for Lua-updated values
+	for _, uuid := range bleAPI.ListCharacteristics() {
+		value := bleAPI.GetCharacteristicValue(uuid)
+		if len(value) > 0 {
+			if err := b.onBLEWrite(uuid, value); err != nil {
+				b.logger.WithError(err).WithField("uuid", uuid).Error("Failed to write Lua-updated value to BLE")
+			} else {
+				b.logger.WithFields(logrus.Fields{
+					"uuid":  uuid,
+					"bytes": len(value),
+				}).Debug("Wrote Lua-transformed data to BLE characteristic")
+
+				// Clear the value after successful write
+				bleAPI.SetCharacteristicValue(uuid, nil)
+			}
+		}
+	}
+}
+
+// handleTransformError handles errors from Lua transformations
+func (b *Bridge) handleTransformError(err error, direction string) {
+	if engineErr, ok := err.(*internal.EngineError); ok {
+		if engineErr.Fatal {
+			b.logger.WithError(engineErr).Error("Fatal transformation error - stopping bridge")
+			b.Stop() // Stop the bridge on fatal errors
+		} else {
+			b.logger.WithError(engineErr).Debug("Non-fatal transformation error")
+		}
+	} else {
+		b.logger.WithError(err).Error("Transformation error")
 	}
 }
 
 // monitorContext monitors the context and stops the bridge when cancelled
 func (b *Bridge) monitorContext(ctx context.Context) {
 	<-ctx.Done()
-	b.logger.Debug("Context cancelled, stopping PTY bridge")
+	b.logger.Debug("Context cancelled, stopping Lua bridge")
 	b.Stop()
 }
 
@@ -197,54 +301,64 @@ func (b *Bridge) IsRunning() bool {
 	return b.isRunning
 }
 
-// GetPTYName returns the PTY device name
+// GetPTYName returns the TTY device name
 func (b *Bridge) GetPTYName() string {
 	b.runMutex.RLock()
 	defer b.runMutex.RUnlock()
 
-	if b.ptySlave != nil {
-		return b.ptySlave.Name()
+	if b.ttyDevice != nil {
+		return b.ttyDevice.Name()
 	}
 	return ""
 }
 
-// Stop stops the PTY bridge
+// Stop stops the Lua bridge
 func (b *Bridge) Stop() error {
 	b.runMutex.Lock()
-	defer b.runMutex.Unlock()
 
 	if !b.isRunning {
+		b.runMutex.Unlock()
 		return fmt.Errorf("bridge is not running")
 	}
 
-	b.logger.Info("Stopping PTY bridge...")
+	b.logger.Info("Stopping Lua bridge...")
 
 	// Signal stop
 	close(b.stopChan)
 
-	// Wait for read goroutine to stop
-	<-b.stoppedChan
+	// Release lock before waiting to avoid deadlock
+	b.runMutex.Unlock()
 
-	// Close PTY files
-	if b.ptyMaster != nil {
-		b.ptyMaster.Close()
-		b.ptyMaster = nil
+	// Wait for goroutines to stop
+	<-b.stoppedChan // transformation engine
+	<-b.stoppedChan // TTY I/O
+
+	// Re-acquire lock to finish cleanup
+	b.runMutex.Lock()
+	defer b.runMutex.Unlock()
+
+	// Close TTY device
+	if b.ttyDevice != nil {
+		b.ttyDevice.Close()
+		b.ttyDevice = nil
 	}
 
-	if b.ptySlave != nil {
-		b.ptySlave.Close()
-		b.ptySlave = nil
-	}
+	// Close Lua engine
+	b.engine.Close()
 
 	b.isRunning = false
-	b.writeFunc = nil
 
 	// Reset channels for potential restart
 	b.stopChan = make(chan struct{})
 	b.stoppedChan = make(chan struct{})
 
-	b.logger.Info("PTY bridge stopped")
+	b.logger.Info("Lua bridge stopped")
 	return nil
+}
+
+// GetEngine returns the Lua engine for external access
+func (b *Bridge) GetEngine() *internal.LuaEngine {
+	return b.engine
 }
 
 // GetStats returns bridge statistics
@@ -253,12 +367,50 @@ func (b *Bridge) GetStats() map[string]interface{} {
 	defer b.runMutex.RUnlock()
 
 	stats := map[string]interface{}{
-		"running": b.isRunning,
+		"running":            b.isRunning,
+		"transform_interval": b.transformInterval.String(),
+		"tty_buffer_len":     b.engine.GetTTYBuffer().Len(),
+		"ble_buffer_len":     b.engine.GetBLEBuffer().Len(),
+		"characteristics":    len(b.engine.GetBLEAPI().ListCharacteristics()),
 	}
 
-	if b.ptySlave != nil {
-		stats["pty_name"] = b.ptySlave.Name()
+	if b.ttyDevice != nil {
+		stats["tty_name"] = b.ttyDevice.Name()
 	}
 
 	return stats
+}
+
+// Default Lua scripts for basic functionality
+
+func defaultBLEToTTYScript() string {
+	return `
+-- BLE→TTY transformation script
+-- Read characteristic value and append to TTY buffer
+
+local temp_val = ble["2A6E"] -- Temperature characteristic
+if temp_val and #temp_val > 0 then
+    -- Transform to TTY bytes (example: pack as big-endian short)
+    local tty_bytes = string.pack(">h", string.unpack("f", temp_val))
+    buffer:append(tty_bytes)
+end
+`
+}
+
+func defaultTTYToBLEScript() string {
+	return `
+-- TTY→BLE transformation script
+-- Read from buffer and update BLE characteristic
+
+-- Peek buffer to see if enough data
+local chunk = buffer:peek(2)
+if #chunk < 2 then
+    return nil, "waiting for more data"
+end
+
+-- Decode value (example: unpack big-endian short)
+local val = string.unpack(">h", chunk)
+ble["2A6E"] = string.pack("f", val) -- Update temperature characteristic
+buffer:consume(2)
+`
 }

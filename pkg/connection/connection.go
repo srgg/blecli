@@ -202,6 +202,88 @@ func (c *Connection) SetDataHandler(handler func([]byte)) {
 	c.onData = handler
 }
 
+// SetDataHandlerWithUUID sets the callback function for incoming data with UUID
+func (c *Connection) SetDataHandlerWithUUID(handler func(string, []byte)) {
+	c.onData = func(data []byte) {
+		// For now, assume TX characteristic for incoming data
+		if c.txChar != nil {
+			handler(c.txChar.UUID.String(), data)
+		}
+	}
+}
+
+// GetProfile returns the discovered BLE profile
+func (c *Connection) GetProfile() *ble.Profile {
+	c.connMutex.RLock()
+	defer c.connMutex.RUnlock()
+	return c.profile
+}
+
+// WriteToCharacteristic writes data to a specific characteristic by UUID
+func (c *Connection) WriteToCharacteristic(uuid string, data []byte) error {
+	c.connMutex.RLock()
+	connected := c.isConnected
+	profile := c.profile
+	c.connMutex.RUnlock()
+
+	if !connected {
+		return fmt.Errorf("not connected")
+	}
+
+	if profile == nil {
+		return fmt.Errorf("no profile available")
+	}
+
+	// Find the characteristic by UUID
+	var targetChar *ble.Characteristic
+	for _, service := range profile.Services {
+		for _, char := range service.Characteristics {
+			if char.UUID.String() == uuid {
+				targetChar = char
+				break
+			}
+		}
+		if targetChar != nil {
+			break
+		}
+	}
+
+	if targetChar == nil {
+		return fmt.Errorf("characteristic %s not found", uuid)
+	}
+
+	c.writeMutex.Lock()
+	defer c.writeMutex.Unlock()
+
+	// Split large writes into chunks (BLE typically has ~20 byte MTU limit)
+	maxChunkSize := 20
+	for len(data) > 0 {
+		chunkSize := len(data)
+		if chunkSize > maxChunkSize {
+			chunkSize = maxChunkSize
+		}
+
+		chunk := data[:chunkSize]
+		data = data[chunkSize:]
+
+		if err := c.client.WriteCharacteristic(targetChar, chunk, false); err != nil {
+			return fmt.Errorf("failed to write to characteristic %s: %w", uuid, err)
+		}
+
+		c.logger.WithFields(logrus.Fields{
+			"uuid":  uuid,
+			"bytes": len(chunk),
+		}).Debug("Wrote chunk to characteristic")
+
+		// Small delay between chunks to avoid overwhelming the device
+		if len(data) > 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	return nil
+}
+
 // handleNotification processes incoming data from the TX characteristic
 func (c *Connection) handleNotification(data []byte) {
 	c.logger.WithField("bytes", len(data)).Debug("Received data from device")

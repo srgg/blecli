@@ -14,12 +14,30 @@ type Device struct {
 	Name        string            `json:"name"`
 	Address     string            `json:"address"`
 	RSSI        int               `json:"rssi"`
-	Services    []string          `json:"services"`
+	Services    []Service         `json:"services,omitempty"`
 	ManufData   []byte            `json:"manufacturer_data,omitempty"`
 	ServiceData map[string][]byte `json:"service_data,omitempty"`
 	TxPower     *int              `json:"tx_power,omitempty"`
 	Connectable bool              `json:"connectable"`
 	LastSeen    time.Time         `json:"last_seen"`
+}
+
+// Service represents a GATT service
+type Service struct {
+	UUID            string           `json:"uuid"`
+	Characteristics []Characteristic `json:"characteristics"`
+}
+
+// Characteristic represents a GATT characteristic (structure only)
+type Characteristic struct {
+	UUID        string       `json:"uuid"`
+	Properties  string       `json:"properties"`
+	Descriptors []Descriptor `json:"descriptors,omitempty"`
+}
+
+// Descriptor represents a GATT descriptor
+type Descriptor struct {
+	UUID string `json:"uuid"`
 }
 
 // NewDevice creates a Device from a BLE advertisement
@@ -29,16 +47,16 @@ func NewDevice(adv ble.Advertisement) *Device {
 		Name:        adv.LocalName(),
 		Address:     adv.Addr().String(),
 		RSSI:        adv.RSSI(),
-		Services:    make([]string, 0),
+		Services:    make([]Service, 0),
 		ManufData:   adv.ManufacturerData(),
 		ServiceData: make(map[string][]byte),
 		Connectable: adv.Connectable(),
 		LastSeen:    time.Now(),
 	}
 
-	// Convert service UUIDs to strings
+	// Convert service UUIDs into minimal Service entries (UUID only)
 	for _, svc := range adv.Services() {
-		dev.Services = append(dev.Services, svc.String())
+		dev.Services = append(dev.Services, Service{UUID: svc.String()})
 	}
 
 	// Convert service data
@@ -80,6 +98,14 @@ func (d *Device) Update(adv ble.Advertisement) {
 	// Update manufacturer data
 	if manufData := adv.ManufacturerData(); len(manufData) > 0 {
 		d.ManufData = manufData
+	}
+
+	// Merge advertised services (ensure UUID entries exist)
+	for _, svc := range adv.Services() {
+		u := svc.String()
+		if !d.hasServiceUUID(u) {
+			d.Services = append(d.Services, Service{UUID: u})
+		}
 	}
 
 	// Update service data
@@ -195,4 +221,14 @@ func (d *Device) parseMicrosoftManufacturerData(data []byte) string {
 func (d *Device) parseBroadcomManufacturerData(data []byte) string {
 	// Broadcom devices sometimes include device information
 	return ""
+}
+
+// hasServiceUUID checks if Services already contains a service with the given UUID (case-insensitive)
+func (d *Device) hasServiceUUID(uuid string) bool {
+	for _, s := range d.Services {
+		if strings.EqualFold(s.UUID, uuid) {
+			return true
+		}
+	}
+	return false
 }

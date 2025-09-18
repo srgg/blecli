@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
@@ -27,10 +26,10 @@ func TestDefaultConnectOptions(t *testing.T) {
 
 func TestNewConnection(t *testing.T) {
 	tests := []struct {
-		name           string
-		opts           *ConnectOptions
-		logger         *logrus.Logger
-		expectNotNil   bool
+		name         string
+		opts         *ConnectOptions
+		logger       *logrus.Logger
+		expectNotNil bool
 	}{
 		{
 			name:         "creates connection with provided logger",
@@ -115,9 +114,9 @@ func TestConnection_SetDataHandler(t *testing.T) {
 
 func TestSerialUUIDs(t *testing.T) {
 	// Verify that the Nordic UART Service UUIDs are correctly defined
-	assert.Equal(t, "6e400001-b5a3-f393-e0a9-e50e24dcca9e", SerialServiceUUID.String())
-	assert.Equal(t, "6e400003-b5a3-f393-e0a9-e50e24dcca9e", SerialTxCharUUID.String())
-	assert.Equal(t, "6e400002-b5a3-f393-e0a9-e50e24dcca9e", SerialRxCharUUID.String())
+	assert.Equal(t, "6e400001b5a3f393e0a9e50e24dcca9e", SerialServiceUUID.String())
+	assert.Equal(t, "6e400003b5a3f393e0a9e50e24dcca9e", SerialTxCharUUID.String())
+	assert.Equal(t, "6e400002b5a3f393e0a9e50e24dcca9e", SerialRxCharUUID.String())
 }
 
 func TestConnection_DisconnectNotConnected(t *testing.T) {

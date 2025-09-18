@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"sort"
@@ -13,8 +14,8 @@ import (
 	"time"
 
 	"github.com/go-ble/ble"
-	"github.com/spf13/cobra"
 	"github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 
 	blecli "github.com/srg/blecli/pkg/ble"
 	"github.com/srg/blecli/pkg/config"
@@ -203,7 +204,11 @@ func displayDevices(devices []*device.Device, cfg *config.Config) error {
 }
 
 func displayDevicesTable(devices []*device.Device) error {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	var base io.Writer = os.Stdout
+	if base == nil {
+		base = io.Discard
+	}
+	w := tabwriter.NewWriter(base, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tADDRESS\tRSSI\tSERVICES\tLAST SEEN")
 	fmt.Fprintln(w, strings.Repeat("-", 80))
 
@@ -213,7 +218,12 @@ func displayDevicesTable(devices []*device.Device) error {
 			name = name[:17] + "..."
 		}
 
-		services := strings.Join(dev.Services, ",")
+		// Join service UUIDs for display
+		uuids := make([]string, 0, len(dev.Services))
+		for _, s := range dev.Services {
+			uuids = append(uuids, s.UUID)
+		}
+		services := strings.Join(uuids, ",")
 		if len(services) > 30 {
 			services = services[:27] + "..."
 		}
@@ -228,21 +238,37 @@ func displayDevicesTable(devices []*device.Device) error {
 }
 
 func displayDevicesJSON(devices []*device.Device) error {
-	encoder := json.NewEncoder(os.Stdout)
+	var w io.Writer = os.Stdout
+	if w == nil {
+		w = io.Discard
+	}
+	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(devices)
 }
 
 func displayDevicesCSV(devices []*device.Device) error {
-	fmt.Println("Name,Address,RSSI,Services,LastSeen")
+	var w io.Writer = os.Stdout
+	if w == nil {
+		w = io.Discard
+	}
+	fmt.Fprintln(w, "Name,Address,RSSI,Services,LastSeen")
 	for _, dev := range devices {
-		services := strings.Join(dev.Services, ";")
-		fmt.Printf("%s,%s,%d,%s,%s\n",
+		uuids := make([]string, 0, len(dev.Services))
+		for _, s := range dev.Services {
+			uuids = append(uuids, s.UUID)
+		}
+		services := strings.Join(uuids, ";")
+		fmt.Fprintf(w, "%s,%s,%d,%s,%s\n",
 			dev.DisplayName(), dev.Address, dev.RSSI, services, dev.LastSeen.Format(time.RFC3339))
 	}
 	return nil
 }
 
 func clearScreen() {
-	fmt.Print("\033[2J\033[H")
+	var w io.Writer = os.Stdout
+	if w == nil {
+		w = io.Discard
+	}
+	fmt.Fprint(w, "\033[2J\033[H")
 }

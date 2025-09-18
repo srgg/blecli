@@ -76,9 +76,9 @@ func (m *MockAddr) String() string {
 
 func TestNewDevice(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		setupMock func(*MockAdvertisement)
-		expected func(*Device)
+		expected  func(*Device)
 	}{
 		{
 			name: "creates device with all advertisement data",
@@ -106,8 +106,12 @@ func TestNewDevice(t *testing.T) {
 				assert.True(t, dev.Connectable)
 				assert.Equal(t, []byte{0x4C, 0x00, 0x01, 0x02}, dev.ManufData)
 				assert.Len(t, dev.Services, 2)
-				assert.Contains(t, dev.Services, "180f")
-				assert.Contains(t, dev.Services, "180a")
+				uuids := make([]string, 0, len(dev.Services))
+				for _, s := range dev.Services {
+					uuids = append(uuids, strings.ToLower(s.UUID))
+				}
+				assert.Contains(t, uuids, "180f")
+				assert.Contains(t, uuids, "180a")
 				assert.Equal(t, []byte{0x64}, dev.ServiceData["180f"])
 				assert.NotNil(t, dev.TxPower)
 				assert.Equal(t, 4, *dev.TxPower)
@@ -178,6 +182,7 @@ func TestDevice_Update(t *testing.T) {
 	updateAdv.On("LocalName").Return("Updated Name")
 	updateAdv.On("RSSI").Return(-40)
 	updateAdv.On("ManufacturerData").Return([]byte{0x02, 0x03})
+	updateAdv.On("Services").Return([]ble.UUID{uuid})
 	updateAdv.On("ServiceData").Return([]ble.ServiceData{
 		{UUID: uuid, Data: []byte{0x50}},
 	})
@@ -200,21 +205,21 @@ func TestDevice_Update(t *testing.T) {
 
 func TestDevice_DisplayName(t *testing.T) {
 	tests := []struct {
-		name        string
-		deviceName  string
-		address     string
+		name         string
+		deviceName   string
+		address      string
 		expectedName string
 	}{
 		{
-			name:        "returns device name when available",
-			deviceName:  "My BLE Device",
-			address:     "AA:BB:CC:DD:EE:FF",
+			name:         "returns device name when available",
+			deviceName:   "My BLE Device",
+			address:      "AA:BB:CC:DD:EE:FF",
 			expectedName: "My BLE Device",
 		},
 		{
-			name:        "returns address when name is empty",
-			deviceName:  "",
-			address:     "11:22:33:44:55:66",
+			name:         "returns address when name is empty",
+			deviceName:   "",
+			address:      "11:22:33:44:55:66",
 			expectedName: "11:22:33:44:55:66",
 		},
 	}
@@ -366,32 +371,32 @@ func TestDevice_ExtractNameFromManufacturerData(t *testing.T) {
 
 func TestDevice_NameResolutionPrecedence(t *testing.T) {
 	tests := []struct {
-		name          string
-		localName     string
-		manufData     []byte
-		expectedName  string
-		description   string
+		name         string
+		localName    string
+		manufData    []byte
+		expectedName string
+		description  string
 	}{
 		{
-			name:          "LocalName takes precedence over manufacturer data",
-			localName:     "OfficialName",
-			manufData:     []byte{0x00, 0x01, 'M', 'a', 'n', 'u', 'f', 'N', 'a', 'm', 'e'},
-			expectedName:  "OfficialName",
-			description:   "Local name should override manufacturer data name",
+			name:         "LocalName takes precedence over manufacturer data",
+			localName:    "OfficialName",
+			manufData:    []byte{0x00, 0x01, 'M', 'a', 'n', 'u', 'f', 'N', 'a', 'm', 'e'},
+			expectedName: "OfficialName",
+			description:  "Local name should override manufacturer data name",
 		},
 		{
-			name:          "Uses manufacturer data when no LocalName",
-			localName:     "",
-			manufData:     []byte{0x00, 0x01, 'E', 'x', 't', 'r', 'a', 'c', 't', 'e', 'd'},
-			expectedName:  "Extracted",
-			description:   "Should extract from manufacturer data when no local name",
+			name:         "Uses manufacturer data when no LocalName",
+			localName:    "",
+			manufData:    []byte{0x00, 0x01, 'E', 'x', 't', 'r', 'a', 'c', 't', 'e', 'd'},
+			expectedName: "Extracted",
+			description:  "Should extract from manufacturer data when no local name",
 		},
 		{
-			name:          "Uses address when no name available",
-			localName:     "",
-			manufData:     []byte{0x00, 0x01, 0x02, 0x03}, // No readable name
-			expectedName:  "AA:BB:CC:DD:EE:FF",
-			description:   "Should fall back to address when no name available",
+			name:         "Uses address when no name available",
+			localName:    "",
+			manufData:    []byte{0x00, 0x01, 0x02, 0x03}, // No readable name
+			expectedName: "AA:BB:CC:DD:EE:FF",
+			description:  "Should fall back to address when no name available",
 		},
 	}
 
@@ -439,6 +444,7 @@ func TestDevice_NameUpdateBehavior(t *testing.T) {
 	adv2.On("ManufacturerData").Return([]byte{0x00, 0x01, 'D', 'i', 'f', 'f', 'e', 'r', 'e', 'n', 't'})
 	adv2.On("ServiceData").Return([]ble.ServiceData{})
 	adv2.On("TxPowerLevel").Return(127)
+	adv2.On("Services").Return([]ble.UUID{})
 
 	device.Update(adv2)
 	assert.Equal(t, "OfficialName", device.Name, "Should update to LocalName")
@@ -450,6 +456,7 @@ func TestDevice_NameUpdateBehavior(t *testing.T) {
 	adv3.On("ManufacturerData").Return([]byte{0x00, 0x01, 'N', 'e', 'w', 'N', 'a', 'm', 'e'})
 	adv3.On("ServiceData").Return([]ble.ServiceData{})
 	adv3.On("TxPowerLevel").Return(127)
+	adv3.On("Services").Return([]ble.UUID{})
 
 	device.Update(adv3)
 	assert.Equal(t, "OfficialName", device.Name, "Should keep existing name when no LocalName provided")

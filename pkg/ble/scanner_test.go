@@ -1,7 +1,9 @@
 package ble
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -10,6 +12,50 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// MockBLEDevice implements ble.Device interface for testing
+type MockBLEDevice struct{}
+
+func (m *MockBLEDevice) AddService(svc *ble.Service) error                          { return nil }
+func (m *MockBLEDevice) RemoveAllServices() error                                   { return nil }
+func (m *MockBLEDevice) SetServices(svcs []*ble.Service) error                      { return nil }
+func (m *MockBLEDevice) Stop() error                                                { return nil }
+func (m *MockBLEDevice) Advertise(ctx context.Context, adv ble.Advertisement) error { return nil }
+func (m *MockBLEDevice) AdvertiseNameAndServices(ctx context.Context, name string, ss ...ble.UUID) error {
+	return nil
+}
+func (m *MockBLEDevice) AdvertiseIBeacon(ctx context.Context, u ble.UUID, major, minor uint16, pwr int8) error {
+	return nil
+}
+func (m *MockBLEDevice) AdvertiseIBeaconData(ctx context.Context, b []byte) error        { return nil }
+func (m *MockBLEDevice) AdvertiseMfgData(ctx context.Context, id uint16, b []byte) error { return nil }
+func (m *MockBLEDevice) AdvertiseServiceData16(ctx context.Context, id uint16, b []byte) error {
+	return nil
+}
+func (m *MockBLEDevice) Scan(ctx context.Context, allowDup bool, h ble.AdvHandler) error {
+	// Mock scan that returns immediately without doing actual BLE operations
+	return nil
+}
+func (m *MockBLEDevice) Dial(ctx context.Context, a ble.Addr) (ble.Client, error) { return nil, nil }
+
+// Store original device factory for restoration
+var originalDeviceFactory func() (ble.Device, error)
+
+func TestMain(m *testing.M) {
+	// Save original BLE device factory and inject mock
+	originalDeviceFactory = DeviceFactory
+	DeviceFactory = func() (ble.Device, error) {
+		return &MockBLEDevice{}, nil
+	}
+
+	// Run tests
+	code := m.Run()
+
+	// Restore original factory
+	DeviceFactory = originalDeviceFactory
+
+	os.Exit(code)
+}
 
 // MockAddr implements ble.Addr for testing
 type MockAddr struct {
