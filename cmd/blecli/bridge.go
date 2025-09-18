@@ -60,7 +60,23 @@ func runBridge(cmd *cobra.Command, args []string) error {
 
 	// Create configuration
 	cfg := config.DefaultConfig()
-	if bridgeVerbose {
+
+	// Check global log level flag
+	logLevel, _ := cmd.Flags().GetString("log-level")
+	if logLevel != "" {
+		switch logLevel {
+		case "debug":
+			cfg.LogLevel = logrus.DebugLevel
+		case "info":
+			cfg.LogLevel = logrus.InfoLevel
+		case "warn":
+			cfg.LogLevel = logrus.WarnLevel
+		case "error":
+			cfg.LogLevel = logrus.ErrorLevel
+		default:
+			return fmt.Errorf("invalid log level: %s", logLevel)
+		}
+	} else if bridgeVerbose {
 		cfg.LogLevel = logrus.DebugLevel
 	}
 
@@ -82,7 +98,9 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	go func() {
 		<-sigChan
 		logger.Info("Received interrupt signal, shutting down...")
+		logger.Debug("About to cancel context")
 		cancel()
+		logger.Debug("Context cancelled")
 	}()
 
 	// Create BLE connection
@@ -111,7 +129,16 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	if err := conn.Connect(ctx, connOpts); err != nil {
 		return fmt.Errorf("failed to connect to BLE device: %w", err)
 	}
-	defer conn.Disconnect()
+	defer func() {
+		logger.Debug("=== DEFER DISCONNECT START ===")
+		start := time.Now()
+		if err := conn.Disconnect(); err != nil {
+			logger.WithError(err).Error("Defer disconnect failed")
+		} else {
+			logger.WithField("duration", time.Since(start)).Debug("Defer disconnect completed")
+		}
+		logger.Debug("=== DEFER DISCONNECT END ===")
+	}()
 
 	// Add BLE characteristics to the bridge
 	logger.Info("Adding BLE characteristics to Lua bridge...")
@@ -141,10 +168,21 @@ func runBridge(cmd *cobra.Command, args []string) error {
 
 	// Start Lua bridge
 	logger.Info("Starting Lua-based PTY bridge...")
+	logger.Debug("About to call bridge.Start()")
 	if err := bridge.Start(ctx, bridgeOpts); err != nil {
 		return fmt.Errorf("failed to start Lua bridge: %w", err)
 	}
-	defer bridge.Stop()
+	logger.Debug("bridge.Start() completed")
+	defer func() {
+		logger.Debug("=== DEFER BRIDGE STOP START ===")
+		start := time.Now()
+		if err := bridge.Stop(); err != nil {
+			logger.WithError(err).Error("Defer bridge stop failed")
+		} else {
+			logger.WithField("duration", time.Since(start)).Debug("Defer bridge stop completed")
+		}
+		logger.Debug("=== DEFER BRIDGE STOP END ===")
+	}()
 
 	// Display connection info
 	characteristics := conn.GetCharacteristics()
@@ -160,9 +198,11 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Press Ctrl+C to stop the bridge.\n\n")
 
 	// Run until context is cancelled
+	logger.Debug("Waiting for context cancellation...")
 	<-ctx.Done()
 
 	logger.Info("Bridge shutting down...")
+	logger.Debug("Function returning, defer will trigger...")
 	return nil
 }
 

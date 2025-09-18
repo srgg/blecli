@@ -26,6 +26,7 @@ type Connection struct {
 	profile         *ble.Profile
 	service         *ble.Service
 	characteristics map[string]*ble.Characteristic // UUID -> characteristic
+	subscribed      []*ble.Characteristic          // Track subscribed characteristics
 	logger          *logrus.Logger
 	onData          func(string, []byte) // UUID, data
 	writeMutex      sync.Mutex
@@ -84,6 +85,17 @@ func (c *Connection) Connect(ctx context.Context, opts *ConnectOptions) error {
 	connectCtx, cancel := context.WithTimeout(ctx, opts.ConnectTimeout)
 	defer cancel()
 
+	// Monitor parent context cancellation during connection
+	go func() {
+		select {
+		case <-ctx.Done():
+			c.logger.Debug("Parent context cancelled during connection, cancelling dial")
+			cancel() // Cancel the connection attempt
+		case <-connectCtx.Done():
+			// Connection completed or timed out normally
+		}
+	}()
+
 	// Connect to device
 	client, err := ble.Dial(connectCtx, ble.NewAddr(opts.DeviceAddress))
 	if err != nil {
@@ -134,6 +146,8 @@ func (c *Connection) Connect(ctx context.Context, opts *ConnectOptions) error {
 					"characteristic": char.UUID.String(),
 					"error":          err,
 				}).Warn("Failed to subscribe to characteristic, continuing...")
+			} else {
+				c.subscribed = append(c.subscribed, char)
 			}
 		}
 	}
@@ -145,12 +159,6 @@ func (c *Connection) Connect(ctx context.Context, opts *ConnectOptions) error {
 	}).Info("BLE connection established successfully")
 
 	return nil
-}
-
-// Write is deprecated - use WriteToCharacteristic instead
-// The Lua engine should decide which characteristic to write to
-func (c *Connection) Write(data []byte) error {
-	return fmt.Errorf("Write() is deprecated - use WriteToCharacteristic() with specific UUID")
 }
 
 // SetDataHandler sets the callback function for incoming data (legacy, no UUID)
@@ -246,10 +254,13 @@ func (c *Connection) WriteToCharacteristic(uuid string, data []byte) error {
 
 // handleNotification processes incoming data from any characteristic
 func (c *Connection) handleNotification(uuid string, data []byte) {
-	c.logger.WithFields(logrus.Fields{
-		"uuid":  uuid,
-		"bytes": len(data),
-	}).Debug("Received data from characteristic")
+	// Use trace level to avoid spam in debug logs
+	if c.logger.Level >= logrus.TraceLevel {
+		c.logger.WithFields(logrus.Fields{
+			"uuid":  uuid,
+			"bytes": len(data),
+		}).Trace("Received data from characteristic")
+	}
 
 	if c.onData != nil {
 		c.onData(uuid, data)
@@ -265,16 +276,42 @@ func (c *Connection) IsConnected() bool {
 
 // Disconnect closes the BLE connection
 func (c *Connection) Disconnect() error {
+	c.logger.Debug("=== DISCONNECT START ===")
 	c.connMutex.Lock()
 	defer c.connMutex.Unlock()
 
 	if !c.isConnected {
-		return fmt.Errorf("not connected")
+		c.logger.Debug("Already disconnected, returning")
+		return nil
 	}
 
 	if c.client != nil {
+		// First unsubscribe from all notifications and indications
+		for _, char := range c.subscribed {
+			// Try unsubscribing from notifications
+			if err := c.client.Unsubscribe(char, false); err != nil {
+				c.logger.WithFields(logrus.Fields{
+					"characteristic": char.UUID.String(),
+					"type":           "notification",
+					"error":          err,
+				}).Debug("Failed to unsubscribe from notifications")
+			}
+			// Try unsubscribing from indications
+			if err := c.client.Unsubscribe(char, true); err != nil {
+				c.logger.WithFields(logrus.Fields{
+					"characteristic": char.UUID.String(),
+					"type":           "indication",
+					"error":          err,
+				}).Debug("Failed to unsubscribe from indications")
+			}
+		}
+		c.subscribed = nil
+
+		c.logger.Debug("Starting CancelConnection...")
 		if err := c.client.CancelConnection(); err != nil {
-			c.logger.WithError(err).Warn("Error disconnecting from device")
+			c.logger.WithError(err).Error("CancelConnection failed")
+		} else {
+			c.logger.Debug("CancelConnection completed")
 		}
 	}
 
@@ -283,6 +320,7 @@ func (c *Connection) Disconnect() error {
 	c.profile = nil
 	c.service = nil
 	c.characteristics = make(map[string]*ble.Characteristic)
+	c.subscribed = nil
 
 	c.logger.Info("Disconnected from BLE device")
 	return nil

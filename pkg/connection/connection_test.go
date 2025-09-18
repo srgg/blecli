@@ -15,13 +15,9 @@ func TestDefaultConnectOptions(t *testing.T) {
 	assert.Equal(t, deviceAddr, opts.DeviceAddress)
 	assert.Equal(t, 30*time.Second, opts.ConnectTimeout)
 	assert.NotNil(t, opts.ServiceUUID)
-	assert.NotNil(t, opts.TxCharUUID)
-	assert.NotNil(t, opts.RxCharUUID)
 
-	// Verify the default UUIDs are correct
+	// Verify the default UUID is correct
 	assert.Equal(t, SerialServiceUUID, *opts.ServiceUUID)
-	assert.Equal(t, SerialTxCharUUID, *opts.TxCharUUID)
-	assert.Equal(t, SerialRxCharUUID, *opts.RxCharUUID)
 }
 
 func TestNewConnection(t *testing.T) {
@@ -88,10 +84,10 @@ func TestConnection_GetDeviceInfo(t *testing.T) {
 	assert.False(t, info["connected"].(bool))
 }
 
-func TestConnection_WriteNotConnected(t *testing.T) {
+func TestConnection_WriteToCharacteristicNotConnected(t *testing.T) {
 	conn := NewConnection(DefaultConnectOptions("AA:BB:CC:DD:EE:FF"), nil)
 
-	err := conn.Write([]byte("test data"))
+	err := conn.WriteToCharacteristic("test-uuid", []byte("test data"))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
 }
@@ -108,7 +104,7 @@ func TestConnection_SetDataHandler(t *testing.T) {
 	assert.NotNil(t, conn.onData)
 
 	// Simulate data reception
-	conn.handleNotification([]byte("test"))
+	conn.handleNotification("test-uuid", []byte("test"))
 	assert.True(t, called)
 }
 
@@ -122,9 +118,9 @@ func TestSerialUUIDs(t *testing.T) {
 func TestConnection_DisconnectNotConnected(t *testing.T) {
 	conn := NewConnection(DefaultConnectOptions("AA:BB:CC:DD:EE:FF"), nil)
 
+	// Should not return error when already disconnected
 	err := conn.Disconnect()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not connected")
+	assert.NoError(t, err)
 }
 
 // Benchmark tests

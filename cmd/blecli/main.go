@@ -44,4 +44,5 @@ func init() {
 
 	// Global flags
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose output")
+	rootCmd.PersistentFlags().String("log-level", "", "Log level (debug, info, warn, error)")
 }
