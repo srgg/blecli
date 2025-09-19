@@ -16,35 +16,39 @@ import (
 // Bridge represents the Lua-based bidirectional BLE↔TTY transformation engine
 // This implements the "dumb Go engine" + "smart Lua scripts" architecture
 type Bridge struct {
-	engine            *internal.LuaEngine
-	ptyMaster         *os.File
-	ptySlave          *os.File
-	logger            *logrus.Logger
-	isRunning         bool
-	runMutex          sync.RWMutex
-	stopChan          chan struct{}
-	stoppedChan       chan struct{}
-	onBLEWrite        func(uuid string, data []byte) error
-	transformInterval time.Duration
+	engine                *internal.LuaEngine
+	ptyMaster             *os.File
+	ptySlave              *os.File
+	logger                *logrus.Logger
+	isRunning             bool
+	runMutex              sync.RWMutex
+	stopChan              chan struct{}
+	stoppedChan           chan struct{}
+	onBLEWrite            func(uuid string, data []byte) error
+	dataCollectionTimeout time.Duration
+	// Collection timers
+	bleCollectionTimer *time.Timer
+	ttyCollectionTimer *time.Timer
+	timerMutex         sync.Mutex
 }
 
 // BridgeOptions configures the bridge
 type BridgeOptions struct {
-	PTYName           string        // Optional: custom PTY name
-	BufferSize        int           // Buffer size for data transfer
-	TransformInterval time.Duration // How often to run transformations
-	BLEToTTYScript    string        // Lua script for BLE→TTY transformation
-	TTYToBLEScript    string        // Lua script for TTY→BLE transformation
+	PTYName               string        // Optional: custom PTY name
+	BufferSize            int           // Buffer size for data transfer
+	DataCollectionTimeout time.Duration // Data collection timeout: 0=immediate, >0=batch mode
+	BLEToTTYScript        string        // Lua script for BLE→TTY transformation
+	TTYToBLEScript        string        // Lua script for TTY→BLE transformation
 }
 
 // DefaultBridgeOptions returns sensible defaults for bridge
 func DefaultBridgeOptions() *BridgeOptions {
 	return &BridgeOptions{
-		PTYName:           "", // Let system assign
-		BufferSize:        1024,
-		TransformInterval: 50 * time.Millisecond, // 20Hz transformation rate
-		BLEToTTYScript:    defaultBLEToTTYScript(),
-		TTYToBLEScript:    defaultTTYToBLEScript(),
+		PTYName:               "", // Let system assign
+		BufferSize:            1024,
+		DataCollectionTimeout: 0, // 0=immediate transform, >0=batch mode
+		BLEToTTYScript:        defaultBLEToTTYScript(),
+		TTYToBLEScript:        defaultTTYToBLEScript(),
 	}
 }
 
@@ -55,12 +59,11 @@ func NewBridge(logger *logrus.Logger) *Bridge {
 	}
 
 	return &Bridge{
-		engine:            internal.NewLuaEngine(logger),
-		logger:            logger,
-		isRunning:         false,
-		stopChan:          make(chan struct{}),
-		stoppedChan:       make(chan struct{}, 2),
-		transformInterval: 50 * time.Millisecond,
+		engine:      internal.NewLuaEngine(logger),
+		logger:      logger,
+		isRunning:   false,
+		stopChan:    make(chan struct{}),
+		stoppedChan: make(chan struct{}, 1), // Only one goroutine now
 	}
 }
 
@@ -76,6 +79,7 @@ func (b *Bridge) AddBLECharacteristic(char *ble.Characteristic) {
 }
 
 // UpdateCharacteristic updates a characteristic value (raw data from BLE device)
+// This triggers BLE→TTY transformation based on DataCollectionTimeout
 func (b *Bridge) UpdateCharacteristic(uuid string, value []byte) {
 	b.engine.GetBLEAPI().UpdateCharacteristicValue(uuid, value)
 	// Use level 6 (trace-like) to avoid spam in debug logs
@@ -85,6 +89,49 @@ func (b *Bridge) UpdateCharacteristic(uuid string, value []byte) {
 			"bytes": len(value),
 		}).Trace("Updated characteristic value in BLE API")
 	}
+
+	// Trigger BLE→TTY transformation
+	b.triggerBLEToTTYTransform()
+}
+
+// triggerBLEToTTYTransform handles BLE data collection and transformation
+func (b *Bridge) triggerBLEToTTYTransform() {
+	b.timerMutex.Lock()
+	defer b.timerMutex.Unlock()
+
+	if b.dataCollectionTimeout == 0 {
+		// Immediate transform
+		go b.performBLEToTTYTransform()
+	} else {
+		// Batch mode: reset/start collection timer
+		if b.bleCollectionTimer != nil {
+			b.bleCollectionTimer.Stop()
+		}
+		b.bleCollectionTimer = time.AfterFunc(b.dataCollectionTimeout, func() {
+			b.performBLEToTTYTransform()
+		})
+	}
+}
+
+// performBLEToTTYTransform executes the actual BLE→TTY transformation
+func (b *Bridge) performBLEToTTYTransform() {
+	b.runMutex.RLock()
+	running := b.isRunning
+	b.runMutex.RUnlock()
+
+	if !running {
+		return
+	}
+
+	b.logger.Debug("=== BLE→TTY TRANSFORM START ===")
+	if err := b.engine.TransformBLEToTTY(); err != nil {
+		b.handleTransformError(err, "BLE→TTY")
+	} else {
+		b.logger.Debug("BLE→TTY transform completed, flushing to TTY")
+		b.flushTTYBufferToDevice()
+		b.logger.Debug("TTY flush completed")
+	}
+	b.logger.Debug("=== BLE→TTY TRANSFORM END ===")
 }
 
 // Start creates and starts the Lua bridge
@@ -96,8 +143,8 @@ func (b *Bridge) Start(ctx context.Context, opts *BridgeOptions) error {
 		return fmt.Errorf("bridge is already running")
 	}
 
-	// Set a transformation interval
-	b.transformInterval = opts.TransformInterval
+	// Set data collection timeout
+	b.dataCollectionTimeout = opts.DataCollectionTimeout
 
 	// Load Lua scripts
 	b.engine.SetScripts(opts.BLEToTTYScript, opts.TTYToBLEScript)
@@ -117,62 +164,17 @@ func (b *Bridge) Start(ctx context.Context, opts *BridgeOptions) error {
 
 	b.ptyMaster = master
 	b.ptySlave = slave
-	ttyName := b.ptyMaster.Name()
-	b.logger.WithField("tty", ttyName).Info("Created TTY device for Lua bridge")
+	ttyName := b.ptySlave.Name() // Use slave name for external apps
+	b.logger.WithField("tty", ttyName).Info("Created TTY device for event-driven bridge")
 
 	b.isRunning = true
 
-	go b.runTransformationEngine(ctx)
+	// Only start TTY I/O handler - no more timer-based transformation engine!
 	go b.handleTTYIO(ctx, opts.BufferSize)
 
-	b.logger.WithField("tty", ttyName).Info("Lua bridge started successfully")
+	b.logger.WithField("tty", ttyName).Info("Event-driven bridge started successfully")
 
 	return nil
-}
-
-// runTransformationEngine runs the bidirectional transformation loop
-// This is the "dumb Go engine" that calls Lua transformations
-func (b *Bridge) runTransformationEngine(ctx context.Context) {
-	defer func() {
-		b.stoppedChan <- struct{}{}
-	}()
-
-	ticker := time.NewTicker(b.transformInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			b.logger.Debug("Transformation engine stopping due to context cancellation")
-			return
-		case <-b.stopChan:
-			b.logger.Debug("Transformation engine stopping due to stop signal")
-			return
-		case <-ticker.C:
-			b.logger.Debug("=== TRANSFORM CYCLE START ===")
-			// BLE→TTY: Raw BLE data → Lua script → TTY buffer
-			b.logger.Debug("Starting BLE→TTY transform")
-			if err := b.engine.TransformBLEToTTY(); err != nil {
-				b.handleTransformError(err, "BLE→TTY")
-			} else {
-				b.logger.Debug("BLE→TTY transform completed, flushing to TTY")
-				b.flushTTYBufferToDevice()
-				b.logger.Debug("TTY flush completed")
-			}
-
-			// TTY→BLE: TTY buffer → Lua script → BLE characteristics
-			b.logger.Debug("Starting TTY→BLE transform")
-			if err := b.engine.TransformTTYToBLE(); err != nil {
-				b.handleTransformError(err, "TTY→BLE")
-			} else {
-				b.logger.Debug("TTY→BLE transform completed, flushing to BLE")
-				// Flush BLE updates to BLE device
-				b.flushBLEUpdates()
-				b.logger.Debug("BLE flush completed")
-			}
-			b.logger.Debug("=== TRANSFORM CYCLE END ===")
-		}
-	}
 }
 
 // handleTTYIO handles reading/writing to the TTY device
@@ -195,9 +197,9 @@ func (b *Bridge) handleTTYIO(ctx context.Context, bufferSize int) {
 			b.logger.Debug("TTY I/O stopping")
 			return
 		case <-ticker.C:
-			b.ptySlave.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+			b.ptyMaster.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
 
-			n, err := b.ptySlave.Read(buffer)
+			n, err := b.ptyMaster.Read(buffer)
 			if err != nil {
 				if os.IsTimeout(err) {
 					continue
@@ -235,7 +237,7 @@ func (b *Bridge) flushTTYBufferToDevice() {
 	}
 
 	b.runMutex.RLock()
-	device := b.ptySlave
+	device := b.ptyMaster // Write to master so external apps can read from slave
 	running := b.isRunning
 	b.runMutex.RUnlock()
 
@@ -253,6 +255,13 @@ func (b *Bridge) flushTTYBufferToDevice() {
 		b.logger.WithError(err).Debug("Failed to write to PTY")
 	} else {
 		b.logger.WithField("bytes", len(data)).Debug("Wrote data to PTY")
+
+		// Force flush to ensure data is immediately available for reading
+		if err := device.Sync(); err != nil {
+			b.logger.WithError(err).Debug("Failed to sync PTY")
+		} else {
+			b.logger.Debug("PTY synced successfully")
+		}
 	}
 	b.logger.Debug("=== TTY FLUSH END ===")
 }
@@ -310,8 +319,8 @@ func (b *Bridge) GetPTYName() string {
 	b.runMutex.RLock()
 	defer b.runMutex.RUnlock()
 
-	if b.ptyMaster != nil {
-		return b.ptyMaster.Name()
+	if b.ptySlave != nil {
+		return b.ptySlave.Name()
 	}
 	return ""
 }
@@ -346,8 +355,7 @@ func (b *Bridge) Stop() error {
 	// Release lock before waiting to avoid deadlock
 	b.runMutex.Unlock()
 
-	// Wait for goroutines to stop (now that PTY is closed, writes will fail)
-	<-b.stoppedChan
+	// Wait for the single goroutine to stop (now that PTY is closed, writes will fail)
 	<-b.stoppedChan
 
 	// Re-acquire lock to finish cleanup
@@ -360,7 +368,7 @@ func (b *Bridge) Stop() error {
 	b.isRunning = false
 
 	b.stopChan = make(chan struct{})
-	b.stoppedChan = make(chan struct{}, 2)
+	b.stoppedChan = make(chan struct{}, 1)
 
 	b.logger.Info("Lua bridge stopped")
 	return nil
@@ -377,11 +385,11 @@ func (b *Bridge) GetStats() map[string]interface{} {
 	defer b.runMutex.RUnlock()
 
 	stats := map[string]interface{}{
-		"running":            b.isRunning,
-		"transform_interval": b.transformInterval.String(),
-		"tty_buffer_len":     b.engine.GetTTYBuffer().Len(),
-		"ble_buffer_len":     b.engine.GetBLEBuffer().Len(),
-		"characteristics":    len(b.engine.GetBLEAPI().ListCharacteristics()),
+		"running":                 b.isRunning,
+		"data_collection_timeout": b.dataCollectionTimeout.String(),
+		"tty_buffer_len":          b.engine.GetTTYBuffer().Len(),
+		"ble_buffer_len":          b.engine.GetBLEBuffer().Len(),
+		"characteristics":         len(b.engine.GetBLEAPI().ListCharacteristics()),
 	}
 
 	if b.ptyMaster != nil {

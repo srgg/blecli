@@ -1,13 +1,19 @@
 package ble
 
 import (
+	"context"
+	"os"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blecli/pkg/ble/internal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
 )
 
 // TestBridgeBufferAPI tests the Buffer API functions
@@ -609,6 +615,138 @@ end
 	// This will help us see exactly which step fails
 }
 
+// BridgeTestSuite for timeout-controlled tests
+type BridgeTestSuite struct {
+	suite.Suite
+}
+
+// TestBridgeBLENotifyToPTYIntegration tests the complete BLE notify → PTY output path
+func (s *BridgeTestSuite) TestBridgeBLENotifyToPTYIntegration() {
+	t := s.T()
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+
+	bridge := NewBridge(logger)
+	require.NotNil(t, bridge)
+
+	// Script that processes characteristics in a fixed order
+	passthroughScript := `
+function ble_to_tty()
+    -- Try all expected UUIDs in deterministic order
+    local expected_uuids = {
+        "6e400003b5a3f393e0a9e50e24dcca9e",
+        "6e400002b5a3f393e0a9e50e24dcca9e",
+        "2a19"
+    }
+
+    for i, uuid in ipairs(expected_uuids) do
+        local value = ble.get(uuid)
+        if value and #value > 0 then
+            buffer:append(value)
+        end
+    end
+end
+
+function tty_to_ble()
+    return nil, "not needed for notify test"
+end
+`
+
+	// Create bridge options for testing
+	opts := DefaultBridgeOptions()
+	opts.BLEToTTYScript = passthroughScript
+	opts.DataCollectionTimeout = 1 * time.Second // Batch mode - transform after 1 second
+
+	// Start the bridge (creates actual PTY)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := bridge.Start(ctx, opts)
+	require.NoError(t, err)
+	defer bridge.Stop()
+
+	// Verify PTY was created
+	ptyName := bridge.GetPTYName()
+	require.NotEmpty(t, ptyName)
+	t.Logf("Bridge created PTY: %s", ptyName)
+
+	// Add multiple mock BLE characteristics
+	mockChars := []*MockCharacteristic{
+		{
+			UUID:       ble.MustParse("6E400003-B5A3-F393-E0A9-E50E24DCCA9E"), // Nordic UART TX
+			Data:       []byte{},                                              // Will be updated via notifications
+			Properties: map[string]bool{"notify": true, "read": true},
+		},
+		{
+			UUID:       ble.MustParse("6E400002-B5A3-F393-E0A9-E50E24DCCA9E"), // Nordic UART RX
+			Data:       []byte{},                                              // Will be updated via notifications
+			Properties: map[string]bool{"notify": true, "read": true},
+		},
+		{
+			UUID:       ble.MustParse("2A19"), // Battery Level
+			Data:       []byte{},              // Will be updated via notifications
+			Properties: map[string]bool{"notify": true, "read": true},
+		},
+	}
+
+	for _, mockChar := range mockChars {
+		t.Logf("Adding characteristic: %s", mockChar.UUID.String())
+		bridge.AddBLECharacteristic(mockChar.ToBLECharacteristic())
+
+		// Verify it was added to the BLE API
+		bleAPI := bridge.GetEngine().GetBLEAPI()
+		allChars := bleAPI.ListCharacteristics()
+		t.Logf("BLE API now has %d characteristics: %v", len(allChars), allChars)
+	}
+
+	// Open the PTY for reading (simulates external application)
+	ptyFile, err := os.OpenFile(ptyName, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	require.NoError(t, err)
+	defer ptyFile.Close()
+
+	// Test data to send via BLE notifications
+	testData := [][]byte{
+		[]byte("Hello from BLE device!\n"),
+		[]byte("Line 2: More test data\n"),
+		[]byte("Line 3: Final test\n"),
+	}
+
+	var receivedData []byte
+
+	// Send each test data via simulated BLE notifications to DIFFERENT characteristics
+	for i, data := range testData {
+		t.Logf("Sending BLE notification %d: %q to UUID %s", i+1, string(data), mockChars[i].UUID.String())
+
+		// Simulate BLE notification by updating different characteristics
+		bridge.UpdateCharacteristic(mockChars[i].UUID.String(), data)
+	}
+
+	// Use Eventually to read all data properly
+	require.Eventually(t, func() bool {
+		// Keep reading until we have all expected content
+		buffer := make([]byte, 1024)
+		n, _ := ptyFile.Read(buffer)
+		if n > 0 {
+			receivedData = append(receivedData, buffer[:n]...)
+		}
+
+		// Check if we have all expected content
+		receivedStr := string(receivedData)
+		return strings.Contains(receivedStr, "Hello from BLE device!") &&
+			strings.Contains(receivedStr, "Line 2: More test data") &&
+			strings.Contains(receivedStr, "Line 3: Final test")
+	}, 3*time.Second, 50*time.Millisecond, "Should receive all expected data")
+
+	// Apply detailed assertions on the complete buffer
+	receivedStr := string(receivedData)
+	t.Logf("Total received from PTY: %q", receivedStr)
+
+	// Verify each expected string is present
+	assert.Contains(t, receivedStr, "Hello from BLE device!", "First message should be received")
+	assert.Contains(t, receivedStr, "Line 2: More test data", "Second message should be received")
+	assert.Contains(t, receivedStr, "Line 3: Final test", "Third message should be received")
+}
+
 // MockCharacteristic represents a mock BLE characteristic for testing
 type MockCharacteristic struct {
 	UUID       ble.UUID
@@ -636,4 +774,9 @@ func (m *MockCharacteristic) ToBLECharacteristic() *ble.Characteristic {
 	char.Property = props
 
 	return char
+}
+
+// TestBridgeTestSuite runs the suite
+func TestBridgeTestSuite(t *testing.T) {
+	suite.Run(t, new(BridgeTestSuite))
 }

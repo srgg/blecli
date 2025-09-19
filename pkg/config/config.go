@@ -8,10 +8,10 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	LogLevel    logrus.Level  `json:"log_level"`
-	ScanTimeout time.Duration `json:"scan_timeout"`
+	LogLevel      logrus.Level  `json:"log_level"`
+	ScanTimeout   time.Duration `json:"scan_timeout"`
 	DeviceTimeout time.Duration `json:"device_timeout"`
-	OutputFormat string       `json:"output_format"`
+	OutputFormat  string        `json:"output_format"`
 }
 
 // DefaultConfig returns default configuration values
@@ -31,7 +31,7 @@ func (c *Config) NewLogger() *logrus.Logger {
 
 	// Use structured logging format
 	logger.SetFormatter(&logrus.TextFormatter{
-		FullTimestamp: true,
+		FullTimestamp:   true,
 		TimestampFormat: time.RFC3339,
 	})
 
