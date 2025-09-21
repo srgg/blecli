@@ -11,14 +11,15 @@ import (
 	"github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blecli/pkg/ble/internal"
+	"golang.org/x/term"
 )
 
 // Bridge represents the Lua-based bidirectional BLE↔TTY transformation engine
 // This implements the "dumb Go engine" + "smart Lua scripts" architecture
 type Bridge struct {
 	engine                *internal.LuaEngine
-	ptyMaster             *os.File
-	ptySlave              *os.File
+	ptyMaster             *os.File // Master end of the PTY: program reads/writes here
+	ptySlave              *os.File // Slave end of the PTY: acts as the process's stdin/stdout/stderr (controlling TTY)
 	logger                *logrus.Logger
 	isRunning             bool
 	runMutex              sync.RWMutex
@@ -164,6 +165,14 @@ func (b *Bridge) Start(ctx context.Context, opts *BridgeOptions) error {
 
 	b.ptyMaster = master
 	b.ptySlave = slave
+
+	// Set PTY slave to raw mode to disable echo and prevent bridge from reading its own output
+	if _, err := term.MakeRaw(int(slave.Fd())); err != nil {
+		master.Close()
+		slave.Close()
+		return fmt.Errorf("failed to set PTY to raw mode: %w", err)
+	}
+
 	ttyName := b.ptySlave.Name() // Use slave name for external apps
 	b.logger.WithField("tty", ttyName).Info("Created TTY device for event-driven bridge")
 
@@ -250,11 +259,33 @@ func (b *Bridge) flushTTYBufferToDevice() {
 		return
 	}
 
-	b.logger.WithField("bytes", len(data)).Debug("About to write to PTY")
+	// Get characteristics info for detailed logging
+	bleAPI := b.engine.GetBLEAPI()
+	charUUIDs := bleAPI.ListCharacteristics()
+
+	logFields := logrus.Fields{
+		"bytes":                 len(data),
+		"characteristics_count": len(charUUIDs),
+	}
+
+	// Add characteristic details if available
+	if len(charUUIDs) > 0 {
+		charDetails := make(map[string]interface{})
+		for _, uuid := range charUUIDs {
+			value := bleAPI.GetCharacteristicValue(uuid)
+			charDetails[uuid] = map[string]interface{}{
+				"value_bytes": len(value),
+				"has_value":   len(value) > 0,
+			}
+		}
+		logFields["characteristics"] = charDetails
+	}
+
+	b.logger.WithFields(logFields).Debug("About to write to PTY")
 	if _, err := device.Write(data); err != nil {
 		b.logger.WithError(err).Debug("Failed to write to PTY")
 	} else {
-		b.logger.WithField("bytes", len(data)).Debug("Wrote data to PTY")
+		b.logger.WithFields(logFields).Debug("Wrote data to PTY")
 
 		// Force flush to ensure data is immediately available for reading
 		if err := device.Sync(); err != nil {

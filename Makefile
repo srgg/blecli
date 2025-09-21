@@ -29,7 +29,7 @@ clean:
 
 # Run all tests or specific test by name
 .PHONY: test
-test:
+test: generate-mocks
 	@if [ -z "$(TEST)" ]; then \
 		echo "Running all tests..."; \
 		go test $(BUILD_FLAGS) -v ./...; \
@@ -164,6 +164,33 @@ bench-ble:
 	@echo "Running BLE package benchmarks..."
 	go test $(BUILD_FLAGS) -bench=. -benchmem ./pkg/ble
 
+# Generate mocks using mockery
+.PHONY: generate-mocks
+generate-mocks:
+	@echo "Checking if mockery is installed..."
+	@if ! command -v mockery >/dev/null 2>&1; then \
+		echo "Installing mockery..."; \
+		go install github.com/vektra/mockery/v3@latest; \
+	fi
+	@echo "Generating mocks..."
+	mockery
+	@echo "Mocks generated."
+
+# Clean generated mocks
+.PHONY: clean-mocks
+clean-mocks:
+	@echo "Cleaning generated mocks..."
+	rm -rf pkg/mocks/mock_*.go
+	@echo "Generated mocks cleaned"
+
+# Generate all code (mocks, etc.)
+.PHONY: generate
+generate: generate-mocks
+
+# Clean with mocks
+.PHONY: clean-all
+clean-all: clean clean-mocks
+
 # Help target
 .PHONY: help
 help:
@@ -180,7 +207,11 @@ help:
 	@echo "  fmt            - Format code"
 	@echo "  security       - Run security checks"
 	@echo "  check          - Run full quality check"
+	@echo "  generate       - Generate code (mocks, etc.)"
+	@echo "  generate-mocks - Generate mocks using mockery"
 	@echo "  clean          - Clean build artifacts"
+	@echo "  clean-mocks    - Clean generated mocks"
+	@echo "  clean-all      - Clean all artifacts including mocks"
 	@echo "  tidy           - Tidy dependencies"
 	@echo "  verify         - Verify dependencies"
 	@echo "  install-tools  - Install development tools"

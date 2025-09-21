@@ -182,7 +182,7 @@ func runWatchMode(scanner *blecli.Scanner, opts *blecli.ScanOptions, cfg *config
 	}
 }
 
-func displayDevices(devices []*device.Device, cfg *config.Config) error {
+func displayDevices(devices []device.Device, cfg *config.Config) error {
 	if len(devices) == 0 {
 		fmt.Println("No devices discovered")
 		return nil
@@ -190,7 +190,7 @@ func displayDevices(devices []*device.Device, cfg *config.Config) error {
 
 	// Sort devices by RSSI (strongest first)
 	sort.Slice(devices, func(i, j int) bool {
-		return devices[i].RSSI > devices[j].RSSI
+		return devices[i].GetRSSI() > devices[j].GetRSSI()
 	})
 
 	switch cfg.OutputFormat {
@@ -203,7 +203,7 @@ func displayDevices(devices []*device.Device, cfg *config.Config) error {
 	}
 }
 
-func displayDevicesTable(devices []*device.Device) error {
+func displayDevicesTable(devices []device.Device) error {
 	var base io.Writer = os.Stdout
 	if base == nil {
 		base = io.Discard
@@ -219,25 +219,25 @@ func displayDevicesTable(devices []*device.Device) error {
 		}
 
 		// Join service UUIDs for display
-		uuids := make([]string, 0, len(dev.Services))
-		for _, s := range dev.Services {
-			uuids = append(uuids, s.UUID)
+		uuids := make([]string, 0, len(dev.GetServices()))
+		for _, s := range dev.GetServices() {
+			uuids = append(uuids, s.GetUUID())
 		}
 		services := strings.Join(uuids, ",")
 		if len(services) > 30 {
 			services = services[:27] + "..."
 		}
 
-		lastSeen := time.Since(dev.LastSeen).Truncate(time.Second)
+		lastSeen := time.Since(dev.GetLastSeen()).Truncate(time.Second)
 
 		fmt.Fprintf(w, "%s\t%s\t%d dBm\t%s\t%s ago\n",
-			name, dev.Address, dev.RSSI, services, lastSeen)
+			name, dev.GetAddress(), dev.GetRSSI(), services, lastSeen)
 	}
 
 	return w.Flush()
 }
 
-func displayDevicesJSON(devices []*device.Device) error {
+func displayDevicesJSON(devices []device.Device) error {
 	var w io.Writer = os.Stdout
 	if w == nil {
 		w = io.Discard
@@ -247,20 +247,20 @@ func displayDevicesJSON(devices []*device.Device) error {
 	return encoder.Encode(devices)
 }
 
-func displayDevicesCSV(devices []*device.Device) error {
+func displayDevicesCSV(devices []device.Device) error {
 	var w io.Writer = os.Stdout
 	if w == nil {
 		w = io.Discard
 	}
 	fmt.Fprintln(w, "Name,Address,RSSI,Services,LastSeen")
 	for _, dev := range devices {
-		uuids := make([]string, 0, len(dev.Services))
-		for _, s := range dev.Services {
-			uuids = append(uuids, s.UUID)
+		uuids := make([]string, 0, len(dev.GetServices()))
+		for _, s := range dev.GetServices() {
+			uuids = append(uuids, s.GetUUID())
 		}
 		services := strings.Join(uuids, ";")
 		fmt.Fprintf(w, "%s,%s,%d,%s,%s\n",
-			dev.DisplayName(), dev.Address, dev.RSSI, services, dev.LastSeen.Format(time.RFC3339))
+			dev.DisplayName(), dev.GetAddress(), dev.GetRSSI(), services, dev.GetLastSeen().Format(time.RFC3339))
 	}
 	return nil
 }

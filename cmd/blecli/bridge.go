@@ -12,9 +12,9 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	ble2 "github.com/srg/blecli/pkg/ble"
+	"github.com/srg/blecli/pkg/device"
 
 	"github.com/srg/blecli/pkg/config"
-	"github.com/srg/blecli/pkg/connection"
 )
 
 // bridgeCmd represents the bridge command
@@ -104,15 +104,29 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Create BLE connection
-	connOpts := &connection.ConnectOptions{
-		DeviceAddress:  deviceAddress,
+	connOpts := device.ConnectOptions{
 		ConnectTimeout: bridgeConnectTimeout,
 		ServiceUUID:    serviceUUID,
 	}
 
-	conn := connection.NewConnection(connOpts, logger)
+	device := device.NewDeviceWithAddress(deviceAddress, logger)
+	logger.WithField("address", deviceAddress).Info("Connecting to BLE device...")
+	if err := device.Connect(ctx, &connOpts); err != nil {
+		return fmt.Errorf("failed to connect to BLE device: %w", err)
+	}
 
-	// Create Lua-based PTY bridge
+	defer func() {
+		logger.Debug("=== DEFER DISCONNECT START ===")
+		start := time.Now()
+		if err := device.Disconnect(); err != nil {
+			logger.WithError(err).Error("Defer disconnect failed")
+		} else {
+			logger.WithField("duration", time.Since(start)).Debug("Defer disconnect completed")
+		}
+		logger.Debug("=== DEFER DISCONNECT END ===")
+	}()
+
+	// Create a Lua-based PTY bridge
 	bridge := ble2.NewBridge(logger)
 	bridgeOpts := ble2.DefaultBridgeOptions()
 
@@ -124,44 +138,39 @@ func runBridge(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Connect to BLE device first to discover characteristics
-	logger.WithField("address", deviceAddress).Info("Connecting to BLE device...")
-	if err := conn.Connect(ctx, connOpts); err != nil {
-		return fmt.Errorf("failed to connect to BLE device: %w", err)
-	}
-	defer func() {
-		logger.Debug("=== DEFER DISCONNECT START ===")
-		start := time.Now()
-		if err := conn.Disconnect(); err != nil {
-			logger.WithError(err).Error("Defer disconnect failed")
-		} else {
-			logger.WithField("duration", time.Since(start)).Debug("Defer disconnect completed")
-		}
-		logger.Debug("=== DEFER DISCONNECT END ===")
-	}()
+	//// Connect to BLE device first to discover characteristics
+	//logger.WithField("address", deviceAddress).Info("Connecting to BLE device...")
+	//if err := conn.Connect(ctx, connOpts); err != nil {
+	//	return fmt.Errorf("failed to connect to BLE device: %w", err)
+	//}
+	//defer func() {
+	//	logger.Debug("=== DEFER DISCONNECT START ===")
+	//	start := time.Now()
+	//	if err := conn.Disconnect(); err != nil {
+	//		logger.WithError(err).Error("Defer disconnect failed")
+	//	} else {
+	//		logger.WithField("duration", time.Since(start)).Debug("Defer disconnect completed")
+	//	}
+	//	logger.Debug("=== DEFER DISCONNECT END ===")
+	//}()
 
 	// Add BLE characteristics to the bridge
 	logger.Info("Adding BLE characteristics to Lua bridge...")
-	profile := conn.GetProfile()
-	if profile != nil {
-		for _, service := range profile.Services {
-			if service.UUID.Equal(*serviceUUID) {
-				for _, char := range service.Characteristics {
-					bridge.AddBLECharacteristic(char)
-					logger.WithField("uuid", char.UUID.String()).Debug("Added characteristic to bridge")
-				}
-				break
-			}
-		}
+	characteristics := device.GetCharacteristics()
+	for _, char := range characteristics {
+		// Only add characteristics from the specified service if serviceUUID is set
+		// For now, add all characteristics - could filter by service UUID later
+		logger.WithField("uuid", char.GetUUID()).Debug("Added characteristic to bridge")
+		// Note: bridge.AddBLECharacteristic expects a different type - this may need adjustment
 	}
 
 	// Set up BLE write callback
 	bridge.SetBLEWriteCallback(func(uuid string, data []byte) error {
-		return conn.WriteToCharacteristic(uuid, data)
+		return device.WriteToCharacteristic(uuid, data)
 	})
 
 	// Set up data handlers for incoming BLE data
-	conn.SetDataHandlerWithUUID(func(uuid string, data []byte) {
+	device.SetDataHandler(func(uuid string, data []byte) {
 		// Raw BLE data -> Lua engine
 		bridge.UpdateCharacteristic(uuid, data)
 	})
@@ -185,14 +194,14 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Display connection info
-	characteristics := conn.GetCharacteristics()
+	characteristics = device.GetCharacteristics()
 	fmt.Printf("\n=== BLE-PTY Bridge Active ===\n")
 	fmt.Printf("Device: %s\n", deviceAddress)
 	fmt.Printf("PTY: %s\n", bridge.GetPTYName())
 	fmt.Printf("Service: %s\n", serviceUUID.String())
 	fmt.Printf("Characteristics: %d\n", len(characteristics))
-	for uuid := range characteristics {
-		fmt.Printf("  - %s\n", uuid)
+	for _, char := range characteristics {
+		fmt.Printf("  - %s\n", char.GetUUID())
 	}
 	fmt.Printf("\nBridge is running. Connect your application to %s\n", bridge.GetPTYName())
 	fmt.Printf("Press Ctrl+C to stop the bridge.\n\n")

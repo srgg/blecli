@@ -24,10 +24,10 @@ type InspectOptions struct {
 // Includes inspect-only previews and a snapshot of the device enriched with GATT services
 // (no characteristic values stored in the device model).
 type InspectResult struct {
-	Address  string         `json:"address,omitempty"`
-	Name     string         `json:"name,omitempty"`
-	Device   *device.Device `json:"device,omitempty"`
-	Services []ServiceInfo  `json:"services"`
+	Address  string        `json:"address,omitempty"`
+	Name     string        `json:"name,omitempty"`
+	Device   device.Device `json:"device,omitempty"`
+	Services []ServiceInfo `json:"services"`
 }
 
 type ServiceInfo struct {
@@ -85,12 +85,11 @@ func InspectDevice(ctx context.Context, address string, opts *InspectOptions, lo
 	}
 
 	res := &InspectResult{Address: address}
-	var dServices []device.Service
 	var deviceName string
 
 	for _, svc := range profile.Services {
 		si := ServiceInfo{UUID: svc.UUID.String()}
-		ds := device.Service{UUID: svc.UUID.String()}
+		// We'll skip building device services for now since we only need ServiceInfo
 
 		for _, ch := range svc.Characteristics {
 			propStr := fmt.Sprintf("0x%02X", ch.Property)
@@ -112,34 +111,19 @@ func InspectDevice(ctx context.Context, address string, opts *InspectOptions, lo
 				}
 			}
 
-			// Descriptors for both views
-			dchar := device.Characteristic{
-				UUID:       ch.UUID.String(),
-				Properties: propStr,
-			}
+			// Descriptors for inspect view
 			for _, d := range ch.Descriptors {
 				ci.Descriptors = append(ci.Descriptors, DescriptorInfo{UUID: d.UUID.String()})
-				dchar.Descriptors = append(dchar.Descriptors, device.Descriptor{UUID: d.UUID.String()})
 			}
 
 			si.Characteristics = append(si.Characteristics, ci)
-			ds.Characteristics = append(ds.Characteristics, dchar)
 		}
 
 		res.Services = append(res.Services, si)
-		dServices = append(dServices, ds)
 	}
 
 	// Build a device.Device snapshot so CLI can show all device fields up front
-	dev := &device.Device{
-		ID:          address,
-		Name:        deviceName,
-		Address:     address,
-		Services:    dServices,
-		ServiceData: make(map[string][]byte),
-		Connectable: true,
-		LastSeen:    time.Now(),
-	}
+	dev := device.NewDeviceWithAddress(address, logger)
 
 	res.Name = deviceName
 	res.Device = dev

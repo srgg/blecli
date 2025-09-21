@@ -632,18 +632,26 @@ func (s *BridgeTestSuite) TestBridgeBLENotifyToPTYIntegration() {
 	// Script that processes characteristics in a fixed order
 	passthroughScript := `
 function ble_to_tty()
-    -- Try all expected UUIDs in deterministic order
-    local expected_uuids = {
-        "6e400003b5a3f393e0a9e50e24dcca9e",
-        "6e400002b5a3f393e0a9e50e24dcca9e",
-        "2a19"
-    }
+    -- Get all available characteristics dynamically and output as JSON
+    local chars = ble:list()
+    local results = {}
 
-    for i, uuid in ipairs(expected_uuids) do
+    for i, uuid in ipairs(chars) do
         local value = ble.get(uuid)
         if value and #value > 0 then
-            buffer:append(value)
+            table.insert(results, {uuid = uuid, data = value})
         end
+    end
+
+    -- Output as JSON
+    if #results > 0 then
+        local json_output = "{"
+        for i, result in ipairs(results) do
+            if i > 1 then json_output = json_output .. "," end
+            json_output = json_output .. string.format('"%s":"%s"', result.uuid, result.data)
+        end
+        json_output = json_output .. "}"
+        buffer:append(json_output)
     end
 end
 
@@ -670,21 +678,21 @@ end
 	require.NotEmpty(t, ptyName)
 	t.Logf("Bridge created PTY: %s", ptyName)
 
-	// Add multiple mock BLE characteristics
+	// Add 3 mock BLE characteristics for different data types
 	mockChars := []*MockCharacteristic{
 		{
-			UUID:       ble.MustParse("6E400003-B5A3-F393-E0A9-E50E24DCCA9E"), // Nordic UART TX
+			UUID:       ble.MustParse("6E400003-B5A3-F393-E0A9-E50E24DCCA9E"), // Nordic UART TX for string
 			Data:       []byte{},                                              // Will be updated via notifications
 			Properties: map[string]bool{"notify": true, "read": true},
 		},
 		{
-			UUID:       ble.MustParse("6E400002-B5A3-F393-E0A9-E50E24DCCA9E"), // Nordic UART RX
-			Data:       []byte{},                                              // Will be updated via notifications
-			Properties: map[string]bool{"notify": true, "read": true},
-		},
-		{
-			UUID:       ble.MustParse("2A19"), // Battery Level
+			UUID:       ble.MustParse("2A19"), // Battery Level for int
 			Data:       []byte{},              // Will be updated via notifications
+			Properties: map[string]bool{"notify": true, "read": true},
+		},
+		{
+			UUID:       ble.MustParse("6E400002-B5A3-F393-E0A9-E50E24DCCA9E"), // Nordic UART RX for byte array
+			Data:       []byte{},                                              // Will be updated via notifications
 			Properties: map[string]bool{"notify": true, "read": true},
 		},
 	}
@@ -704,11 +712,11 @@ end
 	require.NoError(t, err)
 	defer ptyFile.Close()
 
-	// Test data to send via BLE notifications
+	// Test data to send via BLE notifications - 3 different data types
 	testData := [][]byte{
-		[]byte("Hello from BLE device!\n"),
-		[]byte("Line 2: More test data\n"),
-		[]byte("Line 3: Final test\n"),
+		[]byte("Hello World!"),         // String data for Nordic UART TX
+		[]byte{42},                     // Int data for Battery Level
+		[]byte{0x42, 0x3A, 0x7D, 0x8E}, // Byte array for Nordic UART RX
 	}
 
 	var receivedData []byte
@@ -723,28 +731,31 @@ end
 
 	// Use Eventually to read all data properly
 	require.Eventually(t, func() bool {
-		// Keep reading until we have all expected content
+		// Keep reading until we have all the expected content
 		buffer := make([]byte, 1024)
-		n, _ := ptyFile.Read(buffer)
+		n, err := ptyFile.Read(buffer)
+		t.Logf("PTY read: n=%d, err=%v", n, err)
 		if n > 0 {
 			receivedData = append(receivedData, buffer[:n]...)
 		}
 
-		// Check if we have all expected content
+		// Check if we have JSON output with all expected data
 		receivedStr := string(receivedData)
-		return strings.Contains(receivedStr, "Hello from BLE device!") &&
-			strings.Contains(receivedStr, "Line 2: More test data") &&
-			strings.Contains(receivedStr, "Line 3: Final test")
+		if len(receivedData) > 0 {
+			t.Logf("DEBUG: Received so far: %q", receivedStr)
+		}
+		return strings.Contains(receivedStr, "{") &&
+			strings.Contains(receivedStr, "}")
 	}, 3*time.Second, 50*time.Millisecond, "Should receive all expected data")
 
 	// Apply detailed assertions on the complete buffer
 	receivedStr := string(receivedData)
 	t.Logf("Total received from PTY: %q", receivedStr)
 
-	// Verify each expected string is present
-	assert.Contains(t, receivedStr, "Hello from BLE device!", "First message should be received")
-	assert.Contains(t, receivedStr, "Line 2: More test data", "Second message should be received")
-	assert.Contains(t, receivedStr, "Line 3: Final test", "Third message should be received")
+	// Verify JSON structure using proper JSON assertions
+	// Expected JSON with the three characteristics and their different data types
+	expectedJSON := `{"6e400003b5a3f393e0a9e50e24dcca9e":"Hello World!","2a19":"*","6e400002b5a3f393e0a9e50e24dcca9e":"B:}` + string([]byte{0x8e}) + `"}`
+	assert.JSONEq(t, expectedJSON, receivedStr, "Should receive valid JSON with all characteristic data")
 }
 
 // MockCharacteristic represents a mock BLE characteristic for testing

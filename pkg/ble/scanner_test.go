@@ -182,9 +182,9 @@ func TestScanner_HandleAdvertisement(t *testing.T) {
 
 	devices := scanner.GetDevices()
 	assert.Len(t, devices, 1)
-	assert.Equal(t, "AA:BB:CC:DD:EE:FF", devices[0].ID)
-	assert.Equal(t, "Test Device", devices[0].Name)
-	assert.Equal(t, -50, devices[0].RSSI)
+	assert.Equal(t, "AA:BB:CC:DD:EE:FF", devices[0].GetID())
+	assert.Equal(t, "Test Device", devices[0].GetName())
+	assert.Equal(t, -50, devices[0].GetRSSI())
 
 	// Test device update
 	adv.rssi = -45
@@ -194,8 +194,8 @@ func TestScanner_HandleAdvertisement(t *testing.T) {
 
 	devices = scanner.GetDevices()
 	assert.Len(t, devices, 1) // Still one device
-	assert.Equal(t, "Updated Device", devices[0].Name)
-	assert.Equal(t, -45, devices[0].RSSI)
+	assert.Equal(t, "Updated Device", devices[0].GetName())
+	assert.Equal(t, -45, devices[0].GetRSSI())
 }
 
 func TestScanner_ShouldIncludeDevice(t *testing.T) {
@@ -323,7 +323,7 @@ func TestScanner_GetDevice(t *testing.T) {
 	device, exists := scanner.GetDevice("AA:BB:CC:DD:EE:FF")
 	assert.True(t, exists)
 	assert.NotNil(t, device)
-	assert.Equal(t, "Test Device", device.Name)
+	assert.Equal(t, "Test Device", device.GetName())
 
 	// Test getting non-existing device
 	device, exists = scanner.GetDevice("11:22:33:44:55:66")

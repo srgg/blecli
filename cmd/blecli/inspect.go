@@ -78,45 +78,45 @@ func outputInspectText(res *blecli.InspectResult) {
 	fmt.Fprintln(cmdOut(), "Device info:")
 	if res.Device != nil {
 		d := res.Device
-		fmt.Fprintf(cmdOut(), "  ID: %s\n", d.ID)
-		fmt.Fprintf(cmdOut(), "  Address: %s\n", d.Address)
-		if d.Name != "" {
-			fmt.Fprintf(cmdOut(), "  Name: %s\n", d.Name)
+		fmt.Fprintf(cmdOut(), "  ID: %s\n", d.GetID())
+		fmt.Fprintf(cmdOut(), "  Address: %s\n", d.GetAddress())
+		if d.GetName() != "" {
+			fmt.Fprintf(cmdOut(), "  Name: %s\n", d.GetName())
 		}
-		fmt.Fprintf(cmdOut(), "  RSSI: %d\n", d.RSSI)
-		fmt.Fprintf(cmdOut(), "  Connectable: %t\n", d.Connectable)
-		if d.TxPower != nil {
-			fmt.Fprintf(cmdOut(), "  TxPower: %d dBm\n", *d.TxPower)
+		fmt.Fprintf(cmdOut(), "  RSSI: %d\n", d.GetRSSI())
+		fmt.Fprintf(cmdOut(), "  Connectable: %t\n", d.IsConnectable())
+		if d.GetTxPower() != nil {
+			fmt.Fprintf(cmdOut(), "  TxPower: %d dBm\n", *d.GetTxPower())
 		}
-		fmt.Fprintf(cmdOut(), "  LastSeen: %s\n", d.LastSeen.Format(time.RFC3339))
+		fmt.Fprintf(cmdOut(), "  LastSeen: %s\n", d.GetLastSeen().Format(time.RFC3339))
 
 		// Services (UUIDs)
-		if len(d.Services) > 0 {
+		if len(d.GetServices()) > 0 {
 			fmt.Fprintln(cmdOut(), "  Services:")
-			for _, s := range d.Services {
-				fmt.Fprintf(cmdOut(), "    - %s\n", s.UUID)
+			for _, s := range d.GetServices() {
+				fmt.Fprintf(cmdOut(), "    - %s\n", s.GetUUID())
 			}
 		} else {
 			fmt.Fprintln(cmdOut(), "  Services: none")
 		}
 
 		// Manufacturer data
-		if len(d.ManufData) > 0 {
-			fmt.Fprintf(cmdOut(), "  Manufacturer Data: %X\n", d.ManufData)
+		if len(d.GetManufacturerData()) > 0 {
+			fmt.Fprintf(cmdOut(), "  Manufacturer Data: %X\n", d.GetManufacturerData())
 		} else {
 			fmt.Fprintln(cmdOut(), "  Manufacturer Data: none")
 		}
 
 		// Service data
-		if len(d.ServiceData) > 0 {
+		if len(d.GetServiceData()) > 0 {
 			fmt.Fprintln(cmdOut(), "  Service Data:")
-			keys := make([]string, 0, len(d.ServiceData))
-			for k := range d.ServiceData {
+			keys := make([]string, 0, len(d.GetServiceData()))
+			for k := range d.GetServiceData() {
 				keys = append(keys, k)
 			}
 			sort.Strings(keys)
 			for _, k := range keys {
-				fmt.Fprintf(cmdOut(), "    - %s: %X\n", k, d.ServiceData[k])
+				fmt.Fprintf(cmdOut(), "    - %s: %X\n", k, d.GetServiceData()[k])
 			}
 		} else {
 			fmt.Fprintln(cmdOut(), "  Service Data: none")
@@ -128,8 +128,8 @@ func outputInspectText(res *blecli.InspectResult) {
 		}
 	}
 	count := len(res.Services)
-	if res.Device != nil && len(res.Device.Services) > 0 {
-		count = len(res.Device.Services)
+	if res.Device != nil && len(res.Device.GetServices()) > 0 {
+		count = len(res.Device.GetServices())
 	}
 	fmt.Fprintf(cmdOut(), "  GATT Services: %d\n", count)
 

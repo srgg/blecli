@@ -7,7 +7,7 @@
 
 # Test binary, built with `go test -c`
 #*.test
-
+\\
 # Code coverage profiles and other test artifacts
 #*.out
 #coverage.*
@@ -30,3 +30,10 @@
 
 # A binary
 blecli
+
+# Auto-generated files (should be regenerated during build)
+# Generated mocks
+internal/testutils/mocks/
+
+# Code coverage reports
+coverage/

@@ -1,0 +1,16 @@
+# .mockery.yml
+packages:
+  github.com/go-ble/ble:
+    interfaces:
+      Addr:
+        config:
+          dir: "internal/testutils/mocks"
+          outpkg: mocks
+      Advertisement:
+        config:
+          dir: "internal/testutils/mocks"
+          outpkg: "mocks"
+      Device:
+        config:
+          dir: "internal/testutils/mocks"
+          outpkg: "mocks"
