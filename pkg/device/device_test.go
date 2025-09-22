@@ -429,7 +429,8 @@ func TestDevice_NameUpdateBehavior(t *testing.T) {
 			}`, testutils.MustJSON([]byte{0x00, 0x01, 'E', 'x', 't', 'r', 'a', 'c', 't', 'e', 'd'})).Build()
 
 	logger := logrus.New()
-	device := device.NewDevice(adv1, logger)
+	dev := device.NewDevice(adv1, logger)
+	device := dev
 	assert.Equal(t, "Extracted", device.GetName(), "Should extract name from manufacturer data initially")
 
 	// Update with advertisement that has LocalName

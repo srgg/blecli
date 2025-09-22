@@ -219,8 +219,8 @@ func displayDevicesTable(devices []device.Device) error {
 		}
 
 		// Join service UUIDs for display
-		uuids := make([]string, 0, len(dev.GetServices()))
-		for _, s := range dev.GetServices() {
+		uuids := make([]string, 0, len(dev.GetAdvertisedServices()))
+		for _, s := range dev.GetAdvertisedServices() {
 			uuids = append(uuids, s.GetUUID())
 		}
 		services := strings.Join(uuids, ",")
@@ -254,8 +254,8 @@ func displayDevicesCSV(devices []device.Device) error {
 	}
 	fmt.Fprintln(w, "Name,Address,RSSI,Services,LastSeen")
 	for _, dev := range devices {
-		uuids := make([]string, 0, len(dev.GetServices()))
-		for _, s := range dev.GetServices() {
+		uuids := make([]string, 0, len(dev.GetAdvertisedServices()))
+		for _, s := range dev.GetAdvertisedServices() {
 			uuids = append(uuids, s.GetUUID())
 		}
 		services := strings.Join(uuids, ";")

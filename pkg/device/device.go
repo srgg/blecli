@@ -17,7 +17,7 @@ type Device interface {
 	GetTxPower() *int
 	IsConnectable() bool
 	GetLastSeen() time.Time
-	GetServices() []Service
+	GetAdvertisedServices() []Service
 	GetManufacturerData() []byte
 	GetServiceData() map[string][]byte
 	DisplayName() string
@@ -33,7 +33,7 @@ type Device interface {
 
 	// BLE-specific methods (for devices that support them)
 	WriteToCharacteristic(uuid string, data []byte) error
-	GetCharacteristics() []Characteristic
+	GetCharacteristics() ([]Characteristic, error)
 	SetDataHandler(f func(uuid string, data []byte))
 }
 
@@ -57,10 +57,16 @@ type Descriptor interface {
 	GetUUID() string
 }
 
+// SubscribeOptions defined BLE Characteristics subscriptions
+type SubscribeOptions struct {
+	ServiceUUID     string
+	Characteristics []string // can be empty
+}
+
 // ConnectOptions defines BLE connection options
 type ConnectOptions struct {
 	ConnectTimeout time.Duration
-	ServiceUUID    *ble.UUID
+	Services       []SubscribeOptions
 }
 
 // NewDevice creates a Device from a BLE advertisement

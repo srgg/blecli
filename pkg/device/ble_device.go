@@ -9,7 +9,6 @@ import (
 	"unicode"
 
 	"github.com/go-ble/ble"
-	"github.com/go-ble/ble/darwin"
 	"github.com/sirupsen/logrus"
 )
 
@@ -22,128 +21,70 @@ func (d *BLEDescriptor) GetUUID() string {
 	return d.uuid
 }
 
-// BLECharacteristic implements the Characteristic interface
-type BLECharacteristic struct {
-	uuid        string
-	properties  string
-	descriptors []Descriptor
-	value       []byte
-	mu          sync.RWMutex
-	BLEChar     *ble.Characteristic
-}
-
-func (c *BLECharacteristic) GetUUID() string {
-	return c.uuid
-}
-
-func (c *BLECharacteristic) GetProperties() string {
-	return c.properties
-}
-
-func (c *BLECharacteristic) GetDescriptors() []Descriptor {
-	return c.descriptors
-}
-
-func (c *BLECharacteristic) GetValue() []byte {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.value
-}
-
-func (c *BLECharacteristic) SetValue(value []byte) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.value = value
-}
-
-// BLESimpleService implements the Service interface for basic services
-type BLESimpleService struct {
+// BLEAdvertisedService implements the Service interface for advertised services
+type BLEAdvertisedService struct {
 	uuid            string
 	characteristics []Characteristic
 }
 
-func (s *BLESimpleService) GetUUID() string {
+func (s *BLEAdvertisedService) GetUUID() string {
 	return s.uuid
 }
 
-func (s *BLESimpleService) GetCharacteristics() []Characteristic {
+func (s *BLEAdvertisedService) GetCharacteristics() []Characteristic {
 	return s.characteristics
-}
-
-// BLEService represents a GATT service and its characteristics
-type BLEService struct {
-	UUID            string
-	Characteristics map[string]*BLECharacteristic
-}
-
-func (s *BLEService) GetUUID() string {
-	return s.UUID
-}
-
-func (s *BLEService) GetCharacteristics() []Characteristic {
-	result := make([]Characteristic, 0, len(s.Characteristics))
-	for _, char := range s.Characteristics {
-		result = append(result, char)
-	}
-	return result
-}
-
-// BLEConnection represents a live BLE connection (notifications, writes)
-type BLEConnection struct {
-	client      ble.Client
-	logger      *logrus.Logger
-	writeMutex  sync.Mutex
-	connMutex   sync.RWMutex
-	isConnected bool
 }
 
 // BLEDevice implements the Device interface for BLE devices
 type BLEDevice struct {
 	// Device data
-	id          string
-	name        string
-	address     string
-	rssi        int
-	txPower     *int
-	connectable bool
-	lastSeen    time.Time
-	services    []Service
-	manufData   []byte
-	serviceData map[string][]byte
-
-	// BLE-specific data
-	bleServices        map[string]*BLEService        // UUID -> service
-	bleCharacteristics map[string]*BLECharacteristic // UUID -> characteristic
+	id                 string
+	name               string
+	address            string
+	rssi               int
+	txPower            *int
+	connectable        bool
+	lastSeen           time.Time
+	advertisedServices []Service
+	manufData          []byte
+	serviceData        map[string][]byte
 	connection         *BLEConnection
 	onData             func(uuid string, data []byte)
 	logger             *logrus.Logger
 	mu                 sync.RWMutex
 }
 
-// NewBLEDeviceFromAdvertisement creates a BLEDevice from a BLE advertisement
-func NewBLEDeviceFromAdvertisement(adv ble.Advertisement, logger *logrus.Logger) *BLEDevice {
+// NewBLEDevice creates a BLEDevice with a pre-created connection instance
+func NewBLEDevice(address string, logger *logrus.Logger) *BLEDevice {
 	if logger == nil {
 		logger = logrus.New()
 	}
 
-	dev := &BLEDevice{
-		id:                 adv.Addr().String(),
-		name:               adv.LocalName(),
-		address:            adv.Addr().String(),
-		rssi:               adv.RSSI(),
-		connectable:        adv.Connectable(),
-		lastSeen:           time.Now(),
-		services:           make([]Service, 0),
-		manufData:          adv.ManufacturerData(),
+	return &BLEDevice{
+		id:                 address,
+		address:            address,
+		advertisedServices: make([]Service, 0),
 		serviceData:        make(map[string][]byte),
-		bleServices:        make(map[string]*BLEService),
-		bleCharacteristics: make(map[string]*BLECharacteristic),
+		lastSeen:           time.Now(),
+		connection:         NewBLEConnection(logger),
 		logger:             logger,
 	}
+}
+
+// NewBLEDeviceFromAdvertisement creates a BLEDevice from a BLE advertisement
+func NewBLEDeviceFromAdvertisement(adv ble.Advertisement, logger *logrus.Logger) *BLEDevice {
+	// Use the new constructor with preconnection
+	dev := NewBLEDevice(adv.Addr().String(), logger)
+
+	// Set advertisement-specific data
+	dev.name = adv.LocalName()
+	dev.rssi = adv.RSSI()
+	dev.connectable = adv.Connectable()
+	dev.manufData = adv.ManufacturerData()
 
 	// Convert service UUIDs into minimal Service entries (UUID only)
 	for _, svc := range adv.Services() {
-		dev.services = append(dev.services, &BLESimpleService{uuid: svc.String()})
+		dev.advertisedServices = append(dev.advertisedServices, &BLEAdvertisedService{uuid: svc.String()})
 	}
 
 	// Convert service data
@@ -169,20 +110,8 @@ func NewBLEDeviceFromAdvertisement(adv ble.Advertisement, logger *logrus.Logger)
 
 // NewBLEDeviceWithAddress creates a BLEDevice with the specified address
 func NewBLEDeviceWithAddress(address string, logger *logrus.Logger) *BLEDevice {
-	if logger == nil {
-		logger = logrus.New()
-	}
-
-	return &BLEDevice{
-		id:                 address,
-		address:            address,
-		services:           make([]Service, 0),
-		serviceData:        make(map[string][]byte),
-		bleServices:        make(map[string]*BLEService),
-		bleCharacteristics: make(map[string]*BLECharacteristic),
-		lastSeen:           time.Now(),
-		logger:             logger,
-	}
+	// Use the new constructor with preconnection
+	return NewBLEDevice(address, logger)
 }
 
 // Device interface implementation
@@ -229,10 +158,10 @@ func (d *BLEDevice) GetLastSeen() time.Time {
 	return d.lastSeen
 }
 
-func (d *BLEDevice) GetServices() []Service {
+func (d *BLEDevice) GetAdvertisedServices() []Service {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return d.services
+	return d.advertisedServices
 }
 
 func (d *BLEDevice) GetManufacturerData() []byte {
@@ -267,144 +196,157 @@ func (d *BLEDevice) Connect(ctx context.Context, opts *ConnectOptions) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if strings.TrimSpace(d.address) == "" {
-		return fmt.Errorf("failed connect to device: device address is not set")
+	// Assert: connection should never be nil with preconnection pattern
+	if d.connection == nil {
+		panic("BUG: connection is nil - this should never happen with preconnection pattern")
 	}
 
-	if d.connection != nil && d.connection.IsConnected() {
-		return fmt.Errorf("already connected")
-	}
-
-	d.logger.WithField("address", d.address).Info("Connecting to BLE device...")
-
-	// Create platform BLE device (darwin for macOS)
-	dev, err := darwin.NewDevice()
-	if err != nil {
-		return fmt.Errorf("failed to create BLE device: %w", err)
-	}
-	ble.SetDefaultDevice(dev)
-
-	// Timeout context
-	connCtx, cancel := context.WithTimeout(ctx, opts.ConnectTimeout)
-	defer cancel()
-
-	// Connect to BLE device
-	client, err := ble.Dial(connCtx, ble.NewAddr(d.address))
-	if err != nil {
-		return fmt.Errorf("failed to connect to device: %w", err)
-	}
-
-	// Discover services and characteristics
-	profile, err := client.DiscoverProfile(true)
-	if err != nil {
-		client.CancelConnection()
-		return fmt.Errorf("failed to discover profile: %w", err)
-	}
-
-	// Populate services and characteristics
-	for _, svc := range profile.Services {
-		svcUUID := svc.UUID.String()
-		bleSvc, ok := d.bleServices[svcUUID]
-		if !ok {
-			bleSvc = &BLEService{
-				UUID:            svcUUID,
-				Characteristics: make(map[string]*BLECharacteristic),
-			}
-			d.bleServices[svcUUID] = bleSvc
-		}
-
-		for _, char := range svc.Characteristics {
-			uuid := char.UUID.String()
-			bleChar, ok := d.bleCharacteristics[uuid]
-			if !ok {
-				// Create BLECharacteristic
-				bleChar = &BLECharacteristic{
-					uuid:        char.UUID.String(),
-					properties:  blePropsToString(char.Property),
-					descriptors: []Descriptor{},
-					BLEChar:     char,
-				}
-				d.bleCharacteristics[uuid] = bleChar
-				bleSvc.Characteristics[uuid] = bleChar
-			} else {
-				// Update live handle
-				bleChar.BLEChar = char
-				bleSvc.Characteristics[uuid] = bleChar
-			}
+	// Set default options if not provided
+	if opts == nil {
+		opts = &ConnectOptions{
+			ConnectTimeout: 30 * time.Second,
 		}
 	}
 
-	// Create connection wrapper
-	conn := &BLEConnection{
-		client:      client,
-		logger:      d.logger,
-		isConnected: true,
-	}
-	d.connection = conn
-
-	// Subscribe to notify/indicate characteristics
-	for _, bleChar := range d.bleCharacteristics {
-		if bleChar.BLEChar == nil {
-			continue
-		}
-		if bleChar.BLEChar.Property&ble.CharNotify != 0 || bleChar.BLEChar.Property&ble.CharIndicate != 0 {
-			uuid := bleChar.GetUUID()
-			d.logger.WithField("uuid", uuid).Info("Subscribing to notifications")
-			err := client.Subscribe(bleChar.BLEChar, false, func(data []byte) {
-				bleChar.mu.Lock()
-				bleChar.value = data
-				bleChar.mu.Unlock()
-				if d.onData != nil {
-					d.onData(uuid, data)
-				}
-			})
-			if err != nil {
-				d.logger.WithFields(logrus.Fields{
-					"uuid":  uuid,
-					"error": err,
-				}).Warn("Failed to subscribe to characteristic")
-			}
-		}
-	}
-
-	d.logger.WithField("services", len(d.bleServices)).Info("BLE device connected")
-	return nil
+	// Use the pre-created BLEConnection to connect
+	return d.connection.Connect(ctx, d.address, opts)
 }
+
+//// Connect establishes a BLE connection and populates live characteristics
+//func (d *BLEDevice) Connect(ctx context.Context, opts *ConnectOptions) error {
+//	d.mu.Lock()
+//	defer d.mu.Unlock()
+//
+//	if strings.TrimSpace(d.address) == "" {
+//		return fmt.Errorf("failed connect to device: device address is not set")
+//	}
+//
+//	if d.connection != nil && d.connection.IsConnected() {
+//		return fmt.Errorf("already connected")
+//	}
+//
+//	d.logger.WithField("address", d.address).Info("Connecting to BLE device...")
+//
+//	// Create platform BLE device (darwin for macOS)
+//	dev, err := darwin.NewDevice()
+//	if err != nil {
+//		return fmt.Errorf("failed to create BLE device: %w", err)
+//	}
+//	ble.SetDefaultDevice(dev)
+//
+//	// Timeout context
+//	connCtx, cancel := context.WithTimeout(ctx, opts.ConnectTimeout)
+//	defer cancel()
+//
+//	// Connect to BLE device
+//	client, err := ble.Dial(connCtx, ble.NewAddr(d.address))
+//	if err != nil {
+//		return fmt.Errorf("failed to connect to device: %w", err)
+//	}
+//
+//	// Discover services and characteristics
+//	profile, err := client.DiscoverProfile(true)
+//	if err != nil {
+//		client.CancelConnection()
+//		return fmt.Errorf("failed to discover profile: %w", err)
+//	}
+//
+//	// Populate services and characteristics
+//	for _, bleSvc := range profile.Services {
+//		svcUUID := bleSvc.UUID.String()
+//		svc, ok := c.se[svcUUID]
+//		if !ok {
+//			svc = &BLEService{
+//				UUID:            svcUUID,
+//				Characteristics: make(map[string]*BLECharacteristic),
+//			}
+//
+//			d.bleServices[svcUUID] = bleSvc
+//		}
+//
+//		for _, char := range svc.Characteristics {
+//			uuid := char.UUID.String()
+//			bleChar, ok := d.bleCharacteristics[uuid]
+//			if !ok {
+//				// Create BLECharacteristic
+//				bleChar = &BLECharacteristic{
+//					uuid:        char.UUID.String(),
+//					properties:  blePropsToString(char.Property),
+//					descriptors: []Descriptor{},
+//					BLEChar:     char,
+//				}
+//				d.bleCharacteristics[uuid] = bleChar
+//				bleSvc.Characteristics[uuid] = bleChar
+//			} else {
+//				// Update live handle
+//				bleChar.BLEChar = char
+//				bleSvc.Characteristics[uuid] = bleChar
+//			}
+//		}
+//	}
+//
+//	// Create connection wrapper
+//	conn := &BLEConnection{
+//		client:      client,
+//		logger:      d.logger,
+//		isConnected: true,
+//	}
+//	d.connection = conn
+//
+//	// Subscribe to notify/indicate characteristics
+//	for _, bleChar := range d.bleCharacteristics {
+//		if bleChar.BLEChar == nil {
+//			continue
+//		}
+//		if bleChar.BLEChar.Property&ble.CharNotify != 0 || bleChar.BLEChar.Property&ble.CharIndicate != 0 {
+//			uuid := bleChar.GetUUID()
+//			d.logger.WithField("uuid", uuid).Info("Subscribing to notifications")
+//			err := client.Subscribe(bleChar.BLEChar, false, func(data []byte) {
+//				bleChar.mu.Lock()
+//				bleChar.value = data
+//				bleChar.mu.Unlock()
+//				if d.onData != nil {
+//					d.onData(uuid, data)
+//				}
+//			})
+//			if err != nil {
+//				d.logger.WithFields(logrus.Fields{
+//					"uuid":  uuid,
+//					"error": err,
+//				}).Warn("Failed to subscribe to characteristic")
+//			}
+//		}
+//	}
+//
+//	d.logger.WithField("services", len(d.bleServices)).Info("BLE device connected")
+//	return nil
+//}
 
 // Disconnect closes connection and clears live handles
 func (d *BLEDevice) Disconnect() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if d.connection == nil || !d.connection.IsConnected() {
-		d.logger.Info("Already disconnected")
-		return nil
+	// Assert: connection should never be nil with preconnection pattern
+	if d.connection == nil {
+		panic("BUG: connection is nil - this should never happen with preconnection pattern")
 	}
 
-	d.logger.Info("Disconnecting BLE device...")
-
-	for _, bleChar := range d.bleCharacteristics {
-		if bleChar.BLEChar != nil && d.connection.client != nil {
-			_ = d.connection.client.Unsubscribe(bleChar.BLEChar, false)
-			_ = d.connection.client.Unsubscribe(bleChar.BLEChar, true)
-		}
-		bleChar.BLEChar = nil
-	}
-
-	err := d.connection.client.CancelConnection()
-	d.connection.isConnected = false
-	d.connection.client = nil
-	d.connection = nil
-
-	d.logger.Info("BLE device disconnected")
-	return err
+	// Use the BLEConnection to disconnect
+	return d.connection.Disconnect()
 }
 
 // IsConnected returns connection status
 func (d *BLEDevice) IsConnected() bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return d.connection != nil && d.connection.IsConnected()
+
+	// Assert: connection should never be nil with preconnection pattern
+	if d.connection == nil {
+		panic("BUG: connection is nil - this should never happen with preconnection pattern")
+	}
+
+	return d.connection.IsConnected()
 }
 
 // Update refreshes device information from a new advertisement
@@ -434,7 +376,7 @@ func (d *BLEDevice) Update(adv ble.Advertisement) {
 	for _, svc := range adv.Services() {
 		u := svc.String()
 		if !d.hasServiceUUID(u) {
-			d.services = append(d.services, &BLESimpleService{uuid: u})
+			d.advertisedServices = append(d.advertisedServices, &BLEAdvertisedService{uuid: u})
 		}
 	}
 
@@ -452,13 +394,6 @@ func (d *BLEDevice) Update(adv ble.Advertisement) {
 
 // BLE-specific methods
 
-// IsConnected returns connection status for BLEConnection
-func (c *BLEConnection) IsConnected() bool {
-	c.connMutex.RLock()
-	defer c.connMutex.RUnlock()
-	return c.isConnected
-}
-
 // WriteToCharacteristic writes data to a BLE characteristic
 func (b *BLEDevice) WriteToCharacteristic(uuid string, data []byte) error {
 	b.mu.RLock()
@@ -468,9 +403,21 @@ func (b *BLEDevice) WriteToCharacteristic(uuid string, data []byte) error {
 		return fmt.Errorf("device not connected")
 	}
 
-	char, ok := b.bleCharacteristics[uuid]
-	if !ok {
+	// Find characteristic across all services
+	var char *BLECharacteristic
+	for _, service := range b.connection.services {
+		if bleChar, ok := service.Characteristics[uuid]; ok {
+			char = bleChar
+			break
+		}
+	}
+
+	if char == nil {
 		return fmt.Errorf("characteristic %s not found", uuid)
+	}
+
+	if char.BLEChar == nil {
+		return fmt.Errorf("characteristic %s not connected", uuid)
 	}
 
 	b.connection.writeMutex.Lock()
@@ -492,25 +439,41 @@ func (b *BLEDevice) WriteToCharacteristic(uuid string, data []byte) error {
 }
 
 // GetBLEServices returns services with their characteristics
-func (b *BLEDevice) GetBLEServices() []*BLEService {
+func (b *BLEDevice) GetBLEServices() ([]*BLEService, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	result := make([]*BLEService, 0, len(b.bleServices))
-	for _, svc := range b.bleServices {
-		result = append(result, svc)
+
+	// Return connected services if device is connected
+	if b.IsConnected() {
+		result := make([]*BLEService, 0, len(b.connection.services))
+		for _, svc := range b.connection.services {
+			result = append(result, svc)
+		}
+		return result, nil
 	}
-	return result
+
+	// Return error if not connected
+	return nil, fmt.Errorf("device not connected")
 }
 
 // GetCharacteristics returns all characteristics as device.Characteristic
-func (b *BLEDevice) GetCharacteristics() []Characteristic {
+func (b *BLEDevice) GetCharacteristics() ([]Characteristic, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	result := make([]Characteristic, 0, len(b.bleCharacteristics))
-	for _, c := range b.bleCharacteristics {
-		result = append(result, c)
+
+	// Return connected characteristics if device is connected
+	if b.IsConnected() {
+		var result []Characteristic
+		for _, service := range b.connection.services {
+			for _, char := range service.Characteristics {
+				result = append(result, char)
+			}
+		}
+		return result, nil
 	}
-	return result
+
+	// Return error if is not connected
+	return nil, fmt.Errorf("device not connected")
 }
 
 // SetDataHandler sets callback for received notifications
@@ -629,9 +592,19 @@ func (d *BLEDevice) parseBroadcomManufacturerData(data []byte) string {
 	return ""
 }
 
-// hasServiceUUID checks if Services already contains a service with the given UUID (case-insensitive)
+// hasServiceUUID checks if services already contain a service with the given UUID (case-insensitive)
 func (d *BLEDevice) hasServiceUUID(uuid string) bool {
-	for _, s := range d.services {
+	// First check connected services if device is connected
+	if d.IsConnected() {
+		for _, service := range d.connection.services {
+			if strings.EqualFold(service.GetUUID(), uuid) {
+				return true
+			}
+		}
+	}
+
+	// Fall back to advertised services
+	for _, s := range d.advertisedServices {
 		if strings.EqualFold(s.GetUUID(), uuid) {
 			return true
 		}

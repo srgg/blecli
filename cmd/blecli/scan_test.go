@@ -376,8 +376,8 @@ func TestDisplayDevicesCSV(t *testing.T) {
 	assert.Equal(t, "Name,Address,RSSI,Services,LastSeen", expectedHeader)
 
 	// Test service joining
-	uuids := make([]string, 0, len(devices[0].GetServices()))
-	for _, s := range devices[0].GetServices() {
+	uuids := make([]string, 0, len(devices[0].GetAdvertisedServices()))
+	for _, s := range devices[0].GetAdvertisedServices() {
 		uuids = append(uuids, s.GetUUID())
 	}
 	services := strings.Join(uuids, ";")

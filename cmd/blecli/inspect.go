@@ -91,13 +91,13 @@ func outputInspectText(res *blecli.InspectResult) {
 		fmt.Fprintf(cmdOut(), "  LastSeen: %s\n", d.GetLastSeen().Format(time.RFC3339))
 
 		// Services (UUIDs)
-		if len(d.GetServices()) > 0 {
-			fmt.Fprintln(cmdOut(), "  Services:")
-			for _, s := range d.GetServices() {
+		if len(d.GetAdvertisedServices()) > 0 {
+			fmt.Fprintln(cmdOut(), "  Advertised Services:")
+			for _, s := range d.GetAdvertisedServices() {
 				fmt.Fprintf(cmdOut(), "    - %s\n", s.GetUUID())
 			}
 		} else {
-			fmt.Fprintln(cmdOut(), "  Services: none")
+			fmt.Fprintln(cmdOut(), "  Advertised Services: none")
 		}
 
 		// Manufacturer data
@@ -127,10 +127,8 @@ func outputInspectText(res *blecli.InspectResult) {
 			fmt.Fprintf(cmdOut(), "  Name: %s\n", res.Name)
 		}
 	}
+
 	count := len(res.Services)
-	if res.Device != nil && len(res.Device.GetServices()) > 0 {
-		count = len(res.Device.GetServices())
-	}
 	fmt.Fprintf(cmdOut(), "  GATT Services: %d\n", count)
 
 	// Then list services

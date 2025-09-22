@@ -41,7 +41,7 @@ type DescriptorJSON struct {
 func DeviceToJSON(d device.Device) string {
 	// Map Services
 	var services []ServiceJSON
-	for _, s := range d.GetServices() {
+	for _, s := range d.GetAdvertisedServices() {
 		var chars []CharacteristicJSON
 		for _, c := range s.GetCharacteristics() {
 			var descs []DescriptorJSON

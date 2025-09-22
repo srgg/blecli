@@ -106,10 +106,18 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	// Create BLE connection
 	connOpts := device.ConnectOptions{
 		ConnectTimeout: bridgeConnectTimeout,
-		ServiceUUID:    serviceUUID,
+		Services: []device.SubscribeOptions{
+			{
+				ServiceUUID: bridgeServiceUUID,
+			},
+		},
 	}
 
 	device := device.NewDeviceWithAddress(deviceAddress, logger)
+	if err != nil {
+		return fmt.Errorf("failed to connect to BLE device: %w", err)
+	}
+
 	logger.WithField("address", deviceAddress).Info("Connecting to BLE device...")
 	if err := device.Connect(ctx, &connOpts); err != nil {
 		return fmt.Errorf("failed to connect to BLE device: %w", err)
@@ -156,7 +164,11 @@ func runBridge(cmd *cobra.Command, args []string) error {
 
 	// Add BLE characteristics to the bridge
 	logger.Info("Adding BLE characteristics to Lua bridge...")
-	characteristics := device.GetCharacteristics()
+	characteristics, err := device.GetCharacteristics()
+	if err != nil {
+		return fmt.Errorf("failed to get characteristics: %w", err)
+	}
+
 	for _, char := range characteristics {
 		// Only add characteristics from the specified service if serviceUUID is set
 		// For now, add all characteristics - could filter by service UUID later
@@ -194,7 +206,10 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Display connection info
-	characteristics = device.GetCharacteristics()
+	characteristics, err = device.GetCharacteristics()
+	if err != nil {
+		return fmt.Errorf("failed to get characteristics: %w", err)
+	}
 	fmt.Printf("\n=== BLE-PTY Bridge Active ===\n")
 	fmt.Printf("Device: %s\n", deviceAddress)
 	fmt.Printf("PTY: %s\n", bridge.GetPTYName())

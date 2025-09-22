@@ -86,7 +86,7 @@ func TestBridgeErrorHandling(t *testing.T) {
 	require.NotNil(t, bridge)
 
 	t.Run("NonFatalError", func(t *testing.T) {
-		// Script that returns non-fatal error
+		// Script that returns a non-fatal error
 		nonFatalScript := `
 function ble_to_tty()
     return nil, "waiting for more data"
@@ -110,7 +110,7 @@ end
 	})
 
 	t.Run("FatalError", func(t *testing.T) {
-		// Script that throws fatal error
+		// Script that throws a fatal error
 		fatalScript := `
 function ble_to_tty()
     error("catastrophic failure")
@@ -147,7 +147,7 @@ func TestBridgeBLEToTTYDump(t *testing.T) {
 	testScript := `
 -- Working test script
 function ble_to_tty()
-    -- First, test basic string.format
+    -- First, test a basic string.format
     local test1 = string.format("Test 1: %s", "works")
     buffer:append(test1 .. "\n")
 
@@ -210,10 +210,10 @@ end
 		},
 	}
 
-	// Add mock characteristics to the bridge BEFORE loading script
+	// Add mock characteristics to the bridge BEFORE loading the script
 	for _, mockChar := range mockCharacteristics {
 		bridge.AddBLECharacteristic(mockChar.ToBLECharacteristic())
-		// Simulate receiving data from BLE device
+		// Simulate receiving data from the BLE device
 		bridge.UpdateCharacteristic(mockChar.UUID.String(), mockChar.Data)
 	}
 
@@ -354,7 +354,7 @@ end
 	err = bridge.GetEngine().TransformTTYToBLE()
 	require.NoError(t, err)
 
-	// Check if data was written to BLE characteristic
+	// Check if data was written to the BLE characteristic
 	bleAPI := bridge.GetEngine().GetBLEAPI()
 	rxValue := bleAPI.GetCharacteristicValue("6e400002b5a3f393e0a9e50e24dcca9e")
 	assert.Equal(t, "Echo: test command", string(rxValue))
@@ -368,10 +368,10 @@ func TestBLEAPIOnly(t *testing.T) {
 	bridge := NewBridge(logger)
 	require.NotNil(t, bridge)
 
-	// Create simple test script that only uses string.format (no buffer)
+	// Create a simple test script that only uses a string.format (no buffer)
 	testScript := `
 function ble_to_tty()
-    -- Test if string.format works with BLE API registered
+    -- Test if string.format works with the BLE API registered
     local test_str = string.format("Test: %s", "works")
     print(test_str)
 end
@@ -394,7 +394,7 @@ end
 	err := bridge.GetEngine().LoadScript(testScript, "ble_only_test")
 	require.NoError(t, err)
 
-	// This should work if BLE API doesn't corrupt string library
+	// This should work if the BLE API doesn't corrupt the string library
 	err = bridge.GetEngine().TransformBLEToTTY()
 	if err != nil {
 		t.Logf("BLE API registration corrupted Lua state: %v", err)
@@ -410,7 +410,7 @@ func TestAPICorruption(t *testing.T) {
 	bridge := NewBridge(logger)
 	require.NotNil(t, bridge)
 
-	// Create simple test script that checks global types
+	// Create a simple test script that checks global types
 	testScript := `
 function ble_to_tty()
     -- Check what type each global is

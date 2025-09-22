@@ -122,9 +122,8 @@ func InspectDevice(ctx context.Context, address string, opts *InspectOptions, lo
 		res.Services = append(res.Services, si)
 	}
 
-	// Build a device.Device snapshot so CLI can show all device fields up front
+	// Build a device.Device snapshot so the CLI can show all device fields up front
 	dev := device.NewDeviceWithAddress(address, logger)
-
 	res.Name = deviceName
 	res.Device = dev
 
