@@ -70,7 +70,6 @@ type Device interface {
 
 // Connection represents a BLE connection interface
 type Connection interface {
-	//GetServices() map[string]*BLEService
 	GetServices() map[string]Service
 	GetCharacteristic(service, uuid string) (*BLECharacteristic, error)
 	Subscribe(opts []*SubscribeOptions, pattern StreamMode, maxRate time.Duration, callback func(*Record)) error

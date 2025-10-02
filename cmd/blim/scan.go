@@ -185,7 +185,7 @@ func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *con
 
 		if err != nil && !errors.Is(err, context.Canceled) {
 			logger.WithError(err).Error("scan failed")
-			return fmt.Errorf("scan failed: %w", err)
+			return err
 		}
 		return displayDevicesTableFromMap(devices, cfg)
 	} else {
@@ -194,7 +194,7 @@ func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *con
 		// Perform scan
 		if devices, err := scanner.Scan(ctx, opts); err != nil && !errors.Is(err, context.Canceled) {
 			logger.WithError(err).Error("scan failed")
-			return fmt.Errorf("scan failed: %w", err)
+			return err
 		} else {
 			return displayDevicesTableFromMap(devices, cfg)
 		}
@@ -231,7 +231,7 @@ func runWatchMode(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *conf
 
 	printDeviceTable := func(err error) error {
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("scan failed: %w", err)
+			return err
 		}
 
 		clearScreen()

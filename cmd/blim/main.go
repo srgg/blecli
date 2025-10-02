@@ -31,8 +31,8 @@ Perfect for IoT development, device testing, and BLE protocol exploration.`,
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		// Print clean error message without "Error:" prefix
-		fmt.Fprintln(os.Stderr, err)
+		// Print error message with ERROR: prefix
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		os.Exit(1)
 	}
 }

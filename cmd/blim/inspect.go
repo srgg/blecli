@@ -2,16 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/srg/blim/inspector"
+	"github.com/srg/blim/internal/device"
 	"github.com/srg/blim/pkg/config"
 )
 
@@ -55,102 +58,201 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	// Build inspect options
 	opts := &inspector.InspectOptions{
 		ConnectTimeout: inspectConnectTimeout,
-		ReadLimit:      inspectReadLimit,
 	}
 
 	// Use background context; per-command timeout is applied inside the inspector
 	ctx := context.Background()
-	res, err := inspector.InspectDevice(ctx, address, opts, logger)
+	dev, err := inspector.InspectDevice(ctx, address, opts, logger)
 	if err != nil {
 		return err
 	}
+	defer dev.Disconnect()
 
 	if inspectJSON {
-		enc := json.NewEncoder(cmdOut())
-		enc.SetIndent("", "  ")
-		return enc.Encode(res)
+		return outputInspectJSON(dev, inspectReadLimit)
 	}
 
-	outputInspectText(res)
+	outputInspectText(dev, inspectReadLimit)
 	return nil
 }
 
-func outputInspectText(res *inspector.InspectResult) {
+func outputInspectText(dev device.Device, readLimit int) {
 	// Device info first
 	fmt.Fprintln(cmdOut(), "Device info:")
-	if res.Device != nil {
-		d := res.Device
-		fmt.Fprintf(cmdOut(), "  ID: %s\n", d.GetID())
-		fmt.Fprintf(cmdOut(), "  Address: %s\n", d.GetAddress())
-		if d.GetName() != "" {
-			fmt.Fprintf(cmdOut(), "  Name: %s\n", d.GetName())
-		}
-		fmt.Fprintf(cmdOut(), "  RSSI: %d\n", d.GetRSSI())
-		fmt.Fprintf(cmdOut(), "  Connectable: %t\n", d.IsConnectable())
-		if d.GetTxPower() != nil {
-			fmt.Fprintf(cmdOut(), "  TxPower: %d dBm\n", *d.GetTxPower())
-		}
-		fmt.Fprintf(cmdOut(), "  LastSeen: %s\n", d.GetLastSeen().Format(time.RFC3339))
+	fmt.Fprintf(cmdOut(), "  ID: %s\n", dev.GetID())
+	fmt.Fprintf(cmdOut(), "  Address: %s\n", dev.GetAddress())
+	if dev.GetName() != "" {
+		fmt.Fprintf(cmdOut(), "  Name: %s\n", dev.GetName())
+	}
+	fmt.Fprintf(cmdOut(), "  RSSI: %d\n", dev.GetRSSI())
+	fmt.Fprintf(cmdOut(), "  Connectable: %t\n", dev.IsConnectable())
+	if dev.GetTxPower() != nil {
+		fmt.Fprintf(cmdOut(), "  TxPower: %d dBm\n", *dev.GetTxPower())
+	}
+	fmt.Fprintf(cmdOut(), "  LastSeen: %s\n", dev.GetLastSeen().Format(time.RFC3339))
 
-		// Services (UUIDs)
-		if len(d.GetAdvertisedServices()) > 0 {
-			fmt.Fprintln(cmdOut(), "  Advertised Services:")
-			for _, s := range d.GetAdvertisedServices() {
-				fmt.Fprintf(cmdOut(), "    - %s\n", s)
-			}
-		} else {
-			fmt.Fprintln(cmdOut(), "  Advertised Services: none")
-		}
-
-		// Manufacturer data
-		if len(d.GetManufacturerData()) > 0 {
-			fmt.Fprintf(cmdOut(), "  Manufacturer Data: %X\n", d.GetManufacturerData())
-		} else {
-			fmt.Fprintln(cmdOut(), "  Manufacturer Data: none")
-		}
-
-		// Service data
-		if len(d.GetServiceData()) > 0 {
-			fmt.Fprintln(cmdOut(), "  Service Data:")
-			keys := make([]string, 0, len(d.GetServiceData()))
-			for k := range d.GetServiceData() {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				fmt.Fprintf(cmdOut(), "    - %s: %X\n", k, d.GetServiceData()[k])
-			}
-		} else {
-			fmt.Fprintln(cmdOut(), "  Service Data: none")
+	// Advertised Services
+	if len(dev.GetAdvertisedServices()) > 0 {
+		fmt.Fprintln(cmdOut(), "  Advertised Services:")
+		for _, s := range dev.GetAdvertisedServices() {
+			fmt.Fprintf(cmdOut(), "    - %s\n", s)
 		}
 	} else {
-		fmt.Fprintf(cmdOut(), "  Address: %s\n", res.Address)
-		if res.Name != "" {
-			fmt.Fprintf(cmdOut(), "  Name: %s\n", res.Name)
-		}
+		fmt.Fprintln(cmdOut(), "  Advertised Services: none")
 	}
 
-	count := len(res.Services)
-	fmt.Fprintf(cmdOut(), "  GATT Services: %d\n", count)
+	// Manufacturer data
+	if len(dev.GetManufacturerData()) > 0 {
+		fmt.Fprintf(cmdOut(), "  Manufacturer Data: %X\n", dev.GetManufacturerData())
+	} else {
+		fmt.Fprintln(cmdOut(), "  Manufacturer Data: none")
+	}
 
-	// Then list services
-	for si, svc := range res.Services {
-		fmt.Fprintf(cmdOut(), "\n[%d] Service %s\n", si+1, svc.UUID)
-		for ci, ch := range svc.Characteristics {
-			fmt.Fprintf(cmdOut(), "  [%d.%d] Characteristic %s (props: %s)\n", si+1, ci+1, ch.UUID, ch.Properties)
-			if ch.ValueHex != "" || ch.ValueASCII != "" {
-				if ch.ValueHex != "" {
-					fmt.Fprintf(cmdOut(), "      value (hex):   %s\n", ch.ValueHex)
-				}
-				if ch.ValueASCII != "" {
-					fmt.Fprintf(cmdOut(), "      value (ascii): %s\n", ch.ValueASCII)
+	// Service data
+	if len(dev.GetServiceData()) > 0 {
+		fmt.Fprintln(cmdOut(), "  Service Data:")
+		keys := make([]string, 0, len(dev.GetServiceData()))
+		for k := range dev.GetServiceData() {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(cmdOut(), "    - %s: %X\n", k, dev.GetServiceData()[k])
+		}
+	} else {
+		fmt.Fprintln(cmdOut(), "  Service Data: none")
+	}
+
+	// GATT Services from connection
+	conn := dev.GetConnection()
+	services := conn.GetServices()
+	fmt.Fprintf(cmdOut(), "  GATT Services: %d\n", len(services))
+
+	// List services
+	si := 0
+	for _, svc := range services {
+		si++
+		fmt.Fprintf(cmdOut(), "\n[%d] Service %s\n", si, svc.GetUUID())
+
+		ci := 0
+		for _, char := range svc.GetCharacteristics() {
+			ci++
+			fmt.Fprintf(cmdOut(), "  [%d.%d] Characteristic %s (props: %s)\n", si, ci, char.GetUUID(), char.GetProperties())
+
+			// Optionally show characteristic values
+			if readLimit > 0 {
+				data := char.GetValue()
+				if len(data) > 0 {
+					trim := data
+					if len(trim) > readLimit {
+						trim = trim[:readLimit]
+					}
+					valueHex := strings.ToUpper(hex.EncodeToString(trim))
+					valueASCII := asciiPreview(trim)
+
+					if valueHex != "" {
+						fmt.Fprintf(cmdOut(), "      value (hex):   %s\n", valueHex)
+					}
+					if valueASCII != "" {
+						fmt.Fprintf(cmdOut(), "      value (ascii): %s\n", valueASCII)
+					}
 				}
 			}
-			for _, d := range ch.Descriptors {
-				fmt.Fprintf(cmdOut(), "      descriptor: %s\n", d.UUID)
+
+			// Descriptors
+			for _, d := range char.GetDescriptors() {
+				fmt.Fprintf(cmdOut(), "      descriptor: %s\n", d.GetUUID())
 			}
 		}
 	}
+}
+
+func outputInspectJSON(dev device.Device, readLimit int) error {
+	// Build JSON structure directly from device
+	conn := dev.GetConnection()
+	services := conn.GetServices()
+
+	type DescriptorJSON struct {
+		UUID string `json:"uuid"`
+	}
+
+	type CharacteristicJSON struct {
+		UUID        string           `json:"uuid"`
+		Properties  string           `json:"properties"`
+		ValueHex    string           `json:"value_hex,omitempty"`
+		ValueASCII  string           `json:"value_ascii,omitempty"`
+		Descriptors []DescriptorJSON `json:"descriptors,omitempty"`
+	}
+
+	type ServiceJSON struct {
+		UUID            string               `json:"uuid"`
+		Characteristics []CharacteristicJSON `json:"characteristics"`
+	}
+
+	type InspectJSON struct {
+		Address  string        `json:"address"`
+		Name     string        `json:"name,omitempty"`
+		Services []ServiceJSON `json:"services"`
+	}
+
+	result := InspectJSON{
+		Address:  dev.GetAddress(),
+		Name:     dev.GetName(),
+		Services: make([]ServiceJSON, 0, len(services)),
+	}
+
+	for _, svc := range services {
+		svcJSON := ServiceJSON{
+			UUID:            svc.GetUUID(),
+			Characteristics: make([]CharacteristicJSON, 0),
+		}
+
+		for _, char := range svc.GetCharacteristics() {
+			charJSON := CharacteristicJSON{
+				UUID:       char.GetUUID(),
+				Properties: char.GetProperties(),
+			}
+
+			// Optionally include values
+			if readLimit > 0 {
+				data := char.GetValue()
+				if len(data) > 0 {
+					trim := data
+					if len(trim) > readLimit {
+						trim = trim[:readLimit]
+					}
+					charJSON.ValueHex = strings.ToUpper(hex.EncodeToString(trim))
+					charJSON.ValueASCII = asciiPreview(trim)
+				}
+			}
+
+			// Descriptors
+			for _, d := range char.GetDescriptors() {
+				charJSON.Descriptors = append(charJSON.Descriptors, DescriptorJSON{UUID: d.GetUUID()})
+			}
+
+			svcJSON.Characteristics = append(svcJSON.Characteristics, charJSON)
+		}
+
+		result.Services = append(result.Services, svcJSON)
+	}
+
+	enc := json.NewEncoder(cmdOut())
+	enc.SetIndent("", "  ")
+	return enc.Encode(result)
+}
+
+// asciiPreview returns a safe ASCII preview, replacing non-printable bytes with '.'
+func asciiPreview(b []byte) string {
+	var sb strings.Builder
+	for _, c := range b {
+		if c >= 32 && c <= 126 {
+			sb.WriteByte(c)
+		} else {
+			sb.WriteByte('.')
+		}
+	}
+	return sb.String()
 }
 
 // cmdOut returns a writer to standard output

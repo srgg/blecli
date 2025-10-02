@@ -19,7 +19,7 @@ var DeviceFactory = func() (ble.Device, error) {
 		// Wrap Bluetooth state errors with clearer messages
 		if strings.Contains(err.Error(), "central manager has invalid state") {
 			if strings.Contains(err.Error(), "have=4") { // StatePoweredOff
-				return nil, fmt.Errorf("Bluetooth is turned off - please enable Bluetooth in System Settings")
+				return nil, fmt.Errorf("Bluetooth is turned off - please enable Bluetooth and retry")
 			}
 			return nil, fmt.Errorf("Bluetooth is not ready - %w", err)
 		}
