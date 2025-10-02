@@ -63,6 +63,11 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	// Use background context; per-command timeout is applied inside the inspector
 	ctx := context.Background()
 
+	// Setup progress printer
+	progress := NewProgressPrinter(fmt.Sprintf("Inspecting device %s", address), "Connecting", "Processing results")
+	progress.Start()
+	defer progress.Stop()
+
 	// Choose output callback based on format
 	var processDevice inspector.InspectCallback[error]
 	if inspectJSON {
@@ -76,7 +81,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	_, err := inspector.InspectDevice(ctx, address, opts, logger, processDevice)
+	_, err := inspector.InspectDevice(ctx, address, opts, logger, progress.Callback(), processDevice)
 	return err
 }
 

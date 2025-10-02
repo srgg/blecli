@@ -133,72 +133,27 @@ func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *con
 	// Listen for Ctrl+C to cancel
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	cancelled := false
 	go func() {
 		<-sigCh
-		cancelled = true
 		fmt.Println("\nCtrl+C pressed, cancelling scan...")
 		if cb, ok := ctx.Value(blelib.ContextKeySig).(func()); ok {
 			cb() // stop the scan
 		}
 	}()
 
-	// Show progress message with countdown
-	if cfg.ScanTimeout > 0 {
-		// Show countdown ticker on one line
-		startTime := time.Now()
-		stopProgress := make(chan bool)
-		go func() {
-			ticker := time.NewTicker(100 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-stopProgress:
-					return
-				case <-ticker.C:
-					elapsed := time.Since(startTime)
-					remaining := cfg.ScanTimeout - elapsed
-					if remaining > 0 {
-						// Round up to nearest second for display
-						seconds := int(remaining.Seconds())
-						if remaining.Truncate(time.Second) < remaining {
-							seconds++
-						}
-						if seconds > 0 {
-							fmt.Printf("\rScanning for BLE devices (%ds)...   ", seconds)
-						}
-					}
-				}
-			}
-		}()
+	// Setup progress printer
+	progress := NewCountdownProgressPrinter("Scanning for BLE devices", "Scanning", cfg.ScanTimeout, "Processing results")
+	progress.Start()
+	defer progress.Stop()
 
-		// Show initial message
-		fmt.Printf("Scanning for BLE devices (%v)...   ", cfg.ScanTimeout)
+	// Perform scan
+	devices, err := scanner.Scan(ctx, opts, progress.Callback())
 
-		// Perform scan
-		devices, err := scanner.Scan(ctx, opts)
-		stopProgress <- true
-
-		if !cancelled {
-			fmt.Print("\r\033[K") // Clear the progress line
-		}
-
-		if err != nil && !errors.Is(err, context.Canceled) {
-			logger.WithError(err).Error("scan failed")
-			return err
-		}
-		return displayDevicesTableFromMap(devices, cfg)
-	} else {
-		fmt.Println("Scanning for BLE devices (press Ctrl+C to stop)...")
-
-		// Perform scan
-		if devices, err := scanner.Scan(ctx, opts); err != nil && !errors.Is(err, context.Canceled) {
-			logger.WithError(err).Error("scan failed")
-			return err
-		} else {
-			return displayDevicesTableFromMap(devices, cfg)
-		}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		logger.WithError(err).Error("scan failed")
+		return err
 	}
+	return displayDevicesTableFromMap(devices, cfg)
 }
 
 func runWatchMode(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *config.Config, logger *logrus.Logger) error {
@@ -224,7 +179,7 @@ func runWatchMode(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *conf
 	scanErrCh := make(chan error, 1)
 	go func() {
 		var err error
-		devicesMap, err = scanner.Scan(ctx, opts)
+		devicesMap, err = scanner.Scan(ctx, opts, nil) // No progress callback for watch mode
 		scanErrCh <- err
 		close(scanErrCh)
 	}()

@@ -13,6 +13,9 @@ import (
 	"github.com/srg/blim/internal/lua"
 )
 
+// ProgressCallback is called when the scan phase changes
+type ProgressCallback func(phase string)
+
 // DeviceEventType marks if the device was newly discovered or updated
 type DeviceEventType int
 
@@ -67,14 +70,20 @@ func NewScanner(logger *logrus.Logger) (*Scanner, error) {
 }
 
 // Scan performs BLE discovery with provided options
-func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions) (map[string]device.DeviceInfo, error) {
+func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions, progressCallback ProgressCallback) (map[string]device.DeviceInfo, error) {
 	s.devices = hashmap.New[string, device.Device]()
 
 	if opts == nil {
 		opts = DefaultScanOptions()
 	}
+	if progressCallback == nil {
+		progressCallback = func(string) {} // No-op callback
+	}
 
 	s.logger.WithField("duration", opts.Duration).Info("Starting BLE scan...")
+
+	// Report scanning phase
+	progressCallback("Scanning")
 
 	dev, err := device.DeviceFactory()
 	if err != nil {
@@ -92,6 +101,9 @@ func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions) (map[string]devic
 	}
 
 	s.logger.WithField("device_count", s.devices.Len()).Info("BLE scan completed")
+
+	// Report processing phase
+	progressCallback("Processing results")
 
 	devices := make(map[string]device.DeviceInfo, s.devices.Len())
 	s.devices.Range(func(key string, value device.Device) bool {
