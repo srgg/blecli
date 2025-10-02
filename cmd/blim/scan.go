@@ -70,6 +70,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid format '%s': must be one of %v", scanFormat, validFormats)
 	}
 
+	// All arguments validated - don't show usage on runtime errors
+	cmd.SilenceUsage = true
+
 	// Create configuration
 	cfg := config.DefaultConfig()
 	if scanVerbose {
@@ -130,20 +133,71 @@ func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *con
 	// Listen for Ctrl+C to cancel
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	cancelled := false
 	go func() {
 		<-sigCh
+		cancelled = true
 		fmt.Println("\nCtrl+C pressed, cancelling scan...")
 		if cb, ok := ctx.Value(blelib.ContextKeySig).(func()); ok {
 			cb() // stop the scan
 		}
 	}()
 
-	// Perform scan
-	if devices, err := scanner.Scan(ctx, opts); err != nil && !errors.Is(err, context.Canceled) {
-		logger.WithError(err).Error("scan failed")
-		return fmt.Errorf("scan failed: %w", err)
-	} else {
+	// Show progress message with countdown
+	if cfg.ScanTimeout > 0 {
+		// Show countdown ticker on one line
+		startTime := time.Now()
+		stopProgress := make(chan bool)
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopProgress:
+					return
+				case <-ticker.C:
+					elapsed := time.Since(startTime)
+					remaining := cfg.ScanTimeout - elapsed
+					if remaining > 0 {
+						// Round up to nearest second for display
+						seconds := int(remaining.Seconds())
+						if remaining.Truncate(time.Second) < remaining {
+							seconds++
+						}
+						if seconds > 0 {
+							fmt.Printf("\rScanning for BLE devices (%ds)...   ", seconds)
+						}
+					}
+				}
+			}
+		}()
+
+		// Show initial message
+		fmt.Printf("Scanning for BLE devices (%v)...   ", cfg.ScanTimeout)
+
+		// Perform scan
+		devices, err := scanner.Scan(ctx, opts)
+		stopProgress <- true
+
+		if !cancelled {
+			fmt.Print("\r\033[K") // Clear the progress line
+		}
+
+		if err != nil && !errors.Is(err, context.Canceled) {
+			logger.WithError(err).Error("scan failed")
+			return fmt.Errorf("scan failed: %w", err)
+		}
 		return displayDevicesTableFromMap(devices, cfg)
+	} else {
+		fmt.Println("Scanning for BLE devices (press Ctrl+C to stop)...")
+
+		// Perform scan
+		if devices, err := scanner.Scan(ctx, opts); err != nil && !errors.Is(err, context.Canceled) {
+			logger.WithError(err).Error("scan failed")
+			return fmt.Errorf("scan failed: %w", err)
+		} else {
+			return displayDevicesTableFromMap(devices, cfg)
+		}
 	}
 }
 

@@ -14,7 +14,18 @@ import (
 
 // DeviceFactory creates ble.Device instances (can be overridden in tests)
 var DeviceFactory = func() (ble.Device, error) {
-	return darwin.NewDevice()
+	dev, err := darwin.NewDevice()
+	if err != nil {
+		// Wrap Bluetooth state errors with clearer messages
+		if strings.Contains(err.Error(), "central manager has invalid state") {
+			if strings.Contains(err.Error(), "have=4") { // StatePoweredOff
+				return nil, fmt.Errorf("Bluetooth is turned off - please enable Bluetooth in System Settings")
+			}
+			return nil, fmt.Errorf("Bluetooth is not ready - %w", err)
+		}
+		return nil, err
+	}
+	return dev, nil
 }
 
 // ----------------------------

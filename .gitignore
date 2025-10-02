@@ -29,7 +29,7 @@
  .vscode/
 
 # A binary
-blecli
+blim
 
 # Auto-generated files (should be regenerated during build)
 # Generated mocks

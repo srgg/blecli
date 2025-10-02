@@ -46,6 +46,10 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	if inspectVerbose {
 		cfg.LogLevel = logrus.DebugLevel
 	}
+
+	// All arguments validated - don't show usage on runtime errors
+	cmd.SilenceUsage = true
+
 	logger := cfg.NewLogger()
 
 	// Build inspect options

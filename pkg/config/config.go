@@ -17,7 +17,7 @@ type Config struct {
 // DefaultConfig returns default configuration values
 func DefaultConfig() *Config {
 	return &Config{
-		LogLevel:      logrus.InfoLevel,
+		LogLevel:      logrus.PanicLevel, // Logs off by default (only panic/fatal)
 		ScanTimeout:   10 * time.Second,
 		DeviceTimeout: 30 * time.Second,
 		OutputFormat:  "table", // table, json, csv

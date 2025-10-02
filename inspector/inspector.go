@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/go-ble/ble"
-	"github.com/go-ble/ble/darwin"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
 )
@@ -55,8 +54,8 @@ func InspectDevice(ctx context.Context, address string, opts *InspectOptions, lo
 		logger = logrus.New()
 	}
 
-	// Initialize BLE device (macOS)
-	d, err := darwin.NewDevice()
+	// Initialize a BLE device
+	d, err := device.DeviceFactory()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create BLE device: %w", err)
 	}
@@ -71,16 +70,99 @@ func InspectDevice(ctx context.Context, address string, opts *InspectOptions, lo
 	}
 
 	logger.WithField("address", address).Info("Dialing BLE device...")
+
+	// Progress ticker for connecting phase - show countdown
+	connectStart := time.Now()
+	stopProgress := make(chan bool)
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopProgress:
+				return
+			case <-ticker.C:
+				elapsed := time.Since(connectStart)
+				remaining := opts.ConnectTimeout - elapsed
+				if remaining > 0 {
+					seconds := int(remaining.Seconds())
+					if remaining.Truncate(time.Second) < remaining {
+						seconds++
+					}
+					if seconds > 0 {
+						fmt.Printf("\rInspecting device %s (Connecting %ds)   ", address, seconds)
+					}
+				}
+			}
+		}
+	}()
+
+	fmt.Printf("Inspecting device %s (Connecting %ds)   ", address, int(opts.ConnectTimeout.Seconds()))
 	client, err := ble.Dial(cctx, ble.NewAddr(address))
+	stopProgress <- true
+
 	if err != nil {
+		fmt.Print("\r\033[K") // Clear the line
 		return nil, fmt.Errorf("failed to connect to device %s: %w", address, err)
 	}
-	defer client.CancelConnection()
+	defer func() {
+		_ = client.CancelConnection()
+	}()
 
 	logger.Info("Discovering profile (services/characteristics)...")
+
+	// Progress ticker for discovery phase
+	discoverStart := time.Now()
+	stopProgress2 := make(chan bool)
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopProgress2:
+				return
+			case <-ticker.C:
+				elapsed := time.Since(discoverStart)
+				seconds := int(elapsed.Seconds()) + 1
+				fmt.Printf("\rInspecting device %s (Discovering %ds)   ", address, seconds)
+			}
+		}
+	}()
+
+	fmt.Printf("\rInspecting device %s (Discovering 0s)   ", address)
 	profile, err := client.DiscoverProfile(true)
+	stopProgress2 <- true
+
 	if err != nil {
+		fmt.Print("\r\033[K") // Clear the progress line
 		return nil, fmt.Errorf("failed to discover profile: %w", err)
+	}
+
+	// Progress ticker for exploring phase (reading characteristics)
+	if opts.ReadLimit > 0 {
+		exploreStart := time.Now()
+		stopProgress3 := make(chan bool)
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopProgress3:
+					return
+				case <-ticker.C:
+					elapsed := time.Since(exploreStart)
+					seconds := int(elapsed.Seconds()) + 1
+					fmt.Printf("\rInspecting device %s (Exploring %ds)   ", address, seconds)
+				}
+			}
+		}()
+		fmt.Printf("\rInspecting device %s (Exploring 0s)   ", address)
+		defer func() {
+			stopProgress3 <- true
+			fmt.Print("\r\033[K") // Clear the progress line
+		}()
+	} else {
+		fmt.Print("\r\033[K") // Clear the progress line
 	}
 
 	res := &InspectResult{Address: address}

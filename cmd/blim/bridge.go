@@ -77,6 +77,9 @@ func runBridge(cmd *cobra.Command, args []string) error {
 		cfg.LogLevel = logrus.DebugLevel
 	}
 
+	// All arguments validated - don't show usage on runtime errors
+	cmd.SilenceUsage = true
+
 	logger := cfg.NewLogger()
 
 	deviceAddress := args[0]

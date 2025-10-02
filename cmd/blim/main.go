@@ -31,12 +31,16 @@ Perfect for IoT development, device testing, and BLE protocol exploration.`,
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
+		// Print clean error message without "Error:" prefix
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
 func init() {
+	// Silence Cobra's "Error:" prefix - main() prints clean errors
+	rootCmd.SilenceErrors = true
+
 	// Add subcommands
 	rootCmd.AddCommand(scanCmd)
 	rootCmd.AddCommand(bridgeCmd)
