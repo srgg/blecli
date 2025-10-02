@@ -14,3 +14,7 @@ packages:
         config:
           dir: "internal/testutils/mocks"
           outpkg: "mocks"
+      Client:
+        config:
+          dir: "internal/testutils/mocks"
+          outpkg: "mocks"

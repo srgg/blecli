@@ -7,7 +7,7 @@ import (
 
 	"github.com/mcuadros/go-defaults"
 	"github.com/srg/blecli/pkg/device"
-	gojsondiff "github.com/yudai/gojsondiff"
+	"github.com/yudai/gojsondiff"
 	"github.com/yudai/gojsondiff/formatter"
 )
 
@@ -20,9 +20,11 @@ func MustJSON(v any) string {
 }
 
 type JSONAssertOptions struct {
-	IgnoreExtraKeys          bool `default:"true"`
-	NilToEmptyArray          bool `default:"true"`
-	AllowPresencePlaceholder bool `default:"true"`
+	IgnoreExtraKeys          bool     `default:"true"`
+	NilToEmptyArray          bool     `default:"true"`
+	AllowPresencePlaceholder bool     `default:"true"`
+	CompareOnlyExpectedKeys  bool     `default:"false"`
+	IgnoredFields            []string `default:""`
 }
 
 // Option is a functional option for configuring JSONAsserter
@@ -56,6 +58,8 @@ func (ja *JSONAsserter) WithOptionsStruct(opts JSONAssertOptions) *JSONAsserter 
 	ja.options.IgnoreExtraKeys = opts.IgnoreExtraKeys
 	ja.options.NilToEmptyArray = opts.NilToEmptyArray
 	ja.options.AllowPresencePlaceholder = opts.AllowPresencePlaceholder
+	ja.options.CompareOnlyExpectedKeys = opts.CompareOnlyExpectedKeys
+	ja.options.IgnoredFields = opts.IgnoredFields
 	return ja
 }
 
@@ -100,11 +104,18 @@ func (ja *JSONAsserter) diff(actualJSON, expectedJSON string) string {
 	if ja.options.IgnoreExtraKeys {
 		pruneExtraKeys(actual, expected)
 	}
+	if ja.options.CompareOnlyExpectedKeys {
+		extractOnlyExpectedKeys(actual, expected)
+	}
+	if len(ja.options.IgnoredFields) > 0 {
+		removeIgnoredFields(expected, actual, ja.options.IgnoredFields)
+	}
 
-	// Marshal back to bytes for diff
+	//// Marshal back to bytes for diff
 	expectedBytes, _ := json.Marshal(expected)
 	actualBytes, _ := json.Marshal(actual)
 
+	// Code uses github.com/yudai/gojsondiff
 	differ := gojsondiff.New()
 	diff, err := differ.Compare(expectedBytes, actualBytes)
 	if err != nil {
@@ -121,8 +132,70 @@ func (ja *JSONAsserter) diff(actualJSON, expectedJSON string) string {
 	}
 	f := formatter.NewAsciiFormatter(expected, config)
 	diffString, _ := f.Format(diff)
-
 	return diffString
+
+	//config := formatter.AsciiFormatterConfig{
+	//	ShowArrayIndex: true,
+	//	Coloring:       false,
+	//}
+	//f := formatter.NewAsciiFormatter(expected, config)
+	//diffString, _ := f.Format(diff)
+
+	// Code uses
+	//// Create a new Differ
+	//differ := jsondiff.Differ{}
+	//
+	//// Compare JSON documents (ignoring array order if desired)
+	//differ.Compare(expected, actual)
+	//
+	//// Retrieve the patch
+	//patch := differ.Patch()
+	//
+	//// If no differences, return empty string
+	//if patch.Empty() {
+	//	return ""
+	//}
+	//
+	//// Format the diff as a readable string
+	//diffString := ""
+	//for _, op := range patch {
+	//	diffString += fmt.Sprintf("%s %s => %v\n", op.Operation, op.Path, op.Value)
+	//}
+	//
+	//return diffString
+
+	//// Create a new Differ
+	//differ := jsondiff.Differ{}
+	//
+	//// Compare JSON documents
+	//differ.Compare(expectedBytes, actualBytes)
+	//
+	//// Retrieve the patch
+	//patch := differ.Patch()
+	//
+	//// If no differences, return empty string
+	//if len(patch) == 0 {
+	//	return ""
+	//}
+	//
+	//// Format the diff as a readable string
+	//diffString := ""
+	//for _, op := range patch {
+	//	diffString += fmt.Sprintf("%s %s => %v\n", op.Type, op.Path, op.Value)
+	//}
+	//
+	//return diffString
+
+	////Code use github.com/nsf/jsondiff
+	//// It does not produce diff format from out of the box
+	//opts := nsf.DefaultConsoleOptions()
+	//diff, str := nsf.Compare(expectedBytes, actualBytes, &opts)
+	//
+	//if diff == nsf.FullMatch {
+	//	return "" // no differences
+	//}
+	//
+	//return str
 }
 
 // replacePresenceWithActual copies actual values for "<<PRESENCE>>" placeholders
@@ -255,6 +328,83 @@ func pruneExtraKeys(actual, expected interface{}) {
 	}
 }
 
+// Extract only keys from actual that exist in expected, creating a new structure
+func extractOnlyExpectedKeys(actual, expected interface{}) interface{} {
+	switch exp := expected.(type) {
+	case map[string]interface{}:
+		act, ok := actual.(map[string]interface{})
+		if !ok {
+			return actual
+		}
+		extracted := make(map[string]interface{})
+		for k := range exp {
+			if v, exists := act[k]; exists {
+				extracted[k] = extractOnlyExpectedKeys(v, exp[k])
+			}
+		}
+		// Replace actual with extracted data
+		for k := range act {
+			delete(act, k)
+		}
+		for k, v := range extracted {
+			act[k] = v
+		}
+		return act
+	case []interface{}:
+		act, ok := actual.([]interface{})
+		if !ok {
+			return actual
+		}
+		for i := range exp {
+			if i < len(act) {
+				act[i] = extractOnlyExpectedKeys(act[i], exp[i])
+			}
+		}
+		return act
+	}
+	return actual
+}
+
+// Remove fields from both expected and actual that are in the ignored fields list
+func removeIgnoredFields(expected, actual interface{}, ignoredFields []string) {
+	if len(ignoredFields) == 0 {
+		return
+	}
+
+	switch exp := expected.(type) {
+	case map[string]interface{}:
+		act, ok := actual.(map[string]interface{})
+		if !ok {
+			return
+		}
+
+		// Remove ignored fields from both expected and actual
+		for _, field := range ignoredFields {
+			delete(exp, field)
+			delete(act, field)
+		}
+
+		// Recursively process nested objects
+		for k := range exp {
+			if actVal, exists := act[k]; exists {
+				removeIgnoredFields(exp[k], actVal, ignoredFields)
+			}
+		}
+	case []interface{}:
+		act, ok := actual.([]interface{})
+		if !ok {
+			return
+		}
+
+		// Recursively process array elements
+		for i := range exp {
+			if i < len(act) {
+				removeIgnoredFields(exp[i], act[i], ignoredFields)
+			}
+		}
+	}
+}
+
 // Functional option constructors
 
 // WithIgnoreExtraKeys sets whether to ignore extra keys in actual JSON
@@ -275,5 +425,19 @@ func WithNilToEmptyArray(normalize bool) Option {
 func WithAllowPresencePlaceholder(allow bool) Option {
 	return func(opts *JSONAssertOptions) {
 		opts.AllowPresencePlaceholder = allow
+	}
+}
+
+// WithCompareOnlyExpectedKeys sets whether to allow "<<PRESENCE>>" placeholders
+func WithCompareOnlyExpectedKeys(allow bool) Option {
+	return func(opts *JSONAssertOptions) {
+		opts.CompareOnlyExpectedKeys = allow
+	}
+}
+
+// WithIgnoredFields sets a list of field names to ignore during comparison
+func WithIgnoredFields(fields ...string) Option {
+	return func(opts *JSONAssertOptions) {
+		opts.IgnoredFields = fields
 	}
 }

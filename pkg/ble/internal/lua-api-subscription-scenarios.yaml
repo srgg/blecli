@@ -1,0 +1,203 @@
+test_cases:
+# GOAL: Verify that error conditions are properly detected and reported with meaningful error messages
+#
+# TEST SCENARIO: Execute various invalid subscription configurations → expect specific error messages
+# NOTE: "Missing Callback" test is in Go code (bleapi_subscription_test.go)
+#       because the YAML framework always generates callbacks and cannot test this Lua syntax error
+
+  - name: "Error Handling: Callback Runtime Error"
+    # GOAL: Verify that Lua subscription callback runtime errors are correctly captured
+    #
+    # TEST SCENARIO: Callback throws Lua error → error logged and sent to stderr → callback execution stops but subscription continues
+    subscription:
+      mode: EveryUpdate
+      max_rate: 0ms
+      services:
+        - service: "1234"
+          characteristics: ["5678"]
+      callback_script: |
+
+                error("Intentional test error in Lua callback")
+    steps:
+      - services:
+          - service: "1234"
+            values:
+              - char: "5678"
+                value: [0x01, 0x02]
+    expected_output:
+      - call_count: 0
+        errors:
+          - message: "Callback error: [string \"...\"]:10: Intentional test error in Lua callback"
+            source: "callback"
+        record: {}
+
+  - name: "Error Handling: Missing Services"
+    subscription:
+      mode: EveryUpdate
+      max_rate: 0ms
+      services: []
+    expect_error_message: "no services specified in Lua subscription"
+
+  - name: "Error Handling: Non-existent Service"
+    subscription:
+      mode: EveryUpdate
+      max_rate: 0ms
+      services:
+        - service: "non-existent-service"
+          characteristics: ["non-existent-char"]
+    expect_error_message: "missing services: non-existent-service"
+
+  - name: "Error Handling: Non-existent Characteristic"
+    subscription:
+      mode: EveryUpdate
+      max_rate: 0ms
+      services:
+        - service: "180d"
+          characteristics: ["non-existent-char", "2a37"]
+    expect_error_message: "missing characteristics: non-existent-char"
+
+# GOAL: Verify that EveryUpdate mode delivers each BLE notification immediately
+#       as a separate callback with a single value per characteristic
+#
+# TEST SCENARIO: Send four notifications to the same characteristic → receive four separate callbacks → verify each contains the correct value
+  - name: "EveryUpdate Subscription Test"
+    subscription:
+      mode: EveryUpdate
+      services:
+        - service: "1234"
+          characteristics: ["5678"]
+    allow_multi_value: true
+    steps:
+      - services:
+          - service: "1234"
+            values:
+              - char: "5678"
+                value: [0x58, 0x59, 0x5A]
+              - char: "5678"
+                value: [0x01, 0x02, 0x03]
+              - char: "5678"
+                value: [0x00, 0x5A]
+              - char: "5678"
+                value: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+    expected_output:
+      - record:
+          Values:
+            "5678": [0x58, 0x59, 0x5A]
+      - record:
+          Values:
+            "5678": [0x01, 0x02, 0x03]
+      - record:
+          Values:
+            "5678": [0x00, 0x5A]
+      - record:
+          Values:
+            "5678": [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+
+# GOAL: Verify that Aggregated mode delivers only the latest value per characteristic
+#       at ticker intervals (max_rate), discarding intermediate updates
+#
+# TEST SCENARIO: Send 2 values per step with 300ms ticker → receive only the latest value per tick → verify correct aggregation
+  - name: "Aggregation Subscription Test"
+    wait_after: 500ms
+    subscription:
+      mode: "Aggregated"
+      max_rate: 300ms
+      services:
+        - service: "1234"
+          characteristics: ["5678"]
+    steps:
+      - services:
+          - service: "1234"
+            values:
+              - char: "5678"
+                value: [0x58, 0x59, 0x5A]
+              - char: "5678"
+                value: [0x01, 0x02, 0x03]
+        expected_output:
+          - call_count: 1
+            record:
+              Values:
+                "5678": [0x01, 0x02, 0x03]
+      - services:
+          - service: "1234"
+            values:
+              - char: "5678"
+                value: [0x00, 0x5A]
+              - char: "5678"
+                value: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+        expected_output:
+          - call_count: 2
+            record:
+              Values:
+                "5678": [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+
+# GOAL: Verify that Batched mode collects all values per characteristic between
+#       ticker intervals and delivers them as arrays in a single callback
+#
+# TEST SCENARIO: Send 2 values per step with 300ms ticker → receive batched arrays of all values per tick → verify complete batching
+  - name: "Batched Subscription Test"
+    wait_after: 500ms
+    subscription:
+      mode: "Batched"
+      max_rate: 300ms
+      services:
+        - service: "1234"
+          characteristics: ["5678"]
+    allow_multi_value: true
+    steps:
+      - services:
+          - service: "1234"
+            values:
+              - char: "5678"
+                value: [0x58, 0x59, 0x5A]
+              - char: "5678"
+                value: [0x01, 0x02, 0x03]
+        expected_output:
+          - call_count: 1
+            record:
+              BatchValues:
+                "5678":
+                  - [0x58, 0x59, 0x5A]
+                  - [0x01, 0x02, 0x03]
+      - services:
+          - service: "1234"
+            values:
+              - char: "5678"
+                value: [0x00, 0x5A]
+              - char: "5678"
+                value: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+        expected_output:
+          - call_count: 2
+            record:
+              BatchValues:
+                "5678":
+                  - [0x00, 0x5A]
+                  - [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+
+# GOAL: Verify that EveryUpdate mode correctly handles subscriptions to multiple
+#       characteristics and delivers separate notifications for each
+#
+# TEST SCENARIO: Subscribe to 2 characteristics → send value to each → receive two separate callbacks with correct characteristic data
+  - name: "EveryUpdate Multi-Characteristic Subscription Test"
+    subscription:
+      mode: EveryUpdate
+      services:
+        - service: "180D"
+          characteristics: ["2A37", "2A38"]
+    steps:
+      - services:
+          - service: "180D"
+            values:
+              - char: "2A37"
+                value: [0x58, 0x59, 0x5A]
+              - char: "2A38"
+                value: [0x01, 0x02, 0x03]
+        expected_output:
+          - call_count: 1
+            record:
+              Values:
+                "2a37": [0x58, 0x59, 0x5A]
+          - call_count: 2
+            record:
+              Values:
+                "2a38": [0x01, 0x02, 0x03]

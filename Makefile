@@ -1,7 +1,7 @@
-# BLE CLI Tool Makefile
+# BLIM CLI Tool Makefile
 
 # Variables
-BINARY_NAME=blecli
+BINARY_NAME=blim
 COVERAGE_DIR=coverage
 GO_PACKAGES=$(shell go list ./...)
 
@@ -18,7 +18,7 @@ all: build test
 .PHONY: build
 build:
 	@echo "Building $(BINARY_NAME) with LuaJIT for maximum performance..."
-	go build $(BUILD_FLAGS) -o $(BINARY_NAME) ./cmd/blecli
+	go build $(BUILD_FLAGS) -o $(BINARY_NAME) ./cmd/${BINARY_NAME}
 
 # Clean build artifacts
 .PHONY: clean
@@ -27,7 +27,7 @@ clean:
 	rm -f $(BINARY_NAME)
 	rm -rf $(COVERAGE_DIR)
 
-# Run all tests or specific test by name
+# Run all tests or a specific test by name
 .PHONY: test
 test: generate-mocks
 	@if [ -z "$(TEST)" ]; then \

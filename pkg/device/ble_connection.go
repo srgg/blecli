@@ -12,6 +12,30 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// DeviceFactory creates ble.Device instances (can be overridden in tests)
+var DeviceFactory = func() (ble.Device, error) {
+	return darwin.NewDevice()
+}
+
+// ----------------------------
+// UUID Normalization Utilities
+// ----------------------------
+
+// normalizeUUID converts a UUID string to the internal BLE library format (lowercase, no dashes)
+// Handles both standard UUID format (with dashes) and already normalized format (without dashes)
+func normalizeUUID(uuid string) string {
+	return strings.ToLower(strings.ReplaceAll(uuid, "-", ""))
+}
+
+// normalizeUUIDs normalizes a slice of UUID strings to internal format
+func normalizeUUIDs(uuids []string) []string {
+	normalized := make([]string, len(uuids))
+	for i, uuid := range uuids {
+		normalized[i] = normalizeUUID(uuid)
+	}
+	return normalized
+}
+
 // ----------------------------
 // Flags
 // ----------------------------
@@ -155,51 +179,39 @@ func (s *BLEService) GetCharacteristics() []Characteristic {
 // Lua Subscription
 // ----------------------------
 
-type StreamPattern int
+type StreamMode int
 
 const (
-	StreamEveryUpdate StreamPattern = iota
+	StreamEveryUpdate StreamMode = iota
 	StreamBatched
 	StreamAggregated
 )
 
 type Record struct {
-	TsUs   int64
-	Seq    uint64
-	Values map[string][]byte
-	Flags  uint32
+	TsUs        int64
+	Seq         uint64
+	Values      map[string][]byte   // Single value per characteristic (EveryUpdate/Aggregated modes)
+	BatchValues map[string][][]byte // Multiple values per characteristic (Batched mode)
+	Flags       uint32
 }
 
-var recordPool = sync.Pool{
-	New: func() interface{} {
-		return &Record{Values: make(map[string][]byte)}
-	},
-}
-
-func newRecord() *Record {
-	r := recordPool.Get().(*Record)
-	r.TsUs = time.Now().UnixMicro()
-	r.Seq++
-	r.Flags = 0
-	for k := range r.Values {
-		delete(r.Values, k)
+func newRecord(mode StreamMode) *Record {
+	r := &Record{
+		TsUs: time.Now().UnixMicro(),
+	}
+	if mode == StreamBatched {
+		r.BatchValues = make(map[string][][]byte)
+	} else {
+		r.Values = make(map[string][]byte)
 	}
 	return r
 }
 
-func releaseRecord(r *Record) {
-	for k := range r.Values {
-		delete(r.Values, k)
-	}
-	recordPool.Put(r)
-}
-
 type LuaSubscription struct {
 	Chars    []*BLECharacteristic
-	Pattern  StreamPattern
+	Mode     StreamMode
 	MaxRate  time.Duration
 	Callback func(*Record)
-	buffer   []*BLEValue
 }
 
 // ----------------------------
@@ -221,6 +233,65 @@ type BLEConnection struct {
 	cancel        context.CancelFunc
 }
 
+func (c *BLEConnection) GetCharacteristic(service, uuid string) (*BLECharacteristic, error) {
+	// Normalize UUIDs for consistent lookup
+	normalizedServiceUUID := normalizeUUID(service)
+	normalizedCharUUID := normalizeUUID(uuid)
+
+	svc, ok := c.services[normalizedServiceUUID]
+	if !ok {
+		return nil, fmt.Errorf("service \"%s\" not found", service)
+	}
+
+	char, ok := svc.Characteristics[normalizedCharUUID]
+	if !ok {
+		return nil, fmt.Errorf("characteristic \"%s\" not found in service \"%s\"", uuid, service)
+	}
+
+	return char, nil
+}
+
+func (c *BLEConnection) GetServices() map[string]Service {
+	c.connMutex.RLock()
+	defer c.connMutex.RUnlock()
+
+	// TODO: Consider improve interfaces to avoid temporary map
+	result := make(map[string]Service, len(c.services))
+	for k, v := range c.services {
+		result[k] = v // automatic interface conversion
+	}
+	return result
+}
+
+func (c *BLEConnection) GetDevice() Device {
+	// BLEConnection doesn't directly hold a device reference
+	// This is a limitation of the current architecture
+	// For now, return nil to satisfy the interface
+	return nil
+}
+
+// ProcessCharacteristicNotification processes incoming characteristic notification data
+// This method is extracted to allow reuse in both production subscriptions and tests
+func (c *BLEConnection) ProcessCharacteristicNotification(char *BLECharacteristic, data []byte) {
+	// Create a new BLE value from the received data
+	val := newBLEValue(data)
+
+	// Update the characteristic's value
+	char.SetValue(data)
+
+	// Enqueue the value for any waiting consumers
+	char.EnqueueValue(val)
+
+	// Notify all subscribers
+	char.notifySubscribers(val)
+}
+
+// SimulateNotification provides a proxy method for testing/simulation capabilities
+// This method calls ProcessCharacteristicNotification internally
+func (c *BLEConnection) SimulateNotification(char *BLECharacteristic, data []byte) {
+	c.ProcessCharacteristicNotification(char, data)
+}
+
 func NewBLEConnection(logger *logrus.Logger) *BLEConnection {
 	return &BLEConnection{
 		client:        nil,
@@ -232,36 +303,6 @@ func NewBLEConnection(logger *logrus.Logger) *BLEConnection {
 	}
 }
 
-//func (m *BLEConnection) Connect(addr string, charUUIDs []string) error {
-//	ctx := ble.WithSigHandler(context.WithTimeout(m.ctx, 30*time.Second))
-//	cln, err := ble.Dial(ctx, ble.NewAddr(addr))
-//	if err != nil {
-//		return err
-//	}
-//	m.client = cln
-//
-//	for _, uuid := range charUUIDs {
-//		c := NewCharacteristic(uuid, 128)
-//		m.characteristics[uuid] = c
-//
-//		char, err := cln.DiscoverCharacteristic(ble.MustParse(uuid))
-//		if err != nil {
-//			return err
-//		}
-//
-//		err = cln.Subscribe(char, false, func(req []byte) {
-//			val := newBLEValue(req)
-//			c.EnqueueValue(val)
-//			c.notifySubscribers(val)
-//		})
-//		if err != nil {
-//			return err
-//		}
-//	}
-//
-//	return nil
-//}
-
 // Connect establishes a BLE connection and populates live characteristics
 func (c *BLEConnection) Connect(ctx context.Context, address string, opts *ConnectOptions) error {
 	c.connMutex.Lock()
@@ -271,14 +312,14 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 		return fmt.Errorf("failed connect to device: device address is not set")
 	}
 
-	if c.IsConnected() {
+	if c.isConnectedInternal() {
 		return fmt.Errorf("already connected")
 	}
 
 	c.logger.WithField("address", address).Info("Connecting to BLE device...")
 
-	// Create a platform BLE device (darwin for macOS)
-	dev, err := darwin.NewDevice()
+	// Create a BLE device using the factory (allows for mocking in tests)
+	dev, err := DeviceFactory()
 	if err != nil {
 		return fmt.Errorf("failed to create BLE device: %w", err)
 	}
@@ -291,7 +332,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 	// Connect to BLE device
 	client, err := ble.Dial(connCtx, ble.NewAddr(address))
 	if err != nil {
-		return fmt.Errorf("failed to connect to device: %w", err)
+		return fmt.Errorf("failed to connect to device with address \"%s\": %w", address, err)
 	}
 
 	// Discover services and characteristics
@@ -304,6 +345,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 	// Populate services and characteristics from BLE Profile
 	for _, bleSvc := range bleProfile.Services {
 		svcUUID := bleSvc.UUID.String()
+		c.logger.WithField("service_uuid", svcUUID).Debug("Found service UUID")
 		svc, ok := c.services[svcUUID]
 		if !ok {
 			svc = &BLEService{
@@ -315,6 +357,10 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 
 		for _, bleCharacteristic := range bleSvc.Characteristics {
 			uuid := bleCharacteristic.UUID.String()
+			c.logger.WithFields(map[string]interface{}{
+				"service_uuid": svcUUID,
+				"char_uuid":    uuid,
+			}).Debug("Found characteristic UUID")
 			characteristic, ok := svc.Characteristics[uuid]
 			if !ok {
 				// Create BLECharacteristic
@@ -356,6 +402,9 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 	c.client = client
 	c.isConnected = true
 
+	// Set up context for subscriptions
+	c.ctx, c.cancel = context.WithCancel(context.Background())
+
 	c.logger.WithField("services", len(c.services)).Info("BLE device connected")
 	return nil
 }
@@ -377,7 +426,7 @@ func (c *BLEConnection) Disconnect() error {
 	}
 
 	// First, unsubscribe from all subscriptions to clean up properly
-	if err := c.Unsubscribe(nil); err != nil {
+	if err := c.unsubscribeInternal(nil); err != nil {
 		if c.logger != nil {
 			c.logger.WithField("error", err).Warn("Failed to unsubscribe from all characteristics during disconnect")
 		}
@@ -408,10 +457,16 @@ func (c *BLEConnection) Disconnect() error {
 	return disconnectErr
 }
 
+// isConnectedInternal checks the connection status without acquiring locks.
+// Should only be called when the caller already holds connMutex.RLock() or connMutex.Lock().
+func (c *BLEConnection) isConnectedInternal() bool {
+	return c.client != nil && c.isConnected
+}
+
 func (c *BLEConnection) IsConnected() bool {
 	c.connMutex.RLock()
 	defer c.connMutex.RUnlock()
-	return c.client != nil && c.isConnected
+	return c.isConnectedInternal()
 }
 
 // validateSubscribeOptions validates service and characteristics existence and notification support
@@ -422,35 +477,40 @@ func (c *BLEConnection) validateSubscribeOptions(opts *SubscribeOptions, require
 	var unsupportedChars []string
 	characteristicsToProcess := make(map[string]*BLECharacteristic)
 
-	// Validate service exists
-	service, serviceExists := c.services[opts.ServiceUUID]
+	// Normalize UUIDs for consistent lookup (BLE library uses lowercase, no dashes)
+	normalizedServiceUUID := normalizeUUID(opts.Service)
+	normalizedCharUUIDs := normalizeUUIDs(opts.Characteristics)
+
+	// Validate service exists using normalized UUID
+	service, serviceExists := c.services[normalizedServiceUUID]
 	if !serviceExists {
-		missingServices = append(missingServices, opts.ServiceUUID)
+		missingServices = append(missingServices, opts.Service)
 	} else {
 		// Service exists, now validate characteristics
 		if len(opts.Characteristics) == 0 {
 			// Validate all characteristics in service
 			for charUUID, char := range service.Characteristics {
 				if char.BLEChar == nil {
-					missingChars = append(missingChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.ServiceUUID))
+					missingChars = append(missingChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.Service))
 				} else if requireNotificationSupport && char.BLEChar.Property&ble.CharNotify == 0 && char.BLEChar.Property&ble.CharIndicate == 0 {
-					unsupportedChars = append(unsupportedChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.ServiceUUID))
+					unsupportedChars = append(unsupportedChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.Service))
 				} else {
 					characteristicsToProcess[charUUID] = char
 				}
 			}
 		} else {
-			// Validate specific requested characteristics
-			for _, charUUID := range opts.Characteristics {
-				char, charExists := service.Characteristics[charUUID]
+			// Validate specific requested characteristics using normalized UUIDs
+			for i, charUUID := range opts.Characteristics {
+				normalizedCharUUID := normalizedCharUUIDs[i]
+				char, charExists := service.Characteristics[normalizedCharUUID]
 				if !charExists {
-					missingChars = append(missingChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.ServiceUUID))
+					missingChars = append(missingChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.Service))
 				} else if char.BLEChar == nil {
-					missingChars = append(missingChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.ServiceUUID))
+					missingChars = append(missingChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.Service))
 				} else if requireNotificationSupport && char.BLEChar.Property&ble.CharNotify == 0 && char.BLEChar.Property&ble.CharIndicate == 0 {
-					unsupportedChars = append(unsupportedChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.ServiceUUID))
+					unsupportedChars = append(unsupportedChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.Service))
 				} else {
-					characteristicsToProcess[charUUID] = char
+					characteristicsToProcess[normalizedCharUUID] = char
 				}
 			}
 		}
@@ -476,12 +536,12 @@ func (c *BLEConnection) validateSubscribeOptions(opts *SubscribeOptions, require
 	return characteristicsToProcess, nil
 }
 
-func (c *BLEConnection) Subscribe(opts *SubscribeOptions) error {
+func (c *BLEConnection) BLESubscribe(opts *SubscribeOptions) error {
 	c.connMutex.RLock()
 	defer c.connMutex.RUnlock()
 
 	// Check if connected
-	if !c.IsConnected() {
+	if !c.isConnectedInternal() {
 		if c.client == nil {
 			return fmt.Errorf("device not connected - establish connection before subscribing to notifications")
 		}
@@ -496,31 +556,23 @@ func (c *BLEConnection) Subscribe(opts *SubscribeOptions) error {
 
 	// If no characteristics support notifications after validation
 	if len(characteristicsToSubscribe) == 0 {
-		return fmt.Errorf("no characteristics available for subscription in service %s", opts.ServiceUUID)
+		return fmt.Errorf("no characteristics available for subscription in service %s", opts.Service)
 	}
 
 	// All validation passed - proceed with subscriptions
 	var subscriptionErrors []string
 	for charUUID, char := range characteristicsToSubscribe {
+		// create a local variable to capture the current char
+		charCapture := char
 		err := c.client.Subscribe(char.BLEChar, false, func(data []byte) {
-			// Create a new BLE value from the received data
-			val := newBLEValue(data)
-
-			// Update the characteristic's value
-			char.SetValue(data)
-
-			// Enqueue the value for any waiting consumers
-			char.EnqueueValue(val)
-
-			// Notify all subscribers
-			char.notifySubscribers(val)
+			c.ProcessCharacteristicNotification(charCapture, data)
 		})
 
 		if err != nil {
 			subscriptionErrors = append(subscriptionErrors, fmt.Sprintf("%s: %v", charUUID, err))
 			if c.logger != nil {
 				c.logger.WithFields(map[string]interface{}{
-					"serviceUUID": opts.ServiceUUID,
+					"serviceUUID": opts.Service,
 					"charUUID":    charUUID,
 					"error":       err,
 				}).Error("Failed to subscribe to characteristic notifications")
@@ -528,7 +580,7 @@ func (c *BLEConnection) Subscribe(opts *SubscribeOptions) error {
 		} else {
 			if c.logger != nil {
 				c.logger.WithFields(map[string]interface{}{
-					"serviceUUID": opts.ServiceUUID,
+					"serviceUUID": opts.Service,
 					"charUUID":    charUUID,
 				}).Info("Successfully subscribed to characteristic notifications")
 			}
@@ -547,6 +599,12 @@ func (c *BLEConnection) Unsubscribe(opts *SubscribeOptions) error {
 	c.connMutex.RLock()
 	defer c.connMutex.RUnlock()
 
+	return c.unsubscribeInternal(opts)
+}
+
+// unsubscribeInternal performs unsubscribe operations without acquiring locks
+// Should only be called when the caller already holds the appropriate lock
+func (c *BLEConnection) unsubscribeInternal(opts *SubscribeOptions) error {
 	// Allow unsubscribe if client exists (for cleanup during disconnect)
 	if c.client == nil {
 		return fmt.Errorf("unsubscribe unavailable - no active connection")
@@ -596,7 +654,7 @@ func (c *BLEConnection) Unsubscribe(opts *SubscribeOptions) error {
 
 	// If no characteristics found after validation
 	if len(characteristicsToUnsubscribe) == 0 {
-		return fmt.Errorf("no characteristics available for unsubscribe in service %s", opts.ServiceUUID)
+		return fmt.Errorf("no characteristics available for unsubscribe in service %s", opts.Service)
 	}
 
 	// All validation passed - proceed with unsubscriptions
@@ -611,7 +669,7 @@ func (c *BLEConnection) Unsubscribe(opts *SubscribeOptions) error {
 			unsubscribeErrors = append(unsubscribeErrors, fmt.Sprintf("%s: notify=%v, indicate=%v", charUUID, err1, err2))
 			if c.logger != nil {
 				c.logger.WithFields(map[string]interface{}{
-					"serviceUUID": opts.ServiceUUID,
+					"serviceUUID": opts.Service,
 					"charUUID":    charUUID,
 					"notifyErr":   err1,
 					"indicateErr": err2,
@@ -620,7 +678,7 @@ func (c *BLEConnection) Unsubscribe(opts *SubscribeOptions) error {
 		} else {
 			if c.logger != nil {
 				c.logger.WithFields(map[string]interface{}{
-					"serviceUUID": opts.ServiceUUID,
+					"serviceUUID": opts.Service,
 					"charUUID":    charUUID,
 				}).Info("Successfully unsubscribed from characteristic notifications")
 			}
@@ -635,38 +693,61 @@ func (c *BLEConnection) Unsubscribe(opts *SubscribeOptions) error {
 	return nil
 }
 
-func (c *BLEConnection) SubscribeLua(opts *SubscribeOptions, pattern StreamPattern, maxRate time.Duration, callback func(*Record)) error {
+// Subscribe subscribes to notifications from multiple services and characteristics with streaming patterns.
+// Supports advanced subscription with streaming patterns and callbacks:
+//
+//	connection.Subscribe([]*SubscribeOptions{
+//	  { ServiceUUID: "0000180d-0000-1000-8000-00805f9b34fb", Characteristics: []string{"00002a37-0000-1000-8000-00805f9b34fb"} },
+//	  { ServiceUUID: "1000180d-0000-1000-8000-00805f9b34fb", Characteristics: []string{"10002a37-0000-1000-8000-00805f9b34fb"} }
+//	}, StreamEveryUpdate, 0, func(record *Record) { ... })
+func (c *BLEConnection) Subscribe(opts []*SubscribeOptions, mode StreamMode, maxRate time.Duration, callback func(*Record)) error {
+	c.logger.WithFields(map[string]interface{}{
+		"services": len(opts),
+		"mode":     mode,
+	}).Debug("Subscribe called - about to create goroutine")
+
 	c.connMutex.Lock()
 	defer c.connMutex.Unlock()
 
-	// Check if connected
-	if !c.IsConnected() {
+	// Check if connected (we already hold the lock, so use safe version)
+	if !c.isConnectedInternal() {
 		return fmt.Errorf("device disconnected - reconnect before subscribing to Lua notifications")
 	}
 
-	// Validate subscription options and get characteristics
-	characteristicsToSubscribe, err := c.validateSubscribeOptions(opts, true)
-	if err != nil {
-		return fmt.Errorf("Lua subscription %w", err)
+	// Check if any services are specified
+	if len(opts) == 0 {
+		return fmt.Errorf("no services specified in Lua subscription")
+	}
+
+	// Check if callback is provided
+	if callback == nil {
+		return fmt.Errorf("no callback specified in Lua subscription")
+	}
+
+	// Validate subscription options and get characteristics from all services
+	var allCharacteristics []*BLECharacteristic
+	for _, opt := range opts {
+		characteristicsToSubscribe, err := c.validateSubscribeOptions(opt, true)
+		if err != nil {
+			return fmt.Errorf("Lua subscription %w", err)
+		}
+
+		// Convert validated BLECharacteristics for LuaSubscription
+		for _, bleChar := range characteristicsToSubscribe {
+			allCharacteristics = append(allCharacteristics, bleChar)
+		}
 	}
 
 	// If no characteristics support notifications after validation
-	if len(characteristicsToSubscribe) == 0 {
-		return fmt.Errorf("no characteristics available for Lua subscription in service %s", opts.ServiceUUID)
-	}
-
-	// Convert validated BLECharacteristics for LuaSubscription
-	var charObjs []*BLECharacteristic
-	for _, bleChar := range characteristicsToSubscribe {
-		charObjs = append(charObjs, bleChar)
+	if len(allCharacteristics) == 0 {
+		return fmt.Errorf("no characteristics available for Lua subscription across all specified services")
 	}
 
 	sub := &LuaSubscription{
-		Chars:    charObjs,
-		Pattern:  pattern,
+		Chars:    allCharacteristics,
+		Mode:     mode,
 		MaxRate:  maxRate,
 		Callback: callback,
-		buffer:   make([]*BLEValue, 0, 128),
 	}
 
 	c.subscriptions = append(c.subscriptions, sub)
@@ -677,30 +758,54 @@ func (c *BLEConnection) SubscribeLua(opts *SubscribeOptions, pattern StreamPatte
 }
 
 func (c *BLEConnection) runLuaSubscription(sub *LuaSubscription) {
-	ticker := time.NewTicker(sub.MaxRate)
-	defer ticker.Stop()
+	// Only create ticker for modes that need rate limiting
+	var ticker *time.Ticker
+	if sub.Mode == StreamBatched || sub.Mode == StreamAggregated {
+		if sub.MaxRate <= 0 {
+			// Default to 100ms for batched/aggregated modes if MaxRate is 0 or negative
+			sub.MaxRate = 100 * time.Millisecond
+		}
+		ticker = time.NewTicker(sub.MaxRate)
+		defer ticker.Stop()
+	}
 
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
-		case <-ticker.C:
-			if sub.Pattern == StreamBatched && len(sub.buffer) > 0 {
-				record := newRecord()
-				for _, val := range sub.buffer {
-					record.Values[valUUID(val)] = val.Data
-					if val.Flags != 0 {
-						record.Flags |= val.Flags
-					}
-					record.TsUs = val.TsUs
-					releaseBLEValue(val)
-				}
-				sub.buffer = sub.buffer[:0]
-				sub.Callback(record)
-				releaseRecord(record)
+		case <-func() <-chan time.Time {
+			if ticker != nil {
+				return ticker.C
 			}
-			if sub.Pattern == StreamAggregated {
-				record := newRecord()
+			// Return a channel that never fires for EveryUpdate mode
+			return make(chan time.Time)
+		}():
+			if sub.Mode == StreamBatched {
+				record := newRecord(StreamBatched)
+				for _, c := range sub.Chars {
+					// Drain all available updates for this characteristic
+					for {
+						select {
+						case val := <-c.updates:
+							record.BatchValues[c.GetUUID()] = append(record.BatchValues[c.GetUUID()], val.Data)
+							if val.Flags != 0 {
+								record.Flags |= val.Flags
+							}
+							record.TsUs = val.TsUs
+							releaseBLEValue(val)
+						default:
+							goto nextChar
+						}
+					}
+				nextChar:
+				}
+				// Only invoke callback when there's actual data to report
+				if len(record.BatchValues) > 0 {
+					sub.Callback(record)
+				}
+			}
+			if sub.Mode == StreamAggregated {
+				record := newRecord(StreamAggregated)
 				for _, c := range sub.Chars {
 					select {
 					case val := <-c.updates:
@@ -714,15 +819,18 @@ func (c *BLEConnection) runLuaSubscription(sub *LuaSubscription) {
 						record.Flags |= FlagMissing
 					}
 				}
-				sub.Callback(record)
-				releaseRecord(record)
+				// Only invoke callback when there's actual data to report
+				// Skip empty aggregation ticks to avoid JSON serialization issues with empty Values
+				if len(record.Values) > 0 {
+					sub.Callback(record)
+				}
 			}
 		default:
-			if sub.Pattern == StreamEveryUpdate {
+			if sub.Mode == StreamEveryUpdate {
 				for _, c := range sub.Chars {
 					select {
 					case val := <-c.updates:
-						record := newRecord()
+						record := newRecord(StreamEveryUpdate)
 						record.Values[c.GetUUID()] = val.Data
 						record.TsUs = val.TsUs
 						if val.Flags != 0 {
@@ -730,7 +838,6 @@ func (c *BLEConnection) runLuaSubscription(sub *LuaSubscription) {
 						}
 						sub.Callback(record)
 						releaseBLEValue(val)
-						releaseRecord(record)
 					default:
 					}
 				}
@@ -739,9 +846,4 @@ func (c *BLEConnection) runLuaSubscription(sub *LuaSubscription) {
 			}
 		}
 	}
-}
-
-func valUUID(v *BLEValue) string {
-	// Replace with real UUID mapping if needed
-	return "uuid-placeholder"
 }

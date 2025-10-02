@@ -1,68 +1,100 @@
 package ble_test
 
 import (
-	"os"
+	"context"
+	"encoding/json"
+	"sort"
 	"testing"
 	"time"
 
 	blelib "github.com/go-ble/ble"
-	"github.com/sirupsen/logrus"
 	"github.com/srg/blecli/internal/testutils"
-	"github.com/srg/blecli/internal/testutils/mocks"
 	"github.com/srg/blecli/pkg/ble"
-	"github.com/stretchr/testify/assert"
+	"github.com/srg/blecli/pkg/device"
 	"github.com/stretchr/testify/require"
+	suitelib "github.com/stretchr/testify/suite"
 )
 
-// Store original device factory for restoration
-var originalDeviceFactory func() (blelib.Device, error)
+type ScannerTestSuite struct {
+	testutils.MockBLEPeripheralSuite
 
-func TestMain(m *testing.M) {
-	// Save the original BLE device factory and inject mock
-	originalDeviceFactory = ble.DeviceFactory
-	ble.DeviceFactory = func() (blelib.Device, error) {
-		return &mocks.MockDevice{}, nil
-	}
-
-	// Run tests
-	code := m.Run()
-
-	// Restore the original factory
-	ble.DeviceFactory = originalDeviceFactory
-
-	os.Exit(code)
+	adv1, adv2, adv3 blelib.Advertisement
+	dev1, dev2, dev3 device.DeviceInfo
 }
 
-func TestNewScanner(t *testing.T) {
-	helper := testutils.NewTestHelper(t)
+func (suite *ScannerTestSuite) SetupTest() {
+	suite.adv1 = testutils.NewAdvertisementBuilder().
+		WithAddress("AA:BB:CC:DD:EE:FF").
+		WithName("Test Device 1").
+		WithRSSI(-45).
+		WithServices("180F", "1800").
+		WithConnectable(true).
+		WithManufacturerData(nil).
+		WithNoServiceData().
+		WithTxPower(11).
+		Build()
+	suite.dev1 = device.NewDevice(suite.adv1, suite.Logger)
 
-	t.Run("creates scanner with provided logger", func(t *testing.T) {
-		scanner, err := ble.NewScanner(helper.Logger)
+	suite.adv2 = testutils.NewAdvertisementBuilder().
+		WithAddress("11:22:33:44:55:66").
+		WithName("Test Device 2").
+		WithRSSI(-67).
+		WithServices("1801").
+		WithConnectable(true).
+		WithManufacturerData(nil).
+		WithNoServiceData().
+		WithTxPower(12).
+		Build()
+	suite.dev2 = device.NewDevice(suite.adv2, suite.Logger)
 
-		require.NoError(t, err)
-		assert.NotNil(t, scanner)
+	// Add a third device that won't match most test conditions
+	suite.adv3 = testutils.NewAdvertisementBuilder().
+		WithAddress("99:88:77:66:55:44").
+		WithName("Test Device 3").
+		WithRSSI(-80).
+		WithServices("1802").
+		WithConnectable(true).
+		WithManufacturerData(nil).
+		WithNoServiceData().
+		WithTxPower(13).
+		Build()
+	suite.dev3 = device.NewDevice(suite.adv3, suite.Logger)
+
+	suite.WithAdvertisements().
+		WithAdvertisements(suite.adv1, suite.adv2, suite.adv3).
+		Build()
+
+	suite.MockBLEPeripheralSuite.SetupTest()
+}
+
+func (suite *ScannerTestSuite) TestNewScanner() {
+	suite.Run("creates scanner with provided logger", func() {
+		scanner, err := ble.NewScanner(suite.Logger)
+
+		suite.NoError(err)
+		suite.NotNil(scanner)
 	})
 
-	t.Run("creates scanner with nil logger", func(t *testing.T) {
+	suite.Run("creates scanner with nil logger", func() {
 		scanner, err := ble.NewScanner(nil)
 
-		require.NoError(t, err)
-		assert.NotNil(t, scanner)
+		suite.NoError(err)
+		suite.NotNil(scanner)
 	})
 }
 
-func TestDefaultScanOptions(t *testing.T) {
+func (suite *ScannerTestSuite) TestDefaultScanOptions() {
 	opts := ble.DefaultScanOptions()
 
-	assert.NotNil(t, opts)
-	assert.Equal(t, 10*time.Second, opts.Duration)
-	assert.True(t, opts.DuplicateFilter)
-	assert.Nil(t, opts.ServiceUUIDs)
-	assert.Nil(t, opts.AllowList)
-	assert.Nil(t, opts.BlockList)
+	suite.NotNil(opts)
+	suite.Equal(10*time.Second, opts.Duration)
+	suite.True(opts.DuplicateFilter)
+	suite.Nil(opts.ServiceUUIDs)
+	suite.Nil(opts.AllowList)
+	suite.Nil(opts.BlockList)
 }
 
-func TestScanOptions_Validation(t *testing.T) {
+func (suite *ScannerTestSuite) TestScanOptionsValidation() {
 	tests := []struct {
 		name string
 		opts *ble.ScanOptions
@@ -86,238 +118,132 @@ func TestScanOptions_Validation(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		suite.Run(tt.name, func() {
 			// Test that options are accepted without validation errors
-			assert.NotNil(t, tt.opts)
+			suite.NotNil(tt.opts)
 		})
 	}
 }
 
-func TestScanner_GetDevices(t *testing.T) {
-	helper := testutils.NewTestHelper(t)
-
-	scanner, err := ble.NewScanner(helper.Logger)
-	require.NoError(t, err)
-
-	// Initially, no devices
-	devices := scanner.GetDevices()
-	assert.Len(t, devices, 0)
-}
-
-func TestScanner_GetDevice(t *testing.T) {
-	helper := testutils.NewTestHelper(t)
-
-	scanner, err := ble.NewScanner(helper.Logger)
-	require.NoError(t, err)
-
-	// Test getting a non-existing device
-	device, exists := scanner.GetDevice("11:22:33:44:55:66")
-	assert.False(t, exists)
-	assert.Nil(t, device)
-}
-
-func TestScanner_ClearDevices(t *testing.T) {
-	helper := testutils.NewTestHelper(t)
-
-	scanner, err := ble.NewScanner(helper.Logger)
-	require.NoError(t, err)
-
-	// Initially empty
-	assert.Len(t, scanner.GetDevices(), 0)
-
-	// Clear devices (should be a no-op when empty)
-	scanner.ClearDevices()
-	assert.Len(t, scanner.GetDevices(), 0)
-}
-
-func TestScanner_IsScanning(t *testing.T) {
-	helper := testutils.NewTestHelper(t)
-
-	scanner, err := ble.NewScanner(helper.Logger)
-	require.NoError(t, err)
-
-	// Initially not scanning
-	assert.False(t, scanner.IsScanning())
-}
-
-func TestScanner_FilteringLogic(t *testing.T) {
-	helper := testutils.NewTestHelper(t)
-	ja := testutils.NewJSONAsserter(t)
-
+func (suite *ScannerTestSuite) TestScannerFiltering() {
 	tests := []struct {
-		name          string
-		advJSON       string
-		scanOptions   *ble.ScanOptions
-		shouldInclude bool
-		description   string
+		name            string
+		scanOptions     *ble.ScanOptions
+		expectedDevices []device.DeviceInfo // Full expected scan results with device data
+		description     string
 	}{
 		{
-			name: "includes device with no filters",
-			advJSON: `{
-				"name": "Test Device",
-				"address": "AA:BB:CC:DD:EE:FF",
-				"rssi": -50,
-				"manufacturerData": null,
-				"serviceData": null,
-				"services": [],
-				"txPower": null,
-				"connectable": true
-			}`,
-			scanOptions:   &ble.ScanOptions{},
-			shouldInclude: true,
-			description:   "No filters should include all devices",
+			name:            "includes all device with no filters",
+			scanOptions:     &ble.ScanOptions{},
+			expectedDevices: []device.DeviceInfo{suite.dev1, suite.dev2, suite.dev3},
+			description:     "No filters should include all discovered devices",
 		},
 		{
 			name: "excludes device on block list",
-			advJSON: `{
-				"name": "Blocked Device",
-				"address": "AA:BB:CC:DD:EE:FF",
-				"rssi": -50,
-				"manufacturerData": null,
-				"serviceData": null,
-				"services": [],
-				"txPower": null,
-				"connectable": true
-			}`,
 			scanOptions: &ble.ScanOptions{
-				BlockList: []string{"AA:BB:CC:DD:EE:FF"},
+				BlockList: []string{suite.dev1.GetAddress()},
 			},
-			shouldInclude: false,
-			description:   "Device on block list should be excluded",
+			expectedDevices: []device.DeviceInfo{suite.dev2, suite.dev3},
+			description:     "Device AA:BB:CC:DD:EE:FF should be excluded from results",
 		},
 		{
 			name: "includes device with matching service UUID",
-			advJSON: `{
-				"name": "Battery Device",
-				"address": "AA:BB:CC:DD:EE:FF",
-				"rssi": -50,
-				"manufacturerData": null,
-				"serviceData": null,
-				"services": ["180F"],
-				"txPower": null,
-				"connectable": true
-			}`,
 			scanOptions: &ble.ScanOptions{
 				ServiceUUIDs: []blelib.UUID{blelib.UUID16(0x180F)},
 			},
-			shouldInclude: true,
-			description:   "Device with matching service UUID should be included",
+			expectedDevices: []device.DeviceInfo{suite.dev1},
+			description:     "Only devices with Battery Service (180F) should be included",
+		},
+		{
+			name: "excludes device without matching service UUID",
+			scanOptions: &ble.ScanOptions{
+				ServiceUUIDs: []blelib.UUID{blelib.UUID16(0x1234)}, // Non-existent service
+			},
+			expectedDevices: []device.DeviceInfo{},
+			description:     "No devices should match non-existent service UUID",
+		},
+		{
+			name: "includes device on allow list",
+			scanOptions: &ble.ScanOptions{
+				AllowList: []string{"AA:BB:CC:DD:EE:FF"},
+			},
+			expectedDevices: []device.DeviceInfo{suite.dev1},
+			description:     "Only device on allow list should be included",
+		},
+		{
+			name: "excludes device not on allow list",
+			scanOptions: &ble.ScanOptions{
+				AllowList: []string{"FF:EE:DD:CC:BB:AA"}, // Non-existent device
+			},
+			expectedDevices: []device.DeviceInfo{},
+			description:     "No devices should match when allow list contains non-existent device",
 		},
 	}
 
+	mapVal2Array := func(m map[string]device.DeviceInfo) []device.DeviceInfo {
+		values := make([]device.DeviceInfo, 0, len(m))
+		for _, v := range m {
+			values = append(values, v)
+		}
+		return values
+	}
+
+	// jsonassert ("github.com/yudai/gojsondiff) does not support root-level arrays,
+	// as it does not have options to ignore order in the arrays
+	wrapArrayAsMap := func(a []device.DeviceInfo) map[string][]device.DeviceInfo {
+		// Sort devices by address
+		sorted := make([]device.DeviceInfo, len(a))
+		copy(sorted, a)
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].GetAddress() < sorted[j].GetAddress()
+		})
+
+		// return map with a single key "array" to overcome limitations
+		return map[string][]device.DeviceInfo{"array": sorted}
+	}
+
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Test that our options are valid
-			assert.NotNil(t, tt.scanOptions)
+		suite.Run(tt.name, func() {
+			helper := testutils.NewTestHelper(suite.T())
 
-			// For now, we validate the structure by testing individual components
-			// since shouldIncludeDevice is private. This demonstrates the testhelper pattern.
+			// Create scanner
+			scanner, err := ble.NewScanner(helper.Logger)
+			require.NoError(suite.T(), err)
 
-			// Test with a basic advertisement structure
-			if tt.name == "includes device with no filters" {
-				device := helper.CreateMockAdvertisementFromJSON(`{
-					"name": "Test Device",
-					"address": "AA:BB:CC:DD:EE:FF",
-					"rssi": -50,
-					"manufacturerData": null,
-					"serviceData": null,
-					"services": [],
-					"txPower": null,
-					"connectable": true
-				}`).BuildDevice(helper.Logger)
-
-				actualJSON := testutils.DeviceToJSON(device)
-				ja.Assert(actualJSON, `{
-					"id": "AA:BB:CC:DD:EE:FF",
-					"name": "Test Device",
-					"address": "AA:BB:CC:DD:EE:FF",
-					"rssi": -50,
-					"connectable": true,
-					"manufacturer_data": null,
-					"service_data": null,
-					"services": [],
-					"tx_power": null,
-					"display_name": "Test Device"
-				}`)
+			// Add short duration to test cases that don't have one
+			if tt.scanOptions.Duration == 0 {
+				tt.scanOptions.Duration = 100 * time.Millisecond
 			}
+
+			// Run the actual scan with filters to check it works
+			ctx := context.Background()
+			devices, err := scanner.Scan(ctx, tt.scanOptions)
+
+			// Scan should complete successfully
+			require.NoError(suite.T(), err, "Scan should complete without error")
+			require.NotNil(suite.T(), devices, "Devices map should not be nil")
+
+			// Marshal expected results to JSON
+			expectedJSON := testutils.MustJSON(wrapArrayAsMap(tt.expectedDevices))
+			// Marshal actual scan results to JSON
+			actualJSON2, err := json.Marshal(mapVal2Array(devices))
+			suite.NotEmpty(actualJSON2)
+			actualJSON := testutils.MustJSON(wrapArrayAsMap(mapVal2Array(devices)))
+			suite.NoError(err, "Scan results (device map) must marshal to JSON without error")
+
+			// Use JSONAsserter to compare - this will FAIL proving filtering is not implemented
+			jsonAsserter := testutils.NewJSONAsserter(suite.T()).
+				WithOptions(
+					testutils.WithIgnoredFields("lastSeen"),
+					testutils.WithIgnoreExtraKeys(false),
+					testutils.WithCompareOnlyExpectedKeys(true),
+				)
+			jsonAsserter.Assert(actualJSON, expectedJSON)
 		})
 	}
 }
 
-func BenchmarkScanner_Creation(b *testing.B) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.PanicLevel)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		scanner, _ := ble.NewScanner(logger)
-		_ = scanner
-	}
-}
-
-func BenchmarkDefaultScanOptions(b *testing.B) {
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		opts := ble.DefaultScanOptions()
-		_ = opts
-	}
-}
-
-func TestScanOptions_JSONSerialization(t *testing.T) {
-	helper := testutils.NewTestHelper(t)
-	ja := testutils.NewJSONAsserter(t)
-
-	t.Run("scan options validation", func(t *testing.T) {
-		opts := &ble.ScanOptions{
-			Duration:        30 * time.Second,
-			DuplicateFilter: true,
-			ServiceUUIDs:    []blelib.UUID{blelib.UUID16(0x180F), blelib.UUID16(0x180A)},
-			AllowList:       []string{"AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"},
-			BlockList:       []string{"FF:FF:FF:FF:FF:FF"},
-		}
-
-		// Validate that all fields are properly set
-		assert.Equal(t, 30*time.Second, opts.Duration)
-		assert.True(t, opts.DuplicateFilter)
-		assert.Len(t, opts.ServiceUUIDs, 2)
-		assert.Len(t, opts.AllowList, 2)
-		assert.Len(t, opts.BlockList, 1)
-	})
-
-	t.Run("device creation with complex advertisement", func(t *testing.T) {
-		device := helper.CreateMockAdvertisementFromJSON(`{
-			"name": "Complex Device",
-			"address": "AA:BB:CC:DD:EE:FF",
-			"rssi": -65,
-			"manufacturerData": [76, 0, 1, 2, 3],
-			"serviceData": {
-				"180F": [100, 90],
-				"180A": [1, 2, 3]
-			},
-			"services": ["180F", "180A", "1801"],
-			"txPower": 4,
-			"connectable": true
-		}`).BuildDevice(helper.Logger)
-
-		actualJSON := testutils.DeviceToJSON(device)
-		ja.Assert(actualJSON, `{
-			"id": "AA:BB:CC:DD:EE:FF",
-			"name": "Complex Device",
-			"address": "AA:BB:CC:DD:EE:FF",
-			"rssi": -65,
-			"tx_power": 4,
-			"connectable": true,
-			"manufacturer_data": [76, 0, 1, 2, 3],
-			"service_data": {
-				"180f": [100, 90],
-				"180a": [1, 2, 3]
-			},
-			"services": [
-				{"uuid": "180f", "characteristics": []},
-				{"uuid": "180a", "characteristics": []},
-				{"uuid": "1801", "characteristics": []}
-			],
-			"display_name": "Complex Device"
-		}`)
-	})
+// TestScannerTestSuite runs the test suite using testify/suite
+func TestScannerTestSuite(t *testing.T) {
+	suitelib.Run(t, new(ScannerTestSuite))
 }

@@ -17,7 +17,7 @@ func TestNewDevice(t *testing.T) {
 	ja := testutils.NewJSONAsserter(t)
 
 	t.Run("creates device with all advertisement data", func(t *testing.T) {
-		device := helper.CreateMockAdvertisementFromJSON(`{
+		device := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": "Test Device",
 			"address": "AA:BB:CC:DD:EE:FF",
 			"rssi": -45,
@@ -50,7 +50,7 @@ func TestNewDevice(t *testing.T) {
 		//device := helper.createDevice("", "11:22:33:44:55:66", -70).
 		//	withConnectable(false).
 		//	build()
-		device := helper.CreateMockAdvertisementFromJSON(`{
+		device := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": null,
 			"address": "11:22:33:44:55:66",
 			"rssi": -70,
@@ -78,14 +78,13 @@ func TestNewDevice(t *testing.T) {
 }
 
 func TestDevice_Update(t *testing.T) {
-	helper := testutils.NewTestHelper(t)
 	ja := testutils.NewJSONAsserter(t)
 
 	// Create initial device
 	// Note: All BLE advertisement fields must be present because device creation
 	// always calls all advertisement methods. Empty values ([], {}, null) represent
 	// the default behavior when real BLE devices don't advertise that data.
-	initialAdv := helper.CreateMockAdvertisementFromJSON(`{
+	initialAdv := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": "Initial Name",
 			"address": "AA:BB:CC:DD:EE:FF",
 			"rssi": -50,
@@ -106,7 +105,7 @@ func TestDevice_Update(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Create update advertisement
-	updateAdv := helper.CreateMockAdvertisementFromJSON(`{
+	updateAdv := testutils.CreateMockAdvertisementFromJSON(`{
 		"name": "Updated Name",
 		"rssi": -40,
 		"manufacturerData": [2, 3],
@@ -142,7 +141,7 @@ func TestDevice_DisplayName(t *testing.T) {
 	helper := testutils.NewTestHelper(t)
 
 	t.Run("returns device name when available", func(t *testing.T) {
-		device := helper.CreateMockAdvertisementFromJSON(`{
+		device := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": "My BLE Device",
 			"address": "AA:BB:CC:DD:EE:FF",
 			"rssi": -50,
@@ -158,7 +157,7 @@ func TestDevice_DisplayName(t *testing.T) {
 	})
 
 	t.Run("returns address when name is empty", func(t *testing.T) {
-		device := helper.CreateMockAdvertisementFromJSON(`{
+		device := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": "",
 			"address": "11:22:33:44:55:66",
 			"rssi": -50,
@@ -179,7 +178,7 @@ func TestDevice_IsExpired(t *testing.T) {
 	//fiveMinutesAgo := now.Add(-5 * time.Minute)
 
 	t.Run("device is expired when lastSeen exceeds timeout", func(t *testing.T) {
-		device := helper.CreateMockAdvertisementFromJSON(`{
+		device := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": "Test Device",
 			"address": "AA:BB:CC:DD:EE:FF",
 			"rssi": -50,
@@ -202,7 +201,7 @@ func TestDevice_IsExpired(t *testing.T) {
 	})
 
 	t.Run("device is not expired when lastSeen is within timeout", func(t *testing.T) {
-		device := helper.CreateMockAdvertisementFromJSON(`{
+		device := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": "Test Device",
 			"address": "AA:BB:CC:DD:EE:FF",
 			"rssi": -50,
@@ -329,11 +328,9 @@ func TestDevice_ExtractNameFromManufacturerData(t *testing.T) {
 		},
 	}
 
-	helper := testutils.NewTestHelper(t)
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			adv := helper.CreateMockAdvertisementFromJSON(`{
+			adv := testutils.CreateMockAdvertisementFromJSON(`{
 				"name": null,
 				"address": "AA:BB:CC:DD:EE:FF",
 				"rssi": -50,
@@ -385,12 +382,10 @@ func TestDevice_NameResolutionPrecedence(t *testing.T) {
 		},
 	}
 
-	helper := testutils.NewTestHelper(t)
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create mock advertisement
-			adv := helper.CreateMockAdvertisementFromJSON(`{
+			adv := testutils.CreateMockAdvertisementFromJSON(`{
 				"name": %s,
 				"address": "AA:BB:CC:DD:EE:FF",
 				"rssi": -50,
@@ -412,12 +407,10 @@ func TestDevice_NameResolutionPrecedence(t *testing.T) {
 }
 
 func TestDevice_NameUpdateBehavior(t *testing.T) {
-
-	helper := testutils.NewTestHelper(t)
 	ja := testutils.NewJSONAsserter(t)
 
 	// Create an initial device with no name
-	adv1 := helper.CreateMockAdvertisementFromJSON(`{
+	adv1 := testutils.CreateMockAdvertisementFromJSON(`{
 				"name": "",
 				"address": "AA:BB:CC:DD:EE:FF",
 				"rssi": -50,
@@ -434,7 +427,7 @@ func TestDevice_NameUpdateBehavior(t *testing.T) {
 	assert.Equal(t, "Extracted", device.GetName(), "Should extract name from manufacturer data initially")
 
 	// Update with advertisement that has LocalName
-	adv2 := helper.CreateMockAdvertisementFromJSON(`{
+	adv2 := testutils.CreateMockAdvertisementFromJSON(`{
 				"name": "OfficialName",
 				"rssi": -45,
 				"manufacturerData": %s,
@@ -452,7 +445,7 @@ func TestDevice_NameUpdateBehavior(t *testing.T) {
 	}`)
 
 	// Update with advertisement that has no LocalName
-	adv3 := helper.CreateMockAdvertisementFromJSON(`{
+	adv3 := testutils.CreateMockAdvertisementFromJSON(`{
 				"name": "",
 				"rssi": -40,
 				"manufacturerData": %s,

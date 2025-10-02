@@ -17,6 +17,12 @@ func TestJSONAsserter_DefaultOptions(t *testing.T) {
 	if !opts.AllowPresencePlaceholder {
 		t.Error("AllowPresencePlaceholder should default to true")
 	}
+	if opts.CompareOnlyExpectedKeys {
+		t.Error("CompareOnlyExpectedKeys should default to false")
+	}
+	if len(opts.IgnoredFields) != 0 {
+		t.Error("IgnoredFields should default to empty slice")
+	}
 }
 
 func TestJSONAsserter_FunctionalOptions(t *testing.T) {
@@ -74,11 +80,33 @@ func TestJSONAsserter_FunctionalOptions(t *testing.T) {
 		}
 	})
 
+	t.Run("WithCompareOnlyExpectedKeys true", func(t *testing.T) {
+		ja := NewJSONAsserter(t).WithOptions(
+			WithCompareOnlyExpectedKeys(true),
+		)
+		opts := ja.GetOptions()
+
+		if !opts.CompareOnlyExpectedKeys {
+			t.Error("CompareOnlyExpectedKeys should be true when explicitly set")
+		}
+		// Other options should remain default
+		if !opts.IgnoreExtraKeys {
+			t.Error("IgnoreExtraKeys should remain true from defaults")
+		}
+		if !opts.AllowPresencePlaceholder {
+			t.Error("AllowPresencePlaceholder should remain true from defaults")
+		}
+		if !opts.NilToEmptyArray {
+			t.Error("NilToEmptyArray should remain true from defaults")
+		}
+	})
+
 	t.Run("Multiple options", func(t *testing.T) {
 		ja := NewJSONAsserter(t).WithOptions(
 			WithAllowPresencePlaceholder(false),
 			WithIgnoreExtraKeys(false),
 			WithNilToEmptyArray(true), // explicitly set to true
+			WithCompareOnlyExpectedKeys(true),
 		)
 		opts := ja.GetOptions()
 
@@ -90,6 +118,9 @@ func TestJSONAsserter_FunctionalOptions(t *testing.T) {
 		}
 		if !opts.NilToEmptyArray {
 			t.Error("NilToEmptyArray should be true")
+		}
+		if !opts.CompareOnlyExpectedKeys {
+			t.Error("CompareOnlyExpectedKeys should be true")
 		}
 	})
 }
@@ -286,6 +317,130 @@ func indexOfString(s, substr string) int {
 	return -1
 }
 
+func TestJSONAsserter_CompareOnlyExpectedKeys(t *testing.T) {
+	t.Run("compares only expected keys when enabled", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithCompareOnlyExpectedKeys(true),
+			WithIgnoreExtraKeys(false), // disable to ensure CompareOnlyExpectedKeys takes precedence
+		)
+
+		actualJSON := `{"id": "123", "name": "test", "extra": "value", "another_extra": 42}`
+		expectedJSON := `{"id": "123", "name": "test"}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with CompareOnlyExpectedKeys enabled, got: %s", diff)
+		}
+	})
+
+	t.Run("detects differences in expected keys when enabled", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithCompareOnlyExpectedKeys(true),
+		)
+
+		actualJSON := `{"id": "123", "name": "wrong", "extra": "value"}`
+		expectedJSON := `{"id": "123", "name": "test"}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff == "" {
+			t.Error("Expected diff for mismatched expected key values, got no diff")
+		}
+		if !containsString(diff, "name") {
+			t.Errorf("Expected diff to mention 'name' field, got: %s", diff)
+		}
+	})
+
+	t.Run("handles nested objects with CompareOnlyExpectedKeys", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithCompareOnlyExpectedKeys(true),
+		)
+
+		actualJSON := `{
+			"device": {
+				"id": "123",
+				"name": "test",
+				"extra_nested": "ignored"
+			},
+			"extra_top_level": "ignored"
+		}`
+		expectedJSON := `{
+			"device": {
+				"id": "123",
+				"name": "test"
+			}
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with nested CompareOnlyExpectedKeys, got: %s", diff)
+		}
+	})
+
+	t.Run("works with arrays and CompareOnlyExpectedKeys", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithCompareOnlyExpectedKeys(true),
+		)
+
+		actualJSON := `{
+			"devices": [
+				{"id": "1", "name": "device1", "extra": "ignored"},
+				{"id": "2", "name": "device2", "extra": "ignored"}
+			],
+			"extra_field": "ignored"
+		}`
+		expectedJSON := `{
+			"devices": [
+				{"id": "1", "name": "device1"},
+				{"id": "2", "name": "device2"}
+			]
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with array CompareOnlyExpectedKeys, got: %s", diff)
+		}
+	})
+
+	t.Run("combines with other options", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithCompareOnlyExpectedKeys(true),
+			WithAllowPresencePlaceholder(true),
+			WithNilToEmptyArray(true),
+		)
+
+		actualJSON := `{
+			"id": "123",
+			"timestamp": 1758348286,
+			"services": null,
+			"extra_field": "ignored"
+		}`
+		expectedJSON := `{
+			"id": "123",
+			"timestamp": "<<PRESENCE>>",
+			"services": []
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with combined options, got: %s", diff)
+		}
+	})
+
+	t.Run("disabled by default (standard behavior)", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoreExtraKeys(false), // ensure extra keys cause failure
+		)
+
+		actualJSON := `{"id": "123", "name": "test", "extra": "value"}`
+		expectedJSON := `{"id": "123", "name": "test"}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff == "" {
+			t.Error("Expected diff with CompareOnlyExpectedKeys disabled (default), got no diff")
+		}
+	})
+}
+
 // Test case for NilToEmptyArray behavior
 func TestJSONAsserter_NilToEmptyArrayBehavior(t *testing.T) {
 	t.Run("If the expected value is null, the actual value remains null, regardless of NilToEmptyArray", func(t *testing.T) {
@@ -323,6 +478,232 @@ func TestJSONAsserter_NilToEmptyArrayBehavior(t *testing.T) {
 		diff := ja.diff(actualJSON, expectedJSON)
 		if diff == "" {
 			t.Error("null should NOT equal [] when NilToEmptyArray=false")
+		}
+	})
+}
+
+func TestJSONAsserter_IgnoredFields(t *testing.T) {
+	t.Run("WithIgnoredFields sets fields correctly", func(t *testing.T) {
+		ja := NewJSONAsserter(t).WithOptions(
+			WithIgnoredFields("timestamp", "debug_info"),
+		)
+		opts := ja.GetOptions()
+
+		expectedFields := []string{"timestamp", "debug_info"}
+		if len(opts.IgnoredFields) != len(expectedFields) {
+			t.Errorf("Expected %d ignored fields, got %d", len(expectedFields), len(opts.IgnoredFields))
+		}
+		for i, field := range expectedFields {
+			if i >= len(opts.IgnoredFields) || opts.IgnoredFields[i] != field {
+				t.Errorf("Expected ignored field %s at index %d, got %v", field, i, opts.IgnoredFields)
+			}
+		}
+	})
+
+	t.Run("ignores specified fields at top level", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoredFields("timestamp", "debug_info"),
+		)
+
+		actualJSON := `{
+			"id": "123",
+			"name": "test",
+			"timestamp": 1758348286,
+			"debug_info": "some debug data"
+		}`
+		expectedJSON := `{
+			"id": "123",
+			"name": "test",
+			"timestamp": 9999999999,
+			"debug_info": "different debug data"
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with ignored fields, got: %s", diff)
+		}
+	})
+
+	t.Run("still detects differences in non-ignored fields", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoredFields("timestamp"),
+		)
+
+		actualJSON := `{
+			"id": "123",
+			"name": "wrong",
+			"timestamp": 1758348286
+		}`
+		expectedJSON := `{
+			"id": "123",
+			"name": "test",
+			"timestamp": 9999999999
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff == "" {
+			t.Error("Expected diff for non-ignored field differences, got no diff")
+		}
+		if !containsString(diff, "name") {
+			t.Errorf("Expected diff to mention 'name' field, got: %s", diff)
+		}
+	})
+
+	t.Run("ignores fields in nested objects", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoredFields("timestamp", "debug_info"),
+		)
+
+		actualJSON := `{
+			"device": {
+				"id": "123",
+				"name": "test",
+				"timestamp": 1758348286,
+				"debug_info": "nested debug"
+			},
+			"timestamp": 9876543210,
+			"status": "active"
+		}`
+		expectedJSON := `{
+			"device": {
+				"id": "123",
+				"name": "test",
+				"timestamp": 1111111111,
+				"debug_info": "different nested debug"
+			},
+			"timestamp": 5555555555,
+			"status": "active"
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with ignored nested fields, got: %s", diff)
+		}
+	})
+
+	t.Run("ignores fields in arrays of objects", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoredFields("timestamp", "debug_info"),
+		)
+
+		actualJSON := `{
+			"devices": [
+				{
+					"id": "1",
+					"name": "device1",
+					"timestamp": 1758348286,
+					"debug_info": "debug1"
+				},
+				{
+					"id": "2",
+					"name": "device2",
+					"timestamp": 1758348287,
+					"debug_info": "debug2"
+				}
+			]
+		}`
+		expectedJSON := `{
+			"devices": [
+				{
+					"id": "1",
+					"name": "device1",
+					"timestamp": 9999999999,
+					"debug_info": "different debug1"
+				},
+				{
+					"id": "2",
+					"name": "device2",
+					"timestamp": 8888888888,
+					"debug_info": "different debug2"
+				}
+			]
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with ignored array fields, got: %s", diff)
+		}
+	})
+
+	t.Run("combines with other options", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoredFields("timestamp"),
+			WithAllowPresencePlaceholder(true),
+			WithNilToEmptyArray(true),
+			WithIgnoreExtraKeys(true),
+		)
+
+		actualJSON := `{
+			"id": "123",
+			"name": "test",
+			"timestamp": 1758348286,
+			"services": null,
+			"extra_field": "ignored",
+			"other_timestamp": 1234567890
+		}`
+		expectedJSON := `{
+			"id": "123",
+			"name": "test",
+			"timestamp": 9999999999,
+			"services": [],
+			"other_timestamp": "<<PRESENCE>>"
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with combined options and ignored fields, got: %s", diff)
+		}
+	})
+
+	t.Run("works when only some fields need to be ignored", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoredFields("created_at"),
+		)
+
+		actualJSON := `{
+			"id": "123",
+			"name": "test",
+			"created_at": "2023-01-01T00:00:00Z",
+			"updated_at": "2023-01-02T00:00:00Z"
+		}`
+		expectedJSON := `{
+			"id": "123",
+			"name": "test",
+			"created_at": "2024-01-01T00:00:00Z",
+			"updated_at": "2023-01-02T00:00:00Z"
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with created_at ignored, got: %s", diff)
+		}
+	})
+
+	t.Run("empty ignored fields list works normally", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoredFields(), // empty list
+		)
+
+		actualJSON := `{"id": "123", "name": "test"}`
+		expectedJSON := `{"id": "123", "name": "test"}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with empty ignored fields, got: %s", diff)
+		}
+	})
+
+	t.Run("detects diff when ignored fields are empty and JSONs differ", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoredFields(), // empty list
+		)
+
+		actualJSON := `{"id": "123", "name": "wrong"}`
+		expectedJSON := `{"id": "123", "name": "test"}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff == "" {
+			t.Error("Expected diff with empty ignored fields and different values, got no diff")
 		}
 	})
 }

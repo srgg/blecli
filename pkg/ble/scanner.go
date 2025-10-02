@@ -2,36 +2,47 @@ package ble
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sync"
 	"time"
 
-	"github.com/go-ble/ble"
-	"github.com/go-ble/ble/darwin"
+	"github.com/cornelk/hashmap"
+	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
+	"github.com/srg/blecli/pkg/ble/internal"
 
 	"github.com/srg/blecli/pkg/device"
 )
 
-// DeviceFactory creates BLE device instances (can be overridden in tests)
-var DeviceFactory = func() (ble.Device, error) {
-	return darwin.NewDevice()
+// DeviceEventType marks if the device was newly discovered or updated
+type DeviceEventType int
+
+const (
+	EventNew DeviceEventType = iota
+	EventUpdated
+)
+
+type DeviceEvent struct {
+	Type       DeviceEventType
+	DeviceInfo device.DeviceInfo
 }
 
 // Scanner handles BLE device discovery
 type Scanner struct {
-	devices     map[string]device.Device
-	deviceMutex sync.RWMutex
-	logger      *logrus.Logger
-	isScanning  bool
-	scanMutex   sync.RWMutex
+	devices *hashmap.Map[string, device.Device]
+	events  *internal.RingChannel[DeviceEvent]
+	logger  *logrus.Logger
+	//isScanning bool
+
+	scanOptions *ScanOptions
+	scanDevice  blelib.Device
 }
 
 // ScanOptions configures scanning behavior
 type ScanOptions struct {
 	Duration        time.Duration
 	DuplicateFilter bool
-	ServiceUUIDs    []ble.UUID
+	ServiceUUIDs    []blelib.UUID
 	AllowList       []string
 	BlockList       []string
 }
@@ -50,86 +61,81 @@ func NewScanner(logger *logrus.Logger) (*Scanner, error) {
 		logger = logrus.New()
 	}
 
-	d, err := DeviceFactory()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create BLE device: %w", err)
-	}
-	ble.SetDefaultDevice(d)
-
 	return &Scanner{
-		devices: make(map[string]device.Device),
-		logger:  logger,
+		events: internal.NewRingChannel[DeviceEvent](100),
+		logger: logger,
 	}, nil
 }
 
-// Scan starts BLE discovery with provided options
-func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions) error {
+// Scan performs BLE discovery with provided options
+func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions) (map[string]device.DeviceInfo, error) {
+	s.devices = hashmap.New[string, device.Device]()
+
 	if opts == nil {
 		opts = DefaultScanOptions()
 	}
 
-	s.scanMutex.Lock()
-	if s.isScanning {
-		s.scanMutex.Unlock()
-		return fmt.Errorf("scanner is already running")
-	}
-	s.isScanning = true
-	s.scanMutex.Unlock()
+	s.logger.WithField("duration", opts.Duration).Info("Starting BLE scan...")
 
+	dev, err := device.DeviceFactory()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create BLE device: %w", err)
+	}
+	s.scanDevice = dev
+
+	s.scanOptions = opts
 	defer func() {
-		s.scanMutex.Lock()
-		s.isScanning = false
-		s.scanMutex.Unlock()
+		s.scanOptions = nil
 	}()
-
-	s.logger.Info("Starting BLE scan...")
-
-	scanCtx := ctx
-	if opts.Duration > 0 {
-		var cancel context.CancelFunc
-		scanCtx, cancel = context.WithTimeout(ctx, opts.Duration)
-		defer cancel()
+	err = s.scanDevice.Scan(ctx, opts.DuplicateFilter, s.handleAdvertisement)
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		return nil, fmt.Errorf("scan failed: %w", err)
 	}
 
-	filter := func(adv ble.Advertisement) bool {
-		return s.shouldIncludeDevice(adv, opts)
-	}
+	s.logger.WithField("device_count", s.devices.Len()).Info("BLE scan completed")
 
-	err := ble.Scan(scanCtx, opts.DuplicateFilter, s.handleAdvertisement, filter)
-	if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-		return fmt.Errorf("scan failed: %w", err)
-	}
+	devices := make(map[string]device.DeviceInfo, s.devices.Len())
+	s.devices.Range(func(key string, value device.Device) bool {
+		devices[key] = value
+		return true
+	})
 
-	s.logger.WithField("device_count", len(s.devices)).Info("BLE scan completed")
-	return nil
+	return devices, nil
 }
 
-// handleAdvertisement updates existing or adds new device
-func (s *Scanner) handleAdvertisement(adv ble.Advertisement) {
-	s.deviceMutex.Lock()
-	defer s.deviceMutex.Unlock()
-
+// handleAdvertisement updates existing or adds a new device
+func (s *Scanner) handleAdvertisement(adv blelib.Advertisement) {
 	deviceID := adv.Addr().String()
 
-	if existing, ok := s.devices[deviceID]; ok {
-		existing.Update(adv)
-		s.logger.WithFields(logrus.Fields{
-			"device": existing.DisplayName(),
-			"rssi":   existing.GetRSSI(),
-		}).Debug("Updated device")
-	} else {
-		newDev := device.NewDevice(adv, nil)
-		s.devices[deviceID] = newDev
-		s.logger.WithFields(logrus.Fields{
-			"device":  newDev.DisplayName(),
-			"address": newDev.GetAddress(),
-			"rssi":    newDev.GetRSSI(),
-		}).Info("Discovered new device")
+	dev, existing := s.devices.Get(deviceID)
+	if !existing {
+		if !s.shouldIncludeDevice(adv, s.scanOptions) {
+			return
+		}
+		dev, existing = s.devices.GetOrInsert(deviceID, device.NewDevice(adv, s.logger))
 	}
+
+	event := DeviceEvent{
+		DeviceInfo: dev,
+	}
+
+	if existing {
+		dev.Update(adv)
+		event.Type = EventUpdated
+	} else {
+		s.logger.WithFields(logrus.Fields{
+			"device":  dev.DisplayName(),
+			"address": dev.GetAddress(),
+			"rssi":    dev.GetRSSI(),
+		}).Info("Discovered new device")
+		event.Type = EventNew
+	}
+
+	s.events.ForceSend(event)
 }
 
-// shouldIncludeDevice applies allow/block/service filters
-func (s *Scanner) shouldIncludeDevice(adv ble.Advertisement, opts *ScanOptions) bool {
+// shouldIncludeDevice applies to allow/block/service filters
+func (s *Scanner) shouldIncludeDevice(adv blelib.Advertisement, opts *ScanOptions) bool {
 	addr := adv.Addr().String()
 
 	for _, blocked := range opts.BlockList {
@@ -173,56 +179,26 @@ func (s *Scanner) shouldIncludeDevice(adv ble.Advertisement, opts *ScanOptions) 
 }
 
 // GetDevices returns a snapshot of discovered devices
-func (s *Scanner) GetDevices() []device.Device {
-	s.deviceMutex.RLock()
-	defer s.deviceMutex.RUnlock()
+func (s *Scanner) makeDeviceList() []device.DeviceInfo {
+	devs := make([]device.DeviceInfo, 0, s.devices.Len())
 
-	devs := make([]device.Device, 0, len(s.devices))
-	for _, d := range s.devices {
-		devs = append(devs, d)
-	}
+	s.devices.Range(func(key string, value device.Device) bool {
+		devs = append(devs, value)
+		return true
+	})
+
 	return devs
 }
 
-// GetDevice returns a device by ID
-func (s *Scanner) GetDevice(deviceID string) (device.Device, bool) {
-	s.deviceMutex.RLock()
-	defer s.deviceMutex.RUnlock()
-
-	dev, ok := s.devices[deviceID]
-	return dev, ok
+// Events return a read-only channel of device events
+func (s *Scanner) Events() <-chan DeviceEvent {
+	return s.events.C()
 }
 
-// ClearDevices removes all devices
-func (s *Scanner) ClearDevices() {
-	s.deviceMutex.Lock()
-	defer s.deviceMutex.Unlock()
-
-	s.devices = make(map[string]device.Device)
-	s.logger.Info("Cleared all discovered devices")
-}
-
-// IsScanning reports whether a scan is active
-func (s *Scanner) IsScanning() bool {
-	s.scanMutex.RLock()
-	defer s.scanMutex.RUnlock()
-	return s.isScanning
-}
-
-// Stop cancels active scan
-func (s *Scanner) Stop() error {
-	s.scanMutex.RLock()
-	scanning := s.isScanning
-	s.scanMutex.RUnlock()
-
-	if !scanning {
-		return fmt.Errorf("scanner is not running")
-	}
-
-	if err := ble.Stop(); err != nil {
-		return fmt.Errorf("failed to stop scan: %w", err)
-	}
-
-	s.logger.Info("BLE scan stopped")
-	return nil
-}
+//func (s *Scanner) CancelScan() error {
+//	if s.scanDevice != nil {
+//		return s.scanDevice.Stop()
+//	}
+//
+//	return fmt.Errorf("no scan device to cancel")
+//}

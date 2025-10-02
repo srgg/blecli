@@ -43,7 +43,6 @@ func init() {
 func runInspect(cmd *cobra.Command, args []string) error {
 	address := args[0]
 
-	// Create configuration/logger consistent with other commands
 	cfg := config.DefaultConfig()
 	if inspectVerbose {
 		cfg.LogLevel = logrus.DebugLevel
@@ -94,7 +93,7 @@ func outputInspectText(res *blecli.InspectResult) {
 		if len(d.GetAdvertisedServices()) > 0 {
 			fmt.Fprintln(cmdOut(), "  Advertised Services:")
 			for _, s := range d.GetAdvertisedServices() {
-				fmt.Fprintf(cmdOut(), "    - %s\n", s.GetUUID())
+				fmt.Fprintf(cmdOut(), "    - %s\n", s)
 			}
 		} else {
 			fmt.Fprintln(cmdOut(), "  Advertised Services: none")

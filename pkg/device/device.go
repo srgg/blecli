@@ -8,8 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// Device defines the interface for all device types
-type Device interface {
+type DeviceInfo interface {
 	GetID() string
 	GetName() string
 	GetAddress() string
@@ -17,24 +16,64 @@ type Device interface {
 	GetTxPower() *int
 	IsConnectable() bool
 	GetLastSeen() time.Time
-	GetAdvertisedServices() []Service
+	GetAdvertisedServices() []string
 	GetManufacturerData() []byte
 	GetServiceData() map[string][]byte
 	DisplayName() string
 	IsExpired(timeout time.Duration) bool
+}
 
-	// Connection methods
+type DeviceInfoJSON struct {
+	ID                 string            `json:"id"`
+	Name               string            `json:"name"`
+	Address            string            `json:"address"`
+	RSSI               int               `json:"rssi"`
+	TxPower            *int              `json:"txPower,omitempty"`
+	Connectable        bool              `json:"connectable"`
+	LastSeen           time.Time         `json:"lastSeen"`
+	AdvertisedServices []string          `json:"advertisedServices,omitempty"`
+	ManufacturerData   []byte            `json:"manufData,omitempty"`
+	ServiceData        map[string][]byte `json:"serviceData,omitempty"`
+}
+
+func deviceInfo2DeviceInfoJson(d DeviceInfo) DeviceInfoJSON {
+	// Convert []Service to []string
+	svcStrUUIDS := make([]string, len(d.GetAdvertisedServices()))
+	for i, s := range d.GetAdvertisedServices() {
+		svcStrUUIDS[i] = s
+	}
+
+	return DeviceInfoJSON{
+		ID:                 d.GetID(),
+		Name:               d.GetName(),
+		Address:            d.GetAddress(),
+		RSSI:               d.GetRSSI(),
+		TxPower:            d.GetTxPower(),
+		Connectable:        d.IsConnectable(),
+		LastSeen:           d.GetLastSeen(),
+		AdvertisedServices: svcStrUUIDS,
+		ManufacturerData:   d.GetManufacturerData(),
+		ServiceData:        d.GetServiceData(),
+	}
+}
+
+// Device defines the interface for all device types
+type Device interface {
+	DeviceInfo
+
 	Connect(ctx context.Context, opts *ConnectOptions) error
 	Disconnect() error
 	IsConnected() bool
-
-	// Update methods
 	Update(adv ble.Advertisement)
+	GetConnection() Connection
+}
 
-	// BLE-specific methods (for devices that support them)
-	WriteToCharacteristic(uuid string, data []byte) error
-	GetCharacteristics() ([]Characteristic, error)
-	SetDataHandler(f func(uuid string, data []byte))
+// Connection represents a BLE connection interface
+type Connection interface {
+	//GetServices() map[string]*BLEService
+	GetServices() map[string]Service
+	GetCharacteristic(service, uuid string) (*BLECharacteristic, error)
+	Subscribe(opts []*SubscribeOptions, pattern StreamMode, maxRate time.Duration, callback func(*Record)) error
 }
 
 // Service represents a GATT service interface
@@ -59,12 +98,13 @@ type Descriptor interface {
 
 // SubscribeOptions defined BLE Characteristics subscriptions
 type SubscribeOptions struct {
-	ServiceUUID     string
+	Service         string
 	Characteristics []string // can be empty
 }
 
 // ConnectOptions defines BLE connection options
 type ConnectOptions struct {
+	Address        string
 	ConnectTimeout time.Duration
 	Services       []SubscribeOptions
 }

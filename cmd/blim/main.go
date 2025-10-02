@@ -15,7 +15,7 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "blecli",
+	Use:   "blim",
 	Short: "BLE CLI Tool for device scanning and communication",
 	Long: `A Bluetooth Low Energy (BLE) command-line tool for macOS that provides:
 

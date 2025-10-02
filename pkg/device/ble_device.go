@@ -2,6 +2,7 @@ package device
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -45,7 +46,7 @@ type BLEDevice struct {
 	txPower            *int
 	connectable        bool
 	lastSeen           time.Time
-	advertisedServices []Service
+	advertisedServices []string
 	manufData          []byte
 	serviceData        map[string][]byte
 	connection         *BLEConnection
@@ -63,7 +64,7 @@ func NewBLEDevice(address string, logger *logrus.Logger) *BLEDevice {
 	return &BLEDevice{
 		id:                 address,
 		address:            address,
-		advertisedServices: make([]Service, 0),
+		advertisedServices: make([]string, 0),
 		serviceData:        make(map[string][]byte),
 		lastSeen:           time.Now(),
 		connection:         NewBLEConnection(logger),
@@ -83,8 +84,8 @@ func NewBLEDeviceFromAdvertisement(adv ble.Advertisement, logger *logrus.Logger)
 	dev.manufData = adv.ManufacturerData()
 
 	// Convert service UUIDs into minimal Service entries (UUID only)
-	for _, svc := range adv.Services() {
-		dev.advertisedServices = append(dev.advertisedServices, &BLEAdvertisedService{uuid: svc.String()})
+	for _, uuid := range adv.Services() {
+		dev.advertisedServices = append(dev.advertisedServices, uuid.String())
 	}
 
 	// Convert service data
@@ -158,7 +159,7 @@ func (d *BLEDevice) GetLastSeen() time.Time {
 	return d.lastSeen
 }
 
-func (d *BLEDevice) GetAdvertisedServices() []Service {
+func (d *BLEDevice) GetAdvertisedServices() []string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.advertisedServices
@@ -196,7 +197,7 @@ func (d *BLEDevice) Connect(ctx context.Context, opts *ConnectOptions) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Assert: connection should never be nil with preconnection pattern
+	// Assert: connection should never be nil with the preconnection pattern
 	if d.connection == nil {
 		panic("BUG: connection is nil - this should never happen with preconnection pattern")
 	}
@@ -336,17 +337,21 @@ func (d *BLEDevice) Disconnect() error {
 	return d.connection.Disconnect()
 }
 
-// IsConnected returns connection status
-func (d *BLEDevice) IsConnected() bool {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
+// isConnectedInternal returnShshoulsd IsConnected call isConedeteInternal?s connection status without acquiring locks (for internal use)
+func (d *BLEDevice) isConnectedInternal() bool {
 	// Assert: connection should never be nil with preconnection pattern
 	if d.connection == nil {
 		panic("BUG: connection is nil - this should never happen with preconnection pattern")
 	}
 
 	return d.connection.IsConnected()
+}
+
+// IsConnected returns connection status
+func (d *BLEDevice) IsConnected() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.isConnectedInternal()
 }
 
 // Update refreshes device information from a new advertisement
@@ -376,7 +381,7 @@ func (d *BLEDevice) Update(adv ble.Advertisement) {
 	for _, svc := range adv.Services() {
 		u := svc.String()
 		if !d.hasServiceUUID(u) {
-			d.advertisedServices = append(d.advertisedServices, &BLEAdvertisedService{uuid: u})
+			d.advertisedServices = append(d.advertisedServices, u)
 		}
 	}
 
@@ -444,7 +449,7 @@ func (b *BLEDevice) GetBLEServices() ([]*BLEService, error) {
 	defer b.mu.RUnlock()
 
 	// Return connected services if device is connected
-	if b.IsConnected() {
+	if b.isConnectedInternal() {
 		result := make([]*BLEService, 0, len(b.connection.services))
 		for _, svc := range b.connection.services {
 			result = append(result, svc)
@@ -462,7 +467,7 @@ func (b *BLEDevice) GetCharacteristics() ([]Characteristic, error) {
 	defer b.mu.RUnlock()
 
 	// Return connected characteristics if device is connected
-	if b.IsConnected() {
+	if b.isConnectedInternal() {
 		var result []Characteristic
 		for _, service := range b.connection.services {
 			for _, char := range service.Characteristics {
@@ -481,6 +486,11 @@ func (b *BLEDevice) SetDataHandler(f func(uuid string, data []byte)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.onData = f
+}
+
+// GetConnection returns the BLE connection interface
+func (d *BLEDevice) GetConnection() Connection {
+	return d.connection
 }
 
 // Helper functions
@@ -594,8 +604,8 @@ func (d *BLEDevice) parseBroadcomManufacturerData(data []byte) string {
 
 // hasServiceUUID checks if services already contain a service with the given UUID (case-insensitive)
 func (d *BLEDevice) hasServiceUUID(uuid string) bool {
-	// First check connected services if device is connected
-	if d.IsConnected() {
+	// First check connected services if a device is connected
+	if d.isConnectedInternal() {
 		for _, service := range d.connection.services {
 			if strings.EqualFold(service.GetUUID(), uuid) {
 				return true
@@ -605,9 +615,40 @@ func (d *BLEDevice) hasServiceUUID(uuid string) bool {
 
 	// Fall back to advertised services
 	for _, s := range d.advertisedServices {
-		if strings.EqualFold(s.GetUUID(), uuid) {
+		if strings.EqualFold(s, uuid) {
 			return true
 		}
 	}
 	return false
 }
+
+// MarshalJSON implements json.Marshaler, converting BLEDevice into a
+// DeviceInfoJSON for JSON serialization.
+func (d *BLEDevice) MarshalJSON() ([]byte, error) {
+	jd := deviceInfo2DeviceInfoJson(d)
+	return json.Marshal(jd)
+}
+
+//// UnmarshalJSON implements json.Unmarshaler, populating BLEDevice from
+//// a deviceInfoJSON representation.
+//func (d *BLEDevice) UnmarshalJSON(data []byte) error {
+//	var jd DeviceInfoJSON
+//	if err := json.Unmarshal(data, &jd); err != nil {
+//		return err
+//	}
+//
+//	// copy fields from DTO into BLEDevice
+//	d.ID = jd.ID
+//	d.Name = jd.Name
+//	d.Address = jd.Address
+//	d.RSSI = jd.RSSI
+//	d.TxPower = jd.TxPower
+//	d.Connectable = jd.Connectable
+//	d.LastSeen = jd.LastSeen
+//	d.AdvertisedServices = jd.AdvertisedServices
+//	d.ManufacturerData = jd.ManufacturerData
+//	d.ServiceData = jd.ServiceData
+//	d.DisplayName = jd.DisplayName
+//
+//	return nil
+//}

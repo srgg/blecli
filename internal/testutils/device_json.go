@@ -1,7 +1,6 @@
 package testutils
 
 import (
-	"encoding/hex"
 	"encoding/json"
 
 	"github.com/srg/blecli/pkg/device"
@@ -39,25 +38,12 @@ type DescriptorJSON struct {
 
 // DeviceToJSON converts a device. Device to JSON string
 func DeviceToJSON(d device.Device) string {
-	// Map Services
+	// Map Services - advertised services are now just UUIDs (no characteristics until connected)
 	var services []ServiceJSON
-	for _, s := range d.GetAdvertisedServices() {
-		var chars []CharacteristicJSON
-		for _, c := range s.GetCharacteristics() {
-			var descs []DescriptorJSON
-			for _, desc := range c.GetDescriptors() {
-				descs = append(descs, DescriptorJSON{UUID: desc.GetUUID()})
-			}
-			chars = append(chars, CharacteristicJSON{
-				UUID:        c.GetUUID(),
-				Properties:  c.GetProperties(),
-				Descriptors: descs,
-				Value:       hex.EncodeToString(c.GetValue()),
-			})
-		}
+	for _, serviceUUID := range d.GetAdvertisedServices() {
 		services = append(services, ServiceJSON{
-			UUID:            s.GetUUID(),
-			Characteristics: chars,
+			UUID:            serviceUUID,            // serviceUUID is already a string
+			Characteristics: []CharacteristicJSON{}, // Advertised services have no characteristics
 		})
 	}
 
