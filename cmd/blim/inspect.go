@@ -62,18 +62,22 @@ func runInspect(cmd *cobra.Command, args []string) error {
 
 	// Use background context; per-command timeout is applied inside the inspector
 	ctx := context.Background()
-	dev, err := inspector.InspectDevice(ctx, address, opts, logger)
-	if err != nil {
-		return err
-	}
-	defer dev.Disconnect()
 
+	// Choose output callback based on format
+	var processDevice inspector.InspectCallback[error]
 	if inspectJSON {
-		return outputInspectJSON(dev, inspectReadLimit)
+		processDevice = func(dev device.Device) (error, error) {
+			return nil, outputInspectJSON(dev, inspectReadLimit)
+		}
+	} else {
+		processDevice = func(dev device.Device) (error, error) {
+			outputInspectText(dev, inspectReadLimit)
+			return nil, nil
+		}
 	}
 
-	outputInspectText(dev, inspectReadLimit)
-	return nil
+	_, err := inspector.InspectDevice(ctx, address, opts, logger, processDevice)
+	return err
 }
 
 func outputInspectText(dev device.Device, readLimit int) {

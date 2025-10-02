@@ -14,9 +14,14 @@ type InspectOptions struct {
 	ConnectTimeout time.Duration
 }
 
-// InspectDevice connects to a device, discovers its profile and returns the connected device
-// Use GetConnection().GetServices() to access discovered services and characteristics
-func InspectDevice(ctx context.Context, address string, opts *InspectOptions, logger *logrus.Logger) (device.Device, error) {
+// InspectCallback processes a connected device and produces output of type R
+type InspectCallback[R any] func(device.Device) (R, error)
+
+// InspectDevice connects to a device, discovers its profile, and executes the callback with the connected device.
+// The device lifecycle (connection and disconnection) is managed automatically.
+// The callback receives the connected device and can return any result type R along with an error.
+func InspectDevice[R any](ctx context.Context, address string, opts *InspectOptions, logger *logrus.Logger, callback InspectCallback[R]) (R, error) {
+	var zero R
 	if opts == nil {
 		opts = &InspectOptions{ConnectTimeout: 30 * time.Second}
 	}
@@ -55,9 +60,19 @@ func InspectDevice(ctx context.Context, address string, opts *InspectOptions, lo
 
 	if err != nil {
 		fmt.Print("\r\033[K") // Clear the line
-		return nil, err
+		return zero, err
 	}
 
 	fmt.Print("\r\033[K") // Clear the progress line
-	return dev, nil
+
+	// Ensure the device is disconnected after the callback completes
+	defer func(dev device.Device) {
+		err := dev.Disconnect()
+		if err != nil {
+			logger.WithError(err).Error("failed to disconnect device")
+		}
+	}(dev)
+
+	// Execute callback with a connected device
+	return callback(dev)
 }
