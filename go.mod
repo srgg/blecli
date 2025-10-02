@@ -1,4 +1,4 @@
-module github.com/srg/blecli
+module github.com/srg/blim
 
 go 1.25.1
 

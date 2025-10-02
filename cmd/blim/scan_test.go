@@ -9,13 +9,12 @@ import (
 	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"github.com/srg/blecli/internal/testutils"
-	"github.com/srg/blecli/internal/testutils/mocks"
+	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/testutils"
+	"github.com/srg/blim/internal/testutils/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-
-	"github.com/srg/blecli/pkg/device"
 )
 
 // ScanTestSuite provides testify/suite for proper test isolation

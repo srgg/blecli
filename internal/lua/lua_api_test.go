@@ -1,4 +1,4 @@
-package internal
+package lua
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 
 	_ "embed"
 
-	"github.com/srg/blecli/internal/testutils"
+	"github.com/srg/blim/internal/testutils"
 	suitelib "github.com/stretchr/testify/suite"
 )
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/mcuadros/go-defaults"
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
 	"github.com/yudai/gojsondiff"
 	"github.com/yudai/gojsondiff/formatter"
 )
@@ -76,7 +76,7 @@ func (ja *JSONAsserter) Assert(actualJSON, expectedJSON string) {
 	}
 }
 
-// Assert compares actual Device against expectedJSON
+// AssertDevice compares actual Device against expectedJSON
 func (ja *JSONAsserter) AssertDevice(dev device.Device, expectedJSON string) {
 	actualJSON := DeviceToJSON(dev)
 	ja.Assert(actualJSON, expectedJSON)

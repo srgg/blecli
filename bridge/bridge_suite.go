@@ -1,4 +1,4 @@
-package ble
+package bridge
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"github.com/srg/blecli/pkg/ble/internal"
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/lua"
 )
 
 // BridgeSuite provides test infrastructure for Bridge2 tests.
@@ -22,7 +22,7 @@ import (
 // Only overrides SetupTest() to add custom error handler setup.
 // All other methods (CreateSubscriptionJsonScript, NewPeripheralDataSimulator, etc.) are inherited.
 type BridgeSuite struct {
-	internal.LuaApiSuite
+	lua.LuaApiSuite
 	bridge             *Bridge2     // Bridge instance under test
 	capturedErrors     []string     // Errors captured by customErrorHandler
 	customErrorHandler ErrorHandler // Pluggable error handler for validation
@@ -56,7 +56,7 @@ func (suite *BridgeSuite) RunBridgeTestCasesFromYAML(yamlContent string) {
 }
 
 // ValidateExpectations overrides parent to add Bridge-specific validation
-func (suite *BridgeSuite) ValidateExpectations(testCase internal.TestCase) {
+func (suite *BridgeSuite) ValidateExpectations(testCase lua.TestCase) {
 	// Call parent for standard validation (ExpectedOutput)
 	suite.LuaApiSuite.ValidateExpectations(testCase)
 
@@ -93,7 +93,7 @@ func (suite *BridgeSuite) ValidateExpectations(testCase internal.TestCase) {
 // Uses the same BLE device instance as the test suite for proper mocking.
 func (suite *BridgeSuite) createAndStartBridge(script string, ctx context.Context) (*Bridge2, error) {
 	// CRITICAL: The bridge must use the same BLEDevice instance as the test suite.
-	internal.LuaApiFactory = func(address string, logger *logrus.Logger) (*internal.BLEAPI2, error) {
+	lua.LuaApiFactory = func(address string, logger *logrus.Logger) (*lua.BLEAPI2, error) {
 		// LuaApiTestSuite creates a connected LuaApi for test simplicity,
 		// but bridge handles connection management by itself, so disconnect first
 		err := suite.LuaApi.GetDevice().Disconnect()

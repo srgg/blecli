@@ -1,4 +1,4 @@
-package ble
+package bridge
 
 import (
 	"context"

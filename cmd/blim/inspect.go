@@ -11,9 +11,8 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-
-	blecli "github.com/srg/blecli/pkg/ble"
-	"github.com/srg/blecli/pkg/config"
+	"github.com/srg/blim/inspector"
+	"github.com/srg/blim/pkg/config"
 )
 
 // inspectCmd represents the inspect command
@@ -50,14 +49,14 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	logger := cfg.NewLogger()
 
 	// Build inspect options
-	opts := &blecli.InspectOptions{
+	opts := &inspector.InspectOptions{
 		ConnectTimeout: inspectConnectTimeout,
 		ReadLimit:      inspectReadLimit,
 	}
 
 	// Use background context; per-command timeout is applied inside the inspector
 	ctx := context.Background()
-	res, err := blecli.InspectDevice(ctx, address, opts, logger)
+	res, err := inspector.InspectDevice(ctx, address, opts, logger)
 	if err != nil {
 		return err
 	}
@@ -72,7 +71,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func outputInspectText(res *blecli.InspectResult) {
+func outputInspectText(res *inspector.InspectResult) {
 	// Device info first
 	fmt.Fprintln(cmdOut(), "Device info:")
 	if res.Device != nil {

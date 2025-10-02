@@ -3,7 +3,7 @@ package testutils
 import (
 	"encoding/json"
 
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
 )
 
 type DeviceJSONFull struct {

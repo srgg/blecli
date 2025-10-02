@@ -5,7 +5,7 @@ import (
 
 	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -41,7 +41,7 @@ import (
 //	    s.MockBLEPeripheralSuite.SetupTest() // Call parent last to apply configuration
 //	}
 //
-// Scanner with advertisements usage:
+// Scanner with advertisement usage:
 //
 //	type ScannerSuite struct {
 //	    testutils.MockBLEPeripheralSuite

@@ -1,4 +1,4 @@
-package ble
+package scanner
 
 import (
 	"context"
@@ -9,9 +9,8 @@ import (
 	"github.com/cornelk/hashmap"
 	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
-	"github.com/srg/blecli/pkg/ble/internal"
-
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/lua"
 )
 
 // DeviceEventType marks if the device was newly discovered or updated
@@ -30,7 +29,7 @@ type DeviceEvent struct {
 // Scanner handles BLE device discovery
 type Scanner struct {
 	devices *hashmap.Map[string, device.Device]
-	events  *internal.RingChannel[DeviceEvent]
+	events  *lua.RingChannel[DeviceEvent]
 	logger  *logrus.Logger
 	//isScanning bool
 
@@ -62,7 +61,7 @@ func NewScanner(logger *logrus.Logger) (*Scanner, error) {
 	}
 
 	return &Scanner{
-		events: internal.NewRingChannel[DeviceEvent](100),
+		events: lua.NewRingChannel[DeviceEvent](100),
 		logger: logger,
 	}, nil
 }

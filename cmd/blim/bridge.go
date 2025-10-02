@@ -11,10 +11,9 @@ import (
 	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	blecli "github.com/srg/blecli/pkg/ble"
-	"github.com/srg/blecli/pkg/device"
-
-	"github.com/srg/blecli/pkg/config"
+	"github.com/srg/blim/bridge"
+	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/pkg/config"
 )
 
 // bridgeCmd represents the bridge command
@@ -102,7 +101,7 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Create a Lua-based PTY bridge
-	bridge, err := blecli.NewBridge(logger, blecli.Bridge2Config{
+	bridge, err := bridge.NewBridge(logger, bridge.Bridge2Config{
 		Address:    deviceAddress,
 		ScriptFile: bridgeLuaScript,
 		Script:     "",

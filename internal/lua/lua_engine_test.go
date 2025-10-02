@@ -1,4 +1,4 @@
-package internal
+package lua
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"github.com/srg/blecli/internal/testutils"
+	"github.com/srg/blim/internal/testutils"
 	"github.com/stretchr/testify/suite"
 	suitelib "github.com/stretchr/testify/suite"
 )

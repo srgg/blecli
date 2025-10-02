@@ -1,4 +1,4 @@
-package internal
+package lua
 
 // LuaApiTestSuite provides test infrastructure for BLE API testing with Lua integration.
 //
@@ -35,10 +35,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/testutils"
 	orderedmap "github.com/wk8/go-ordered-map/v2"
 
-	"github.com/srg/blecli/internal/testutils"
-	"github.com/srg/blecli/pkg/device"
 	"gopkg.in/yaml.v3"
 )
 

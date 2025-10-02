@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	blecli "github.com/srg/blecli/pkg/ble"
-	"github.com/srg/blecli/pkg/config"
+	"github.com/srg/blim/pkg/config"
+	"github.com/srg/blim/scanner"
 )
 
 func TestScanInterrupt(t *testing.T) {
@@ -20,20 +20,20 @@ func TestScanInterrupt(t *testing.T) {
 		logger := cfg.NewLogger()
 
 		// Create scanner
-		scanner, err := blecli.NewScanner(logger)
+		s, err := scanner.NewScanner(logger)
 		if err != nil {
 			t.Skipf("Failed to create BLE scanner (BLE not available?): %v", err)
 		}
 
 		// Create scan options for a longer duration to reproduce the hanging issue
-		scanOpts := &blecli.ScanOptions{
+		scanOpts := &scanner.ScanOptions{
 			Duration:        20 * time.Second, // Use default CLI duration
 			DuplicateFilter: true,
 		}
 
 		done := make(chan error, 1)
 		go func() {
-			done <- runSingleScan(scanner, scanOpts, cfg, logger)
+			done <- runSingleScan(s, scanOpts, cfg, logger)
 		}()
 
 		// Wait longer to allow more BLE devices to be discovered (more mutex activity)
@@ -63,20 +63,20 @@ func TestScanInterrupt(t *testing.T) {
 		logger := cfg.NewLogger()
 
 		// Create scanner
-		scanner, err := blecli.NewScanner(logger)
+		s, err := scanner.NewScanner(logger)
 		if err != nil {
 			t.Skipf("Failed to create BLE scanner (BLE not available?): %v", err)
 		}
 
 		// Create scan options for indefinite scan
-		watchOpts := &blecli.ScanOptions{
+		watchOpts := &scanner.ScanOptions{
 			Duration:        0, // Indefinite
 			DuplicateFilter: true,
 		}
 
 		done := make(chan error, 1)
 		go func() {
-			done <- runWatchMode(scanner, watchOpts, cfg, logger)
+			done <- runWatchMode(s, watchOpts, cfg, logger)
 		}()
 
 		// Wait a bit, then send an interrupt
@@ -106,19 +106,19 @@ func TestScanInterrupt(t *testing.T) {
 		logger := cfg.NewLogger()
 
 		// Create scanner
-		scanner, err := blecli.NewScanner(logger)
+		s, err := scanner.NewScanner(logger)
 		if err != nil {
 			t.Skipf("Failed to create BLE scanner (BLE not available?): %v", err)
 		}
 
 		// Create scan options - watch mode runs indefinitely regardless of duration
-		shortOpts := &blecli.ScanOptions{
+		shortOpts := &scanner.ScanOptions{
 			DuplicateFilter: true,
 		}
 
 		done := make(chan error, 1)
 		go func() {
-			done <- runWatchMode(scanner, shortOpts, cfg, logger)
+			done <- runWatchMode(s, shortOpts, cfg, logger)
 		}()
 
 		// Watch mode should run indefinitely until interrupted

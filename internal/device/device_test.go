@@ -7,8 +7,8 @@ import (
 	"unsafe"
 
 	"github.com/sirupsen/logrus"
-	"github.com/srg/blecli/internal/testutils"
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/testutils"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -1,4 +1,4 @@
-package ble_test
+package scanner_test
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"time"
 
 	blelib "github.com/go-ble/ble"
-	"github.com/srg/blecli/internal/testutils"
-	"github.com/srg/blecli/pkg/ble"
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/testutils"
+	"github.com/srg/blim/scanner"
 	"github.com/stretchr/testify/require"
 	suitelib "github.com/stretchr/testify/suite"
 )
@@ -69,22 +69,22 @@ func (suite *ScannerTestSuite) SetupTest() {
 
 func (suite *ScannerTestSuite) TestNewScanner() {
 	suite.Run("creates scanner with provided logger", func() {
-		scanner, err := ble.NewScanner(suite.Logger)
+		s, err := scanner.NewScanner(suite.Logger)
 
 		suite.NoError(err)
-		suite.NotNil(scanner)
+		suite.NotNil(s)
 	})
 
 	suite.Run("creates scanner with nil logger", func() {
-		scanner, err := ble.NewScanner(nil)
+		s, err := scanner.NewScanner(nil)
 
 		suite.NoError(err)
-		suite.NotNil(scanner)
+		suite.NotNil(s)
 	})
 }
 
 func (suite *ScannerTestSuite) TestDefaultScanOptions() {
-	opts := ble.DefaultScanOptions()
+	opts := scanner.DefaultScanOptions()
 
 	suite.NotNil(opts)
 	suite.Equal(10*time.Second, opts.Duration)
@@ -97,11 +97,11 @@ func (suite *ScannerTestSuite) TestDefaultScanOptions() {
 func (suite *ScannerTestSuite) TestScanOptionsValidation() {
 	tests := []struct {
 		name string
-		opts *ble.ScanOptions
+		opts *scanner.ScanOptions
 	}{
 		{
 			name: "accepts valid options",
-			opts: &ble.ScanOptions{
+			opts: &scanner.ScanOptions{
 				Duration:        5 * time.Second,
 				DuplicateFilter: false,
 				ServiceUUIDs:    []blelib.UUID{},
@@ -111,7 +111,7 @@ func (suite *ScannerTestSuite) TestScanOptionsValidation() {
 		},
 		{
 			name: "accepts zero duration for indefinite scan",
-			opts: &ble.ScanOptions{
+			opts: &scanner.ScanOptions{
 				Duration: 0,
 			},
 		},
@@ -128,19 +128,19 @@ func (suite *ScannerTestSuite) TestScanOptionsValidation() {
 func (suite *ScannerTestSuite) TestScannerFiltering() {
 	tests := []struct {
 		name            string
-		scanOptions     *ble.ScanOptions
+		scanOptions     *scanner.ScanOptions
 		expectedDevices []device.DeviceInfo // Full expected scan results with device data
 		description     string
 	}{
 		{
 			name:            "includes all device with no filters",
-			scanOptions:     &ble.ScanOptions{},
+			scanOptions:     &scanner.ScanOptions{},
 			expectedDevices: []device.DeviceInfo{suite.dev1, suite.dev2, suite.dev3},
 			description:     "No filters should include all discovered devices",
 		},
 		{
 			name: "excludes device on block list",
-			scanOptions: &ble.ScanOptions{
+			scanOptions: &scanner.ScanOptions{
 				BlockList: []string{suite.dev1.GetAddress()},
 			},
 			expectedDevices: []device.DeviceInfo{suite.dev2, suite.dev3},
@@ -148,7 +148,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 		},
 		{
 			name: "includes device with matching service UUID",
-			scanOptions: &ble.ScanOptions{
+			scanOptions: &scanner.ScanOptions{
 				ServiceUUIDs: []blelib.UUID{blelib.UUID16(0x180F)},
 			},
 			expectedDevices: []device.DeviceInfo{suite.dev1},
@@ -156,7 +156,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 		},
 		{
 			name: "excludes device without matching service UUID",
-			scanOptions: &ble.ScanOptions{
+			scanOptions: &scanner.ScanOptions{
 				ServiceUUIDs: []blelib.UUID{blelib.UUID16(0x1234)}, // Non-existent service
 			},
 			expectedDevices: []device.DeviceInfo{},
@@ -164,7 +164,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 		},
 		{
 			name: "includes device on allow list",
-			scanOptions: &ble.ScanOptions{
+			scanOptions: &scanner.ScanOptions{
 				AllowList: []string{"AA:BB:CC:DD:EE:FF"},
 			},
 			expectedDevices: []device.DeviceInfo{suite.dev1},
@@ -172,7 +172,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 		},
 		{
 			name: "excludes device not on allow list",
-			scanOptions: &ble.ScanOptions{
+			scanOptions: &scanner.ScanOptions{
 				AllowList: []string{"FF:EE:DD:CC:BB:AA"}, // Non-existent device
 			},
 			expectedDevices: []device.DeviceInfo{},
@@ -207,7 +207,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 			helper := testutils.NewTestHelper(suite.T())
 
 			// Create scanner
-			scanner, err := ble.NewScanner(helper.Logger)
+			s, err := scanner.NewScanner(helper.Logger)
 			require.NoError(suite.T(), err)
 
 			// Add short duration to test cases that don't have one
@@ -217,7 +217,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 
 			// Run the actual scan with filters to check it works
 			ctx := context.Background()
-			devices, err := scanner.Scan(ctx, tt.scanOptions)
+			devices, err := s.Scan(ctx, tt.scanOptions)
 
 			// Scan should complete successfully
 			require.NoError(suite.T(), err, "Scan should complete without error")

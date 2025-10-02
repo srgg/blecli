@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	blelib "github.com/go-ble/ble"
-	"github.com/srg/blecli/internal/testutils/mocks"
+	"github.com/srg/blim/internal/testutils/mocks"
 	"github.com/stretchr/testify/mock"
 )
 

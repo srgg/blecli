@@ -1,4 +1,4 @@
-package internal
+package lua
 
 // RingChannel is a bounded channel-like buffer with overwrite-oldest semantics.
 //

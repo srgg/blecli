@@ -1,4 +1,4 @@
-package ble
+package inspector
 
 import (
 	"context"
@@ -10,8 +10,7 @@ import (
 	"github.com/go-ble/ble"
 	"github.com/go-ble/ble/darwin"
 	"github.com/sirupsen/logrus"
-
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
 )
 
 // InspectOptions defines options for inspecting a BLE device profile

@@ -6,8 +6,8 @@ import (
 
 	"github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
-	"github.com/srg/blecli/internal/testutils/mocks"
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/testutils/mocks"
 )
 
 // AdvertisementBuilder builds mocked BLE advertisements for testing.

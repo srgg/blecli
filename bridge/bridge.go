@@ -1,4 +1,4 @@
-package ble
+package bridge
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	"github.com/creack/pty"
 	"github.com/jinzhu/copier"
 	"github.com/sirupsen/logrus"
-	"github.com/srg/blecli/pkg/ble/internal"
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/lua"
 	"golang.org/x/term"
 )
 
@@ -33,8 +33,8 @@ type Bridge2 struct {
 	// Lua
 	scriptFile      string // Lua script file to load
 	script          string // Lua script content (alternative to file)
-	luaApi          *internal.BLEAPI2
-	outputCollector *internal.LuaOutputCollector
+	luaApi          *lua.BLEAPI2
+	outputCollector *lua.LuaOutputCollector
 	errorHandler    ErrorHandler // Pluggable error handler for Lua stderr
 
 	// State
@@ -135,7 +135,7 @@ func (b *Bridge2) Start(ctx context.Context, opts *device.ConnectOptions) error 
 		return fmt.Errorf("failed merging BLE connection options: %w", err)
 	}
 
-	if la, err := internal.LuaApiFactory(b.connectionOpts.Address, b.logger); err != nil {
+	if la, err := lua.LuaApiFactory(b.connectionOpts.Address, b.logger); err != nil {
 		return fmt.Errorf("could not connect to BLE device: %w", err)
 	} else {
 		b.luaApi = la
@@ -184,7 +184,7 @@ func (b *Bridge2) Start(ctx context.Context, opts *device.ConnectOptions) error 
 
 	// Create and start output collector
 	const outputBufferSize = 1000 // Buffer up to 1000 output records
-	collector, err := internal.NewLuaOutputCollector(
+	collector, err := lua.NewLuaOutputCollector(
 		b.luaApi.OutputChannel(),
 		outputBufferSize,
 		func(err error) {
@@ -405,7 +405,7 @@ func (b *Bridge2) consumeAndWriteOutput() {
 	}
 
 	// Custom consumer that differentiates between stdout and stderr
-	consumer := func(record *internal.LuaOutputRecord) (string, error) {
+	consumer := func(record *lua.LuaOutputRecord) (string, error) {
 		if record == nil {
 			// No more records
 			return "", nil
@@ -430,7 +430,7 @@ func (b *Bridge2) consumeAndWriteOutput() {
 	}
 
 	// Consume all buffered records
-	_, err := internal.ConsumeRecords(b.outputCollector, consumer)
+	_, err := lua.ConsumeRecords(b.outputCollector, consumer)
 	if err != nil {
 		b.logger.WithError(err).Error("Failed to consume Lua output records")
 	}
@@ -507,7 +507,7 @@ func (b *Bridge2) ReloadScript() error {
 	return nil
 }
 
-func (b *Bridge2) GetLuaApi() *internal.BLEAPI2 {
+func (b *Bridge2) GetLuaApi() *lua.BLEAPI2 {
 	return b.luaApi
 }
 

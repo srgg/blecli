@@ -17,10 +17,9 @@ import (
 	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-
-	blecli "github.com/srg/blecli/pkg/ble"
-	"github.com/srg/blecli/pkg/config"
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/pkg/config"
+	"github.com/srg/blim/scanner"
 )
 
 // scanCmd represents the scan command
@@ -89,7 +88,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	logger := cfg.NewLogger()
 
 	// Create scanner
-	scanner, err := blecli.NewScanner(logger)
+	s, err := scanner.NewScanner(logger)
 	if err != nil {
 		return fmt.Errorf("failed to create BLE scanner: %w", err)
 	}
@@ -105,7 +104,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create scan options
-	scanOpts := &blecli.ScanOptions{
+	scanOpts := &scanner.ScanOptions{
 		Duration:        cfg.ScanTimeout,
 		DuplicateFilter: scanNoDuplicate,
 		ServiceUUIDs:    serviceUUIDs,
@@ -114,13 +113,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if scanWatch {
-		return runWatchMode(scanner, scanOpts, cfg, logger)
+		return runWatchMode(s, scanOpts, cfg, logger)
 	}
 
-	return runSingleScan(scanner, scanOpts, cfg, logger)
+	return runSingleScan(s, scanOpts, cfg, logger)
 }
 
-func runSingleScan(scanner *blecli.Scanner, opts *blecli.ScanOptions, cfg *config.Config, logger *logrus.Logger) error {
+func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *config.Config, logger *logrus.Logger) error {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
@@ -148,7 +147,7 @@ func runSingleScan(scanner *blecli.Scanner, opts *blecli.ScanOptions, cfg *confi
 	}
 }
 
-func runWatchMode(scanner *blecli.Scanner, opts *blecli.ScanOptions, cfg *config.Config, logger *logrus.Logger) error {
+func runWatchMode(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *config.Config, logger *logrus.Logger) error {
 	// Scan until interrupted by the user.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

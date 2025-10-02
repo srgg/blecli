@@ -1,4 +1,4 @@
-package internal
+package lua
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 
 	"github.com/aarzilli/golua/lua"
 	"github.com/sirupsen/logrus"
-	"github.com/srg/blecli/pkg/device"
+	"github.com/srg/blim/internal/device"
 )
 
 // LuaApiFactory creates a Lua API instance (can be overridden in tests)
