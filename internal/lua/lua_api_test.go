@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"context"
 	"testing"
 
 	_ "embed"
@@ -36,9 +37,16 @@ func (suite *LuaApiTestSuite) AssertLuaError(err error, expectedMessage string, 
 func (suite *LuaApiTestSuite) ExecuteScript(script string) error {
 	err := suite.LuaApi.LoadScript(script, "test")
 	suite.NoError(err, "Should load subscription script with nio errors")
-	err = suite.LuaApi.ExecuteScript("")
+	err = suite.LuaApi.ExecuteScript(context.Background(), "")
 	return err
 }
+
+//func (suite *LuaApiTestSuite) ExecuteScript2(script string) error {
+//	err := suite.LuaApi.LoadScript(script, "test")
+//	suite.NoError(err, "Should load subscription script with nio errors")
+//	err = suite.LuaApi.ExecuteScript2(context.Background(), "")
+//	return err
+//}
 
 // TestErrorHandling tests error conditions and recovery
 // NOTE: Most error handling tests have been moved to YAML format in lua-api-test-scenarios.yaml

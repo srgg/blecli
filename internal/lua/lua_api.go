@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -62,9 +63,26 @@ func parseStreamPattern(pattern string) device.StreamMode {
 	}
 }
 
-func (api *BLEAPI2) ExecuteScript(script string) error {
-	return api.LuaEngine.ExecuteScript(script)
+func (api *BLEAPI2) ExecuteScript(ctx context.Context, script string) error {
+	return api.LuaEngine.ExecuteScript(ctx, script)
 }
+
+//func (api *BLEAPI2) ExecuteScript2(ctx context.Context, script string) error {
+//	return api.LuaEngine.ExecuteScript2(ctx, script, func(L *lua.State) {
+//		// Register API
+//		// Create ble table
+//		L.NewTable()
+//
+//		// Register API functions
+//		api.registerSubscribeFunction(L)
+//		api.registerListFunction(L)
+//		api.registerDeviceInfo(L)
+//		api.registerCharacteristicFunction(L)
+//
+//		// Set global 'ble' variable
+//		L.SetGlobal("ble")
+//	})
+//}
 
 func (api *BLEAPI2) LoadScriptFile(filename string) error {
 	return api.LuaEngine.LoadScriptFile(filename)

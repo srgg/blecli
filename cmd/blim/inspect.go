@@ -68,7 +68,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 
 	// Use Lua script for output generation
 	processDevice := func(dev device.Device) (error, error) {
-		return nil, executeInspectLuaScript(dev, logger)
+		return nil, executeInspectLuaScript(ctx, dev, logger)
 	}
 
 	_, err := inspector.InspectDevice(ctx, address, opts, logger, progress.Callback(), processDevice)
@@ -76,7 +76,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 }
 
 // executeInspectLuaScript runs the embedded inspect.lua script with the connected device
-func executeInspectLuaScript(dev device.Device, logger *logrus.Logger) error {
+func executeInspectLuaScript(ctx context.Context, dev device.Device, logger *logrus.Logger) error {
 	// Determine format based on --json flag
 	format := "text"
 	if inspectJSON {
@@ -88,10 +88,8 @@ func executeInspectLuaScript(dev device.Device, logger *logrus.Logger) error {
 		"format": format,
 	}
 
-	// Execute the embedded script asynchronously with output streaming
-	// Use background context since we don't need cancellation here
-	ctx := context.Background()
-	errChan := lua.ExecuteScriptWithOutputAsync(
+	// Execute the embedded script with output streaming
+	return lua.ExecuteDeviceScriptWithOutput(
 		ctx,
 		dev,
 		logger,
@@ -101,7 +99,4 @@ func executeInspectLuaScript(dev device.Device, logger *logrus.Logger) error {
 		os.Stderr,
 		50*time.Millisecond,
 	)
-
-	// Wait for script execution to complete
-	return <-errChan
 }

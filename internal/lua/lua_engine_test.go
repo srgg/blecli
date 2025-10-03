@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -68,7 +69,7 @@ func (suite *LuaEngineTestSuite) SetupSubTest() {
 func (suite *LuaEngineTestSuite) ExecuteScript(script string) error {
 	err := suite.luaEngine.LoadScript(script, "test")
 	suite.NoError(err, "Should load subscription script with nio errors")
-	err = suite.luaEngine.ExecuteScript("")
+	err = suite.luaEngine.ExecuteScript(context.Background(), "")
 	return err
 }
 
@@ -247,6 +248,71 @@ func (suite *LuaEngineTestSuite) TestJSONLibraryAvailability() {
 
 		suite.Equal("hello", jsonData.Test, "JSON should contain correct test field")
 		suite.Equal(42, jsonData.Number, "JSON should contain correct number field")
+	}
+}
+
+func (suite *LuaEngineTestSuite) TestExecuteScript2_ContextCancellation() {
+	suite.Run("CancellationInfiniteLoop", func() {
+		script := `
+			local count = 0
+			while true do
+				count = count + 1
+			end
+		`
+
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		//err := suite.luaEngine.ExecuteScript2(ctx, script, nil)
+		err := suite.luaEngine.ExecuteScript(ctx, script)
+		suite.Error(err, "Should return error on cancellation")
+		suite.True(context.Canceled == err, "Error should be context.Canceled")
+	})
+
+	suite.Run("CompletesBeforeTimeout", func() {
+		script := `print("Quick execution")`
+
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+
+		//err := suite.luaEngine.ExecuteScript2(ctx, script, nil)
+		err := suite.luaEngine.ExecuteScript(ctx, script)
+		suite.NoError(err, "Should complete successfully before timeout")
+	})
+
+	suite.Run("AlreadyCancelled", func() {
+		script := `print("Should not run")`
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel before execution
+
+		//err := suite.luaEngine.ExecuteScript2(ctx, script, nil)
+		err := suite.luaEngine.ExecuteScript(ctx, script)
+		suite.Error(err, "Should fail with already cancelled context")
+		suite.True(context.Canceled == err, "Should return context.Canceled")
+	})
+}
+
+func (suite *LuaEngineTestSuite) TestExecuteScript_BlockedFunctions() {
+	blockedFunctions := map[string]string{
+		"os.execute": `os.execute("echo test")`,
+		"os.exit":    `os.exit(0)`,
+		"os.remove":  `os.remove("file.txt")`,
+		"os.rename":  `os.rename("old.txt", "new.txt")`,
+		"io.read":    `io.read()`,
+		"io.lines":   `io.lines("file.txt")`,
+		//"require":    `require("module")`,
+		"dofile":   `dofile("script.lua")`,
+		"loadfile": `loadfile("script.lua")`,
+	}
+
+	for name, script := range blockedFunctions {
+		suite.Run(name, func() {
+			//err := suite.luaEngine.ExecuteScript2(context.Background(), script, nil)
+			err := suite.luaEngine.ExecuteScript(context.Background(), script)
+			suite.Error(err, "Should error on blocked function: "+name)
+			suite.Contains(err.Error(), "is blocked", "Error should mention function is blocked")
+		})
 	}
 }
 

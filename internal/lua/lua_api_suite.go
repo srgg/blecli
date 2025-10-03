@@ -819,7 +819,7 @@ func (suite *LuaApiSuite) runTestCase(testCase TestCase) {
 
 			if err := suite.LuaApi.LoadScript(fullScript, testCase.Name); err != nil {
 				scriptErr = err
-			} else if err := suite.LuaApi.ExecuteScript(""); err != nil {
+			} else if err := suite.LuaApi.ExecuteScript(context.Background(), ""); err != nil {
 				scriptErr = err
 			}
 		}
@@ -862,7 +862,7 @@ func (suite *LuaApiSuite) runTestCase(testCase TestCase) {
 			script := suite.CreateSubscriptionJsonScript(mode, subscription.MaxRate, callbackScript, subscription.Services...)
 			if err := suite.LuaApi.LoadScript(script, testCase.Name); err != nil {
 				scriptErr = err
-			} else if err := suite.LuaApi.ExecuteScript(""); err != nil {
+			} else if err := suite.LuaApi.ExecuteScript(context.Background(), ""); err != nil {
 				scriptErr = err
 			}
 		}

@@ -202,7 +202,7 @@ func (b *Bridge2) Start(ctx context.Context, opts *device.ConnectOptions) error 
 	b.logger.Info("Lua output collector started")
 
 	// Execute the script to set up subscriptions
-	if err := b.luaApi.ExecuteScript(""); err != nil {
+	if err := b.luaApi.ExecuteScript(b.ctx, ""); err != nil {
 		return fmt.Errorf("failed to execute Lua script: %w", err)
 	}
 
@@ -499,7 +499,7 @@ func (b *Bridge2) ReloadScript() error {
 	}
 
 	// Re-execute to set up new subscriptions
-	if err := b.luaApi.ExecuteScript(""); err != nil {
+	if err := b.luaApi.ExecuteScript(b.ctx, ""); err != nil {
 		return fmt.Errorf("failed to re-execute script: %w", err)
 	}
 
