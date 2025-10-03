@@ -157,6 +157,59 @@ func (e *LuaEngine) registerPrintCaptureInternal() {
 	})
 }
 
+// registerIOWriteCaptureInternal overrides io.write to capture output to the output channel
+func (e *LuaEngine) registerIOWriteCaptureInternal() {
+	e.doWithStateInternal(func(L *lua.State) interface{} {
+		// Override io.write to capture output
+		L.GetGlobal("io")
+		if L.IsTable(-1) {
+			L.PushString("write")
+			L.PushGoFunction(func(L *lua.State) int {
+				top := L.GetTop()
+				var output strings.Builder
+
+				for i := 1; i <= top; i++ {
+					if L.IsString(i) {
+						output.WriteString(L.ToString(i))
+					} else if L.IsNumber(i) {
+						output.WriteString(fmt.Sprintf("%v", L.ToNumber(i)))
+					} else if L.IsBoolean(i) {
+						if L.ToBoolean(i) {
+							output.WriteString("true")
+						} else {
+							output.WriteString("false")
+						}
+					} else if L.IsNil(i) {
+						output.WriteString("nil")
+					} else {
+						// For other types, use tostring
+						L.GetGlobal("tostring")
+						L.PushValue(i)
+						L.Call(1, 1)
+						output.WriteString(L.ToString(-1))
+						L.Pop(1)
+					}
+				}
+
+				// Send to RingChannel (no automatic newline like print)
+				if output.Len() > 0 {
+					e.outputChan.ForceSend(LuaOutputRecord{
+						Content:   output.String(),
+						Timestamp: time.Now(),
+						Source:    "stdout",
+					})
+				}
+
+				return 0
+			})
+			L.SetTable(-3)
+		}
+		L.Pop(1) // Pop io table
+
+		return nil
+	})
+}
+
 // preloadJSONLibInternal loads the embedded JSON.lua library directly into the package.loaded["json"]
 // This avoids the package.preload callback issues and follows the RegisterLibrary pattern.
 // The embedded JSON library provides json.encode() and json.decode() functions to Lua scripts.
@@ -293,6 +346,7 @@ func (e *LuaEngine) resetInternal() {
 	e.state.OpenLibs()
 
 	e.registerPrintCaptureInternal()
+	e.registerIOWriteCaptureInternal()
 	e.preloadJSONLibInternal()
 }
 

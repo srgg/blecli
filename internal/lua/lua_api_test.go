@@ -1,18 +1,14 @@
 package lua
 
 import (
-	"fmt"
-	"path/filepath"
 	"testing"
-	"time"
 
 	_ "embed"
 
-	"github.com/srg/blim/internal/testutils"
 	suitelib "github.com/stretchr/testify/suite"
 )
 
-//go:embed lua-api-subscription-scenarios.yaml
+//go:embed scenarios/lua-api-test-scenarios.yaml
 var testCases string
 
 // BLEAPI2TestSuite
@@ -45,7 +41,7 @@ func (suite *LuaApiTestSuite) ExecuteScript(script string) error {
 }
 
 // TestErrorHandling tests error conditions and recovery
-// NOTE: Most error handling tests have been moved to YAML format in lua-api-subscription-scenarios.yaml
+// NOTE: Most error handling tests have been moved to YAML format in lua-api-test-scenarios.yaml
 //
 //	The following tests remain in Go because they test Lua syntax errors that cannot be
 //	generated through the YAML framework (which always generates valid subscription scripts)
@@ -73,7 +69,7 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 		suite.AssertLuaError(err, "Error: subscribe() expects a lua table argument")
 	})
 
-	// NOTE: The following error tests are in YAML (lua-api-subscription-scenarios.yaml):
+	// NOTE: The following error tests are in YAML (lua-api-test-scenarios.yaml):
 	// - "Error Handling: Missing Services"
 	// - "Error Handling: Non-existent Service"
 	// - "Error Handling: Non-existent Characteristic"
@@ -82,63 +78,154 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 // TestSubscriptionScenarios validates BLE subscription behavior across multiple streaming modes
 // by executing YAML-defined test scenarios.
 //
-// Test scenarios are externalized in lua-api-subscription-scenarios.yaml for maintainability
+// Test scenarios are externalized in lua-api-test-scenarios.yaml for maintainability
 // and clarity. Each scenario defines subscription configuration, simulation steps, and
 // expected Lua callback outputs.
 //
-// See lua-api-subscription-scenarios.yaml for individual test case documentation.
+// See lua-api-test-scenarios.yaml for individual test case documentation.
 func (suite *LuaApiTestSuite) TestSubscriptionScenarios() {
 	suite.RunTestCasesFromYAML(testCases)
 }
 
-// TestInspectDevice tests the inspect.lua script to verify device inspection functionality
-func (suite *LuaApiTestSuite) TestInspectDevice() {
-	t := suite.T()
-	//logger := suite.logger
+// TestCharacteristicFunction tests the ble.characteristic() function
+func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
+	suite.Run("Valid characteristic lookup", func() {
+		script := `
+			local char = ble.characteristic("1234", "5678")
+			assert(char ~= nil, "characteristic should not be nil")
+			assert(char.uuid == "5678", "uuid should match")
+			assert(char.service == "1234", "service should match")
+			assert(char.properties ~= nil, "properties should not be nil")
+			assert(char.descriptors ~= nil, "descriptors should not be nil")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should execute valid characteristic lookup")
+	})
 
-	script, err := testutils.LoadScript(filepath.Join("examples", "inspect.lua"))
-	if err != nil {
-		suite.Error(err)
-	}
+	suite.Run("Characteristic without descriptors", func() {
+		script := `
+			local char = ble.characteristic("1234", "5678")
+			assert(char ~= nil, "characteristic should not be nil")
+			assert(type(char.descriptors) == "table", "descriptors should be a table")
+			assert(#char.descriptors == 0, "should have 0 descriptors")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle empty descriptors array")
+	})
 
-	err = suite.LuaApi.ExecuteScript(script)
-	suite.NoError(err, "Should execute script with no errors")
+	suite.Run("Properties field validation", func() {
+		script := `
+			local char = ble.characteristic("180D", "2A37")
+			assert(char.properties ~= nil, "properties should not be nil")
+			assert(type(char.properties) == "table", "properties should be a table")
+			-- Check that at least one property is set
+			local has_property = char.properties.read or char.properties.write or
+			                     char.properties.notify or char.properties.indicate
+			assert(has_property, "at least one property should be set")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should have valid properties field")
+	})
 
-	// Allow time for inspect.lua script to execute and produce output
-	time.Sleep(1 * time.Second)
+	suite.Run("Error: Invalid service UUID", func() {
+		script := `
+			local char = ble.characteristic("9999", "5678")
+		`
+		err := suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "characteristic not found")
+	})
 
-	// Get captured JSON output
-	if actualOutput, err := suite.luaOutputCapture.ConsumePlainText(); err != nil {
-		suite.NoError(fmt.Errorf("should be able to consume plain text: %v", err))
-	} else {
-		// Use TextAsserter with default options for precise format matching
-		ta := testutils.NewTextAsserter(t).WithOptions(testutils.WithEnableColors(true))
+	suite.Run("Error: Invalid characteristic UUID", func() {
+		script := `
+			local char = ble.characteristic("1234", "9999")
+		`
+		err := suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "characteristic not found")
+	})
 
-		// Define expected output structure based on actual inspect format
-		expectedOutput := `Device info:
-  ID: 4839279b49adcbe13f1fb430ab325aba
-  Address: 4839279b49adcbe13f1fb430ab325aba
-  RSSI: 0
-  Connectable: false
-  LastSeen: 2025-09-25T12:04:12-06:00
-  Advertised Services: none
-  Manufacturer Data: none
-  Service Data: none
-  GATT Services: 1
+	suite.Run("Error: Missing arguments", func() {
+		script := `
+			local char = ble.characteristic("1234")
+		`
+		err := suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "expects two string arguments")
+	})
 
-[1] Service 0001
-  [1.1] Characteristic 0002 (props: 0x08)
-  [1.2] Characteristic 0003 (props: 0x10)
-      descriptor: 2902`
+	suite.Run("Error: Invalid argument type - number converted to string", func() {
+		// Note: Lua ToString() converts numbers to strings, so this becomes "123"
+		// This tests that the error handling works even when Lua does implicit conversion
+		script := `
+			local char = ble.characteristic(123, "5678")
+		`
+		err := suite.ExecuteScript(script)
+		// The number 123 gets converted to string "123", then lookup fails
+		suite.AssertLuaError(err, "characteristic not found")
+	})
 
-		// Assert that the output contains all expected structural elements
-		// This will show clear diffs if the output format changes
-		ta.Assert(actualOutput, expectedOutput)
+	suite.Run("Error: Invalid argument type - table instead of string", func() {
+		script := `
+			local char = ble.characteristic({service="1234"}, "5678")
+		`
+		err := suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "expects two string arguments")
+	})
 
-		t.Log("✓ inspect.lua script executed successfully")
-		t.Log("✓ Device inspection output captured and verified")
-		t.Logf("✓ Found all %d expected services in output", 6)
-	}
+	suite.Run("Error: No arguments provided", func() {
+		script := `
+			local char = ble.characteristic()
+		`
+		err := suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "expects two string arguments")
+	})
+
+	suite.Run("All metadata fields present", func() {
+		script := `
+			local char = ble.characteristic("180F", "2A19")
+			-- Verify all required fields exist
+			assert(char.uuid ~= nil, "uuid field should exist")
+			assert(char.service ~= nil, "service field should exist")
+			assert(char.properties ~= nil, "properties field should exist")
+			assert(char.descriptors ~= nil, "descriptors field should exist")
+
+			-- Verify field types
+			assert(type(char.uuid) == "string", "uuid should be string")
+			assert(type(char.service) == "string", "service should be string")
+			assert(type(char.properties) == "table", "properties should be table")
+			assert(type(char.descriptors) == "table", "descriptors should be table")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should have all required metadata fields")
+	})
+
+	suite.Run("Descriptor array is 1-indexed", func() {
+		script := `
+			local char = ble.characteristic("180D", "2A37")
+			-- Lua arrays are 1-indexed (even if empty)
+			assert(char.descriptors[0] == nil, "index 0 should be nil")
+			-- Note: descriptor count varies by characteristic
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should use 1-indexed descriptor array")
+	})
+
+	suite.Run("Multiple calls return consistent data", func() {
+		script := `
+			local char1 = ble.characteristic("1234", "5678")
+			local char2 = ble.characteristic("1234", "5678")
+			assert(char1.uuid == char2.uuid, "uuid should be consistent")
+			assert(char1.service == char2.service, "service should be consistent")
+
+			-- Compare properties table contents (tables aren't equal by reference in Lua)
+			assert(char1.properties.read == char2.properties.read, "read property should be consistent")
+			assert(char1.properties.write == char2.properties.write, "write property should be consistent")
+			assert(char1.properties.notify == char2.properties.notify, "notify property should be consistent")
+			assert(char1.properties.indicate == char2.properties.indicate, "indicate property should be consistent")
+
+			assert(#char1.descriptors == #char2.descriptors, "descriptor count should be consistent")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should return consistent data across calls")
+	})
 }
 
 // TestBLEAPI2TestSuite runs the test suite using testify/suite

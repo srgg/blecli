@@ -134,6 +134,83 @@ func (suite *LuaEngineTestSuite) TestCapturePrintVariants() {
 	}
 }
 
+// TestCaptureIOWriteVariants tests io.write() capture with various argument types
+func (suite *LuaEngineTestSuite) TestCaptureIOWriteVariants() {
+	cases := []struct {
+		name     string
+		script   string
+		expected *regexp.Regexp
+	}{
+		// Basic io.write tests - NO automatic newline unlike print
+		{"one string", `io.write("hello")`, regexp.MustCompile(`^hello$`)},
+		{"two strings", `io.write("foo", "bar")`, regexp.MustCompile(`^foobar$`)},
+		{"number", `io.write(123)`, regexp.MustCompile(`^123$`)},
+		{"boolean true", `io.write(true)`, regexp.MustCompile(`^true$`)},
+		{"boolean false", `io.write(false)`, regexp.MustCompile(`^false$`)},
+		{"nil value", `io.write(nil)`, regexp.MustCompile(`^nil$`)},
+
+		// Mixed types - concatenated without separator
+		{"string + number", `io.write("val:", 42)`, regexp.MustCompile(`^val:42$`)},
+		{"boolean + string", `io.write(false, "end")`, regexp.MustCompile(`^falseend$`)},
+
+		// Expressions
+		{"addition", `io.write(1+2)`, regexp.MustCompile(`^3$`)},
+		{"concat", `io.write("a" .. "b")`, regexp.MustCompile(`^ab$`)},
+		{"concat mixed", `io.write("val=" .. 123)`, regexp.MustCompile(`^val=123$`)},
+
+		// Manual newlines
+		{"with newline", `io.write("hello\n")`, regexp.MustCompile(`^hello\n$`)},
+		{"multiple lines", `io.write("line1\nline2\n")`, regexp.MustCompile(`^line1\nline2\n$`)},
+
+		// Empty string and spaces
+		{"empty string", `io.write("")`, regexp.MustCompile(`^$`)},
+		{"whitespace string", `io.write("   ")`, regexp.MustCompile(`^   $`)},
+
+		// Multiple io.write calls
+		{"multiple calls", `io.write("a"); io.write("b")`, regexp.MustCompile(`^ab$`)},
+		{"multiple calls with newlines", `io.write("a\n"); io.write("b\n")`, regexp.MustCompile(`^a\nb\n$`)},
+	}
+
+	for _, c := range cases {
+		suite.Run(c.name, func() {
+			err := suite.ExecuteScript(c.script)
+			suite.NoError(err, "Lua code should execute")
+
+			// Give the writer a brief moment to consume the channel
+			time.Sleep(10 * time.Millisecond)
+
+			// Get all captured output as a single string
+			if got, err := suite.luaOutputCapture.ConsumePlainText(); err != nil {
+				suite.NoError(fmt.Errorf("should be able to consume plain text: %v", err))
+			} else {
+				if !c.expected.MatchString(got) {
+					suite.Failf("Output mismatch", "got %q, want match %q", got, c.expected.String())
+				}
+			}
+		})
+	}
+}
+
+// TestCaptureMixedPrintAndIOWrite tests that print() and io.write() can be mixed
+func (suite *LuaEngineTestSuite) TestCaptureMixedPrintAndIOWrite() {
+	script := `
+		io.write("line1")
+		print("line2")
+		io.write("line3\n")
+	`
+	err := suite.ExecuteScript(script)
+	suite.NoError(err, "Lua code should execute")
+
+	time.Sleep(10 * time.Millisecond)
+
+	got, err := suite.luaOutputCapture.ConsumePlainText()
+	suite.NoError(err, "should be able to consume plain text")
+
+	// Expected: "line1" + "line2\n" + "line3\n"
+	expected := "line1line2\nline3\n"
+	suite.Equal(expected, got, "Mixed print and io.write should preserve order and newline behavior")
+}
+
 // TestJSONLibraryAvailability tests if the JSON library is properly loaded
 func (suite *LuaEngineTestSuite) TestJSONLibraryAvailability() {
 	suite.NotEmpty(jsonLua, "Embedded JSON library should not be empty")

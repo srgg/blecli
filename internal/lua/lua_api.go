@@ -2,6 +2,7 @@ package lua
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aarzilli/golua/lua"
@@ -92,6 +93,7 @@ func (api *BLEAPI2) registerLuaAPI() {
 		api.registerSubscribeFunction(L)
 		api.registerListFunction(L)
 		api.registerDeviceInfo(L)
+		api.registerCharacteristicFunction(L)
 
 		// Set global 'ble' variable
 		L.SetGlobal("ble")
@@ -469,6 +471,89 @@ func (api *BLEAPI2) callLuaCallback(callbackRef int, record *device.Record) {
 
 		return nil
 	})
+}
+
+// registerCharacteristicFunction registers the ble.characteristic() function
+func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
+	connection := api.device.GetConnection()
+
+	L.PushString("characteristic")
+	L.PushGoFunction(func(L *lua.State) int {
+		// Validate arguments
+		if !L.IsString(1) || !L.IsString(2) {
+			L.RaiseError("characteristic(service_uuid, char_uuid) expects two string arguments")
+			return 0
+		}
+
+		serviceUUID := L.ToString(1)
+		charUUID := L.ToString(2)
+
+		// Get characteristic from connection
+		char, err := connection.GetCharacteristic(serviceUUID, charUUID)
+		if err != nil {
+			L.RaiseError(fmt.Sprintf("characteristic not found: %v", err))
+			return 0
+		}
+
+		// Create handle table with metadata fields
+		L.NewTable()
+
+		// Field: uuid
+		L.PushString("uuid")
+		L.PushString(char.GetUUID())
+		L.SetTable(-3)
+
+		// Field: service_uuid
+		L.PushString("service")
+		L.PushString(serviceUUID)
+		L.SetTable(-3)
+
+		// Field: properties (table with boolean flags for each property)
+		L.PushString("properties")
+		L.NewTable()
+
+		// Parse properties string (e.g., "Read|Write|Notify") into boolean flags
+		propsStr := char.GetProperties()
+		if strings.Contains(propsStr, "Read") {
+			L.PushString("read")
+			L.PushBoolean(true)
+			L.SetTable(-3)
+		}
+		if strings.Contains(propsStr, "Write") {
+			L.PushString("write")
+			L.PushBoolean(true)
+			L.SetTable(-3)
+		}
+		if strings.Contains(propsStr, "Notify") {
+			L.PushString("notify")
+			L.PushBoolean(true)
+			L.SetTable(-3)
+		}
+		if strings.Contains(propsStr, "Indicate") {
+			L.PushString("indicate")
+			L.PushBoolean(true)
+			L.SetTable(-3)
+		}
+
+		L.SetTable(-3)
+
+		// Field: descriptors (array)
+		L.PushString("descriptors")
+		L.NewTable()
+		descriptors := char.GetDescriptors()
+		for i, desc := range descriptors {
+			L.PushInteger(int64(i + 1))
+			L.PushString(desc.GetUUID())
+			L.SetTable(-3)
+		}
+		L.SetTable(-3)
+
+		// TODO: Add methods (read, write, subscribe, unsubscribe) if needed
+		// For now, inspect.lua only needs the metadata fields above
+
+		return 1
+	})
+	L.SetTable(-3)
 }
 
 // Close cleans up the API resources

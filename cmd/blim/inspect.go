@@ -2,19 +2,17 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
-	"encoding/json"
+	_ "embed"
 	"fmt"
-	"io"
 	"os"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/srg/blim"
 	"github.com/srg/blim/inspector"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/lua"
 	"github.com/srg/blim/pkg/config"
 )
 
@@ -68,203 +66,42 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	progress.Start()
 	defer progress.Stop()
 
-	// Choose output callback based on format
-	var processDevice inspector.InspectCallback[error]
-	if inspectJSON {
-		processDevice = func(dev device.Device) (error, error) {
-			return nil, outputInspectJSON(dev, inspectReadLimit)
-		}
-	} else {
-		processDevice = func(dev device.Device) (error, error) {
-			outputInspectText(dev, inspectReadLimit)
-			return nil, nil
-		}
+	// Use Lua script for output generation
+	processDevice := func(dev device.Device) (error, error) {
+		return nil, executeInspectLuaScript(dev, logger)
 	}
 
 	_, err := inspector.InspectDevice(ctx, address, opts, logger, progress.Callback(), processDevice)
 	return err
 }
 
-func outputInspectText(dev device.Device, readLimit int) {
-	// Device info first
-	fmt.Fprintln(cmdOut(), "Device info:")
-	fmt.Fprintf(cmdOut(), "  ID: %s\n", dev.GetID())
-	fmt.Fprintf(cmdOut(), "  Address: %s\n", dev.GetAddress())
-	if dev.GetName() != "" {
-		fmt.Fprintf(cmdOut(), "  Name: %s\n", dev.GetName())
-	}
-	fmt.Fprintf(cmdOut(), "  RSSI: %d\n", dev.GetRSSI())
-	fmt.Fprintf(cmdOut(), "  Connectable: %t\n", dev.IsConnectable())
-	if dev.GetTxPower() != nil {
-		fmt.Fprintf(cmdOut(), "  TxPower: %d dBm\n", *dev.GetTxPower())
-	}
-	fmt.Fprintf(cmdOut(), "  LastSeen: %s\n", dev.GetLastSeen().Format(time.RFC3339))
-
-	// Advertised Services
-	if len(dev.GetAdvertisedServices()) > 0 {
-		fmt.Fprintln(cmdOut(), "  Advertised Services:")
-		for _, s := range dev.GetAdvertisedServices() {
-			fmt.Fprintf(cmdOut(), "    - %s\n", s)
-		}
-	} else {
-		fmt.Fprintln(cmdOut(), "  Advertised Services: none")
+// executeInspectLuaScript runs the embedded inspect.lua script with the connected device
+func executeInspectLuaScript(dev device.Device, logger *logrus.Logger) error {
+	// Determine format based on --json flag
+	format := "text"
+	if inspectJSON {
+		format = "json"
 	}
 
-	// Manufacturer data
-	if len(dev.GetManufacturerData()) > 0 {
-		fmt.Fprintf(cmdOut(), "  Manufacturer Data: %X\n", dev.GetManufacturerData())
-	} else {
-		fmt.Fprintln(cmdOut(), "  Manufacturer Data: none")
+	// Prepare script arguments
+	args := map[string]string{
+		"format": format,
 	}
 
-	// Service data
-	if len(dev.GetServiceData()) > 0 {
-		fmt.Fprintln(cmdOut(), "  Service Data:")
-		keys := make([]string, 0, len(dev.GetServiceData()))
-		for k := range dev.GetServiceData() {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			fmt.Fprintf(cmdOut(), "    - %s: %X\n", k, dev.GetServiceData()[k])
-		}
-	} else {
-		fmt.Fprintln(cmdOut(), "  Service Data: none")
-	}
+	// Execute the embedded script asynchronously with output streaming
+	// Use background context since we don't need cancellation here
+	ctx := context.Background()
+	errChan := lua.ExecuteScriptWithOutputAsync(
+		ctx,
+		dev,
+		logger,
+		blecli.InspectLuaScript,
+		args,
+		os.Stdout,
+		os.Stderr,
+		50*time.Millisecond,
+	)
 
-	// GATT Services from connection
-	conn := dev.GetConnection()
-	services := conn.GetServices()
-	fmt.Fprintf(cmdOut(), "  GATT Services: %d\n", len(services))
-
-	// List services
-	si := 0
-	for _, svc := range services {
-		si++
-		fmt.Fprintf(cmdOut(), "\n[%d] Service %s\n", si, svc.GetUUID())
-
-		ci := 0
-		for _, char := range svc.GetCharacteristics() {
-			ci++
-			fmt.Fprintf(cmdOut(), "  [%d.%d] Characteristic %s (props: %s)\n", si, ci, char.GetUUID(), char.GetProperties())
-
-			// Optionally show characteristic values
-			if readLimit > 0 {
-				data := char.GetValue()
-				if len(data) > 0 {
-					trim := data
-					if len(trim) > readLimit {
-						trim = trim[:readLimit]
-					}
-					valueHex := strings.ToUpper(hex.EncodeToString(trim))
-					valueASCII := asciiPreview(trim)
-
-					if valueHex != "" {
-						fmt.Fprintf(cmdOut(), "      value (hex):   %s\n", valueHex)
-					}
-					if valueASCII != "" {
-						fmt.Fprintf(cmdOut(), "      value (ascii): %s\n", valueASCII)
-					}
-				}
-			}
-
-			// Descriptors
-			for _, d := range char.GetDescriptors() {
-				fmt.Fprintf(cmdOut(), "      descriptor: %s\n", d.GetUUID())
-			}
-		}
-	}
-}
-
-func outputInspectJSON(dev device.Device, readLimit int) error {
-	// Build JSON structure directly from device
-	conn := dev.GetConnection()
-	services := conn.GetServices()
-
-	type DescriptorJSON struct {
-		UUID string `json:"uuid"`
-	}
-
-	type CharacteristicJSON struct {
-		UUID        string           `json:"uuid"`
-		Properties  string           `json:"properties"`
-		ValueHex    string           `json:"value_hex,omitempty"`
-		ValueASCII  string           `json:"value_ascii,omitempty"`
-		Descriptors []DescriptorJSON `json:"descriptors,omitempty"`
-	}
-
-	type ServiceJSON struct {
-		UUID            string               `json:"uuid"`
-		Characteristics []CharacteristicJSON `json:"characteristics"`
-	}
-
-	type InspectJSON struct {
-		Address  string        `json:"address"`
-		Name     string        `json:"name,omitempty"`
-		Services []ServiceJSON `json:"services"`
-	}
-
-	result := InspectJSON{
-		Address:  dev.GetAddress(),
-		Name:     dev.GetName(),
-		Services: make([]ServiceJSON, 0, len(services)),
-	}
-
-	for _, svc := range services {
-		svcJSON := ServiceJSON{
-			UUID:            svc.GetUUID(),
-			Characteristics: make([]CharacteristicJSON, 0),
-		}
-
-		for _, char := range svc.GetCharacteristics() {
-			charJSON := CharacteristicJSON{
-				UUID:       char.GetUUID(),
-				Properties: char.GetProperties(),
-			}
-
-			// Optionally include values
-			if readLimit > 0 {
-				data := char.GetValue()
-				if len(data) > 0 {
-					trim := data
-					if len(trim) > readLimit {
-						trim = trim[:readLimit]
-					}
-					charJSON.ValueHex = strings.ToUpper(hex.EncodeToString(trim))
-					charJSON.ValueASCII = asciiPreview(trim)
-				}
-			}
-
-			// Descriptors
-			for _, d := range char.GetDescriptors() {
-				charJSON.Descriptors = append(charJSON.Descriptors, DescriptorJSON{UUID: d.GetUUID()})
-			}
-
-			svcJSON.Characteristics = append(svcJSON.Characteristics, charJSON)
-		}
-
-		result.Services = append(result.Services, svcJSON)
-	}
-
-	enc := json.NewEncoder(cmdOut())
-	enc.SetIndent("", "  ")
-	return enc.Encode(result)
-}
-
-// asciiPreview returns a safe ASCII preview, replacing non-printable bytes with '.'
-func asciiPreview(b []byte) string {
-	var sb strings.Builder
-	for _, c := range b {
-		if c >= 32 && c <= 126 {
-			sb.WriteByte(c)
-		} else {
-			sb.WriteByte('.')
-		}
-	}
-	return sb.String()
-}
-
-// cmdOut returns a writer to standard output
-func cmdOut() io.Writer {
-	return os.Stdout
+	// Wait for script execution to complete
+	return <-errChan
 }

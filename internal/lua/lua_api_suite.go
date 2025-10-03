@@ -1,36 +1,10 @@
 package lua
 
-// LuaApiTestSuite provides test infrastructure for BLE API testing with Lua integration.
-//
-// # Error Handling Strategy
-//
-// This package uses a deliberate error-handling strategy to distinguish between
-// programmer errors and runtime failures:
-//
-// **Panics** are used for test suite misuse (programmer errors):
-//   - Invalid test setup or configuration
-//   - Contract violations in builder patterns (e.g., calling methods out of order)
-//   - Missing required parameters
-//   - Improper initialization
-//
-// Examples: WithCharacteristic called before WithService, nil builder parent.
-//
-// **Errors** are returned for runtime failures:
-//   - External system failures (Lua execution, channel communication)
-//   - Resource allocation failures
-//   - Timeout conditions
-//   - Unexpected data format issues
-//
-// Examples: Lua script execution errors, output collector failures, JSON parsing errors.
-//
-// This approach ensures that test suite bugs (programmer errors) are caught immediately
-// during development with clear panic messages, while runtime issues are handled gracefully
-// with proper error propagation.
-
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -53,12 +27,17 @@ type TestCase struct {
 	// Name of the test case
 	Name string `json:"name" yaml:"name"`
 
+	// Script is an optional standalone Lua script to execute (mutually exclusive with Subscription)
+	// Supports file:// URLs (e.g., "file://examples/inspect.lua?format=json&verbose=true")
+	// URL query parameters are passed to Lua via arg[] table
+	Script string `json:"script,omitempty" yaml:"script,omitempty"`
+
 	// Peripheral is an optional explicit peripheral service configuration
 	// If provided, these services will be used to configure the mock peripheral
 	// If not provided, peripheral services will be auto-populated from Subscription.Services
 	Peripheral []device.SubscribeOptions `json:"peripheral,omitempty" yaml:"peripheral,omitempty"`
 
-	Subscription TestSubscriptionOptions `json:"subscription" yaml:"subscription"`
+	Subscription TestSubscriptionOptions `json:"subscription,omitempty" yaml:"subscription,omitempty"`
 
 	// Steps is an ordered list of steps that occur in this test case
 	Steps []TestStep `json:"steps" yaml:"steps"`
@@ -69,8 +48,8 @@ type TestCase struct {
 	// ExpectErrorMessage is the expected error message substring (test expects error if non-empty)
 	ExpectErrorMessage string `json:"expect_error_message,omitempty" yaml:"expect_error_message,omitempty"`
 
-	// ExpectedOutput is the expected JSON output from Lua callbacks
-	ExpectedOutput []map[string]interface{} `json:"expected_output,omitempty" yaml:"expected_output,omitempty"`
+	// ExpectedJSONOutput is the expected JSON output from Lua callbacks
+	ExpectedJSONOutput []map[string]interface{} `json:"expected_json_output,omitempty" yaml:"expected_json_output,omitempty"`
 
 	// WaitAfter is the duration to wait after all steps complete before validating output (default: DefaultStepWaitDuration)
 	WaitAfter time.Duration `json:"wait_after,omitempty" yaml:"wait_after,omitempty"`
@@ -84,6 +63,8 @@ type TestCase struct {
 	ExpectedErrors []string `json:"expected_errors,omitempty" yaml:"expected_errors,omitempty"`
 }
 
+// TestSubscriptionOptions configures BLE characteristic subscription behavior and callbacks.
+// Used in TestCase to define how characteristic notifications are monitored and processed.
 type TestSubscriptionOptions struct {
 	// Mode defines the subscription streaming mode (EveryUpdate, Batched, Aggregated)
 	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
@@ -116,8 +97,8 @@ type TestStep struct {
 	// WaitAfter waits this duration after step execution before capturing output (default: DefaultStepWaitDuration if zero).
 	WaitAfter time.Duration `json:"wait_after,omitempty" yaml:"wait_after,omitempty"`
 
-	// ExpectedOutput validates Lua output immediately after this step (optional, validated during step execution).
-	ExpectedOutput []map[string]interface{} `json:"expected_output,omitempty" yaml:"expected_output,omitempty"`
+	// ExpectedJSONOutput validates Lua output immediately after this step (optional, validated during step execution).
+	ExpectedJSONOutput []map[string]interface{} `json:"expected_json_output,omitempty" yaml:"expected_json_output,omitempty"`
 }
 
 // ServiceValues represents updates to all characteristics of a single service.
@@ -146,6 +127,8 @@ type LuaErrorInfo struct {
 	Timestamp string `json:"timestamp,omitempty"` // When the error occurred
 }
 
+// LuaSubscriptionCallbackData represents the JSON structure of Lua subscription callback output.
+// Used for validation of subscription test results with support for errors, call counts, and BLE notification data.
 type LuaSubscriptionCallbackData struct {
 	CallCount int            `json:"call_count"`
 	Errors    []LuaErrorInfo `json:"errors,omitempty"` // Collected stderr errors with details
@@ -156,8 +139,92 @@ type LuaSubscriptionCallbackData struct {
 }
 
 // LuaApiSuite provides test infrastructure for BLE API testing with Lua integration.
+//
 // It embeds MockBLEPeripheralSuite for peripheral simulation and manages a BLEAPI2 instance
 // with an output collection for testing Lua script execution.
+//
+// # Overview
+//
+// Supports two types of Lua-based BLE tests:
+//
+// 1. **Subscription Tests**: Test BLE characteristic notifications with callbacks
+// 2. **Script Tests**: Execute standalone Lua scripts with file:// URL support
+//
+// # Subscription Tests
+//
+// Subscription tests monitor BLE characteristic notifications and validate callback output.
+// Supports three streaming modes: EveryUpdate, Batched, and Aggregated.
+//
+// Example YAML test case:
+//
+//	test_cases:
+//	  - name: "Heart Rate Monitor Test"
+//	    subscription:
+//	      mode: EveryUpdate
+//	      max_rate: 100ms
+//	      services:
+//	        - service: "180d"
+//	          characteristics: ["2a37"]
+//	    steps:
+//	      - services:
+//	          - service: "180d"
+//	            values:
+//	              - char: "2a37"
+//	                value: [0x60]  # 96 bpm
+//	    expected_json_output:
+//	      - record:
+//	          Values:
+//	            "2a37": [0x60]
+//
+// # Script Tests
+//
+// Script tests execute standalone Lua scripts for device inspection or custom logic.
+// Supports file:// URLs with query parameters passed via arg[] table.
+//
+// Example YAML test case:
+//
+//	test_cases:
+//	  - name: "Inspect Device Test"
+//	    script: "file://examples/inspect.lua?format=json&verbose=true"
+//	    wait_after: 500ms
+//	    expected_json_output:
+//	      - device:
+//	          id: "00:00:00:00:00:01"
+//	          name: "Test Device"
+//	        services:
+//	          - uuid: "180d"
+//	            characteristics:
+//	              - uuid: "2a37"
+//
+// URL query parameters (format=json, verbose=true) are available in Lua via arg[] table:
+//
+//	local format = arg["format"]  -- "json"
+//	local verbose = arg["verbose"] -- "true"
+//
+// # Error Handling Strategy
+//
+// This test infrastructure uses a deliberate error-handling strategy to distinguish between
+// programmer errors and runtime failures:
+//
+// **Panics** are used for test suite misuse (programmer errors):
+//   - Invalid test setup or configuration
+//   - Contract violations in builder patterns (e.g., calling methods out of order)
+//   - Missing required parameters
+//   - Improper initialization
+//
+// Examples: WithCharacteristic called before WithService, nil builder parent.
+//
+// **Errors** are returned for runtime failures:
+//   - External system failures (Lua execution, channel communication)
+//   - Resource allocation failures
+//   - Timeout conditions
+//   - Unexpected data format issues
+//
+// Examples: Lua script execution errors, output collector failures, JSON parsing errors.
+//
+// This approach ensures that test suite bugs (programmer errors) are caught immediately
+// during development with clear panic messages, while runtime issues are handled gracefully
+// with proper error propagation.
 type LuaApiSuite struct {
 	testutils.MockBLEPeripheralSuite
 
@@ -166,6 +233,10 @@ type LuaApiSuite struct {
 	skipOutputSetup  bool // Allow child suites to skip output collector setup
 }
 
+// SetupTest initializes the test environment with a mock BLE peripheral and Lua API instance.
+// Creates default services (1234, 180D, 180F) if no custom peripheral is configured.
+// Sets up output collector to capture Lua stdout/stderr for validation.
+// Called automatically before each test case by the testing framework.
 func (suite *LuaApiSuite) SetupTest() {
 	// -- Set up a Mock device factory only if not already configured
 	if suite.PeripheralBuilder == nil || len(suite.PeripheralBuilder.GetServices()) == 0 {
@@ -286,6 +357,9 @@ func (suite *LuaApiSuite) setupOutputCollector() error {
 	return nil
 }
 
+// TearDownTest cleans up test resources in proper order: output collector, Lua API, then peripheral.
+// Called automatically after each test case by the testing framework.
+// Logs warnings for cleanup errors but does not fail the test.
 func (suite *LuaApiSuite) TearDownTest() {
 	var errors []error
 
@@ -314,6 +388,10 @@ func (suite *LuaApiSuite) TearDownTest() {
 	}
 }
 
+// SetupSubTest reinitializes test resources for subtests.
+// Cleans up existing output collector and Lua API, then creates fresh instances.
+// Enables running multiple test cases in the same test function using suite.Run().
+// Called automatically before each subtest by the testing framework.
 func (suite *LuaApiSuite) SetupSubTest() {
 	// Clean up existing resources in proper order
 	if suite.luaOutputCapture != nil {
@@ -337,6 +415,8 @@ func (suite *LuaApiSuite) SetupSubTest() {
 	}
 }
 
+// CreateSubscriptionJsonScript generates a Lua script that subscribes to BLE characteristics and processes notifications.
+// Returns a complete Lua script string with JSON callback logic for use in tests.
 func (suite *LuaApiSuite) CreateSubscriptionJsonScript(pattern string, maxRate time.Duration, callbackScript string, subscription ...device.SubscribeOptions) string {
 	// Validate inputs
 	if maxRate < 0 {
@@ -398,7 +478,9 @@ func (suite *LuaApiSuite) CreateSubscriptionJsonScript(pattern string, maxRate t
 		}`, services.String(), pattern, maxRate.Milliseconds(), callbackBody)
 }
 
-// GetLuaStdout retrieves all stdout output from the Lua output collector
+// GetLuaStdout retrieves all stdout output from the Lua output collector.
+// Consumes and returns only stdout records, filtering out stderr.
+// Returns an error if output collection failed.
 func (suite *LuaApiSuite) GetLuaStdout() (string, error) {
 	output, err := ConsumeRecords(suite.luaOutputCapture, func(record *LuaOutputRecord) (string, error) {
 		if record == nil {
@@ -415,6 +497,16 @@ func (suite *LuaApiSuite) GetLuaStdout() (string, error) {
 	return output, nil
 }
 
+// LuaOutputAsJSON parses Lua output as JSON subscription callback data.
+// Separates stdout (JSON) from stderr (errors) and returns structured callback data.
+// Supports both single JSON objects and JSONL (JSON Lines) format for multiple callbacks.
+// Collects stderr errors and attaches them to the first callback record.
+// Returns an error if JSON parsing fails or no valid data is found.
+//
+// Format detection:
+//   - Tries parsing as single JSON object first
+//   - Falls back to JSONL if single JSON parsing fails
+//   - Returns error if both formats fail
 func (suite *LuaApiSuite) LuaOutputAsJSON() ([]LuaSubscriptionCallbackData, error) {
 	// Create a custom consumer that separates stdout (JSON) and stderr (errors)
 	var stdoutBuilder strings.Builder
@@ -504,6 +596,10 @@ func (suite *LuaApiSuite) LuaOutputAsJSON() ([]LuaSubscriptionCallbackData, erro
 	return arrayData, nil
 }
 
+// GetCharacteristicValue retrieves the current value of a BLE characteristic.
+// Returns the raw byte value from the mock peripheral's connection.
+// Validates that service and characteristic UUIDs are non-empty.
+// Returns an error if connection is unavailable or characteristic not found.
 func (suite *LuaApiSuite) GetCharacteristicValue(service string, characteristic string) ([]byte, error) {
 	// Validate inputs
 	if service == "" {
@@ -552,7 +648,10 @@ func (suite *LuaApiSuite) ensurePeripheralService(serviceUUID string, characteri
 	}
 }
 
-// RunTestCasesFromYAML parses YAML and executes test cases (auto-idents the YAML)
+// RunTestCasesFromYAML parses YAML test case definitions and executes them.
+// Automatically dedents the YAML content to support inline test definitions.
+// Expects a "test_cases" array at the root level.
+// Each test case runs as a separate subtest with full isolation.
 func (suite *LuaApiSuite) RunTestCasesFromYAML(yamlContent string) {
 	// Dedent the YAML content
 	yamlContent = dedent(yamlContent)
@@ -617,7 +716,37 @@ func dedent(s string) string {
 	return strings.Join(out, "\n")
 }
 
-// RunTestCases executes one or more test cases
+// parseFileURL parses a file:// URL and extracts the path and query parameters.
+// Returns the file path and a map of query parameters.
+// Example: "file://examples/inspect.lua?format=json&verbose=true" → ("examples/inspect.lua", {"format": "json", "verbose": "true"})
+func parseFileURL(fileURL string) (string, map[string]string, error) {
+	// Parse the URL
+	u, err := url.Parse(fileURL)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid file URL: %w", err)
+	}
+
+	// Extract the path (everything after file://)
+	filePath := strings.TrimPrefix(fileURL, "file://")
+	if idx := strings.Index(filePath, "?"); idx != -1 {
+		filePath = filePath[:idx]
+	}
+
+	// Extract query parameters
+	params := make(map[string]string)
+	for key, values := range u.Query() {
+		if len(values) > 0 {
+			params[key] = values[0] // Take first value if multiple
+		}
+	}
+
+	return filePath, params, nil
+}
+
+// RunTestCases executes one or more test cases with full isolation.
+// Configures the peripheral based on test case requirements before setup.
+// Runs each test case as a separate subtest using suite.Run().
+// Handles both subscription-based tests and standalone script tests.
 func (suite *LuaApiSuite) RunTestCases(testCases ...TestCase) {
 	for _, tc := range testCases {
 		// Capture test case for closure
@@ -645,11 +774,69 @@ func (suite *LuaApiSuite) RunTestCases(testCases ...TestCase) {
 
 // runTestCase executes a single test case
 func (suite *LuaApiSuite) runTestCase(testCase TestCase) {
-	// Setup subscriptions if configured
 	var scriptErr error
 
+	// Handle standalone Script field (mutually exclusive with Subscription)
+	if testCase.Script != "" {
+		var scriptContent string
+		var params map[string]string
+
+		// Check if Script is a file:// URL
+		if strings.HasPrefix(testCase.Script, "file://") {
+			// Parse file URL to extract path and query parameters
+			filePath, urlParams, err := parseFileURL(testCase.Script)
+			if err != nil {
+				scriptErr = fmt.Errorf("failed to parse script URL %q: %w", testCase.Script, err)
+			} else {
+				params = urlParams
+				// Load script content
+				content, err := testutils.LoadScript(filePath)
+				if err != nil {
+					scriptErr = fmt.Errorf("failed to load script file %q: %w", filePath, err)
+				} else {
+					scriptContent = content
+				}
+			}
+		} else {
+			// Inline script
+			scriptContent = testCase.Script
+		}
+
+		// Execute a script with arg[] table populated from URL params
+		if scriptErr == nil {
+			// Build arg[] table initialization
+			var argTable strings.Builder
+			argTable.WriteString("arg = {}\n")
+			for key, value := range params {
+				// Escape the value for Lua string
+				escapedValue := strings.ReplaceAll(value, "\\", "\\\\")
+				escapedValue = strings.ReplaceAll(escapedValue, "\"", "\\\"")
+				fmt.Fprintf(&argTable, "arg[%q] = %q\n", key, escapedValue)
+			}
+
+			// Combine arg[] initialization with script content
+			fullScript := argTable.String() + scriptContent
+
+			if err := suite.LuaApi.LoadScript(fullScript, testCase.Name); err != nil {
+				scriptErr = err
+			} else if err := suite.LuaApi.ExecuteScript(""); err != nil {
+				scriptErr = err
+			}
+		}
+
+		// Check for errors - fail test cleanly and return
+		if scriptErr != nil {
+			if testCase.ExpectErrorMessage != "" {
+				suite.Require().Contains(scriptErr.Error(), testCase.ExpectErrorMessage, "Error message should contain expected text")
+			} else {
+				suite.Require().NoError(scriptErr, "Script execution failed")
+			}
+			return
+		}
+	}
+
+	// Handle subscription-based tests
 	subscription := testCase.Subscription
-	// Create script if services exist OR if we expect an error (to test error conditions)
 	if len(subscription.Services) > 0 || testCase.ExpectErrorMessage != "" {
 		mode := subscription.Mode
 		if mode == "" {
@@ -733,8 +920,8 @@ func (suite *LuaApiSuite) runTestCase(testCase TestCase) {
 		}
 
 		// Validate step output if expected output is provided
-		if len(step.ExpectedOutput) > 0 {
-			suite.validateOutput(step.ExpectedOutput)
+		if len(step.ExpectedJSONOutput) > 0 {
+			suite.validateJSONOutput(step.ExpectedJSONOutput, true)
 		}
 	}
 
@@ -742,10 +929,13 @@ func (suite *LuaApiSuite) runTestCase(testCase TestCase) {
 	suite.ValidateExpectations(testCase)
 }
 
-// ValidateExpectations validates test case expectations (extension point for child suites)
+// ValidateExpectations validates test case output against expected results.
+// Waits for output processing to complete before validation.
+// Validates both JSON output (expected_json_output) and plain text output (expected_stdout).
+// Extension point for child suites (e.g., BridgeSuite) to add custom validation logic.
 func (suite *LuaApiSuite) ValidateExpectations(testCase TestCase) {
 	// Wait if needed for output to be processed
-	if len(testCase.ExpectedOutput) > 0 {
+	if len(testCase.ExpectedJSONOutput) > 0 || testCase.ExpectedStdout != "" {
 		waitDuration := testCase.WaitAfter
 		if waitDuration == 0 {
 			waitDuration = DefaultStepWaitDuration
@@ -753,37 +943,71 @@ func (suite *LuaApiSuite) ValidateExpectations(testCase TestCase) {
 		time.Sleep(waitDuration)
 	}
 
-	// Validate ExpectedOutput (JSON callbacks)
-	if len(testCase.ExpectedOutput) > 0 {
-		suite.validateOutput(testCase.ExpectedOutput)
+	// Validate ExpectedJSONOutput
+	if len(testCase.ExpectedJSONOutput) > 0 {
+		// Scripts use isSubscription=false, subscriptions use isSubscription=true
+		suite.validateJSONOutput(testCase.ExpectedJSONOutput, testCase.Script == "")
+	}
+
+	// Validate ExpectedStdout (plain text output from standalone scripts)
+	if testCase.ExpectedStdout != "" {
+		actualOutput, err := suite.luaOutputCapture.ConsumePlainText()
+		suite.Require().NoError(err, "Should be able to consume plain text output")
+		suite.Require().Equal(testCase.ExpectedStdout, actualOutput, "Stdout output should match expected")
 	}
 }
 
-// validateOutput validates Lua output against expected output
-func (suite *LuaApiSuite) validateOutput(expectedOutput []map[string]interface{}) {
-	// Validate output
-	jsonData, err := suite.LuaOutputAsJSON()
-	suite.Require().NoError(err, "Failed to get Lua output")
+// validateJSONOutput is the unified validation logic for both subscription callbacks and script output
+func (suite *LuaApiSuite) validateJSONOutput(expectedOutput []map[string]interface{}, isSubscription bool) {
+	var actual interface{}
 
-	// Convert byte arrays in the expected output to strings to match Lua's JSON encoding
+	if isSubscription {
+		// Get subscription callback JSON data
+		jsonData, err := suite.LuaOutputAsJSON()
+		suite.Require().NoError(err, "Failed to get Lua output")
+		actual = jsonData
+	} else {
+		// Get script stdout and parse as JSON
+		output, err := suite.luaOutputCapture.ConsumePlainText()
+		suite.Require().NoError(err, "Failed to get Lua stdout")
+
+		var actualData map[string]interface{}
+		err = json.Unmarshal([]byte(strings.TrimSpace(output)), &actualData)
+		suite.Require().NoError(err, "Failed to parse JSON output from script")
+
+		actual = []map[string]interface{}{actualData}
+	}
+
+	// Normalize the expected output (convert byte arrays to strings to match Lua's JSON encoding)
 	normalizedExpected := suite.normalizeExpectedOutput(expectedOutput)
 
+	// Add default call_count only for subscription callbacks
+	if isSubscription {
+		for i, item := range normalizedExpected {
+			if _, hasCallCount := item["call_count"]; !hasCallCount {
+				item["call_count"] = i + 1
+			}
+		}
+	}
+
 	// Convert string values to hex representation for better diff visibility
-	actualWithHex := suite.convertStringsToHex(jsonData)
+	actualWithHex := suite.convertStringsToHex(actual)
 	expectedWithHex := suite.convertStringsToHex(normalizedExpected)
 
-	// Use jsonassert to compare expected vs actual output
-	ja := testutils.NewJSONAsserter(suite.T()).WithOptions(
-		testutils.WithIgnoredFields("TsUs", "Seq", "Flags", "timestamp"),
-	)
-
+	// Wrap arrays in objects since jsonassert doesn't support root-level arrays
 	actualWrapped := map[string]interface{}{"array": actualWithHex}
-	actualJSON, _ := json.Marshal(actualWrapped)
-
 	expectedWrapped := map[string]interface{}{"array": expectedWithHex}
+
+	// Create asserter with optional ignored fields (only for subscriptions)
+	ja := testutils.NewJSONAsserter(suite.T())
+	if isSubscription {
+		ja = ja.WithOptions(testutils.WithIgnoredFields("TsUs", "Seq", "Flags", "timestamp"))
+	}
+
+	actualJSON, _ := json.Marshal(actualWrapped)
 	expectedJSON, _ := json.Marshal(expectedWrapped)
 
-	ja.Assert(string(expectedJSON), string(actualJSON))
+	ja.Assert(string(actualJSON), string(expectedJSON))
 }
 
 // convertStringsToHex converts binary string values to hex representation for better diff readability
@@ -915,12 +1139,8 @@ func (suite *LuaApiSuite) stringToHex(s string) string {
 // normalizeExpectedOutput converts byte arrays in expected output to strings
 // to match how Lua's JSON encoder represents binary data (modifies maps in-place)
 func (suite *LuaApiSuite) normalizeExpectedOutput(expected []map[string]interface{}) []map[string]interface{} {
-	for i, item := range expected {
+	for _, item := range expected {
 		suite.normalizeMapInPlace(item)
-		// Add default call_count if missing (defaults to i+1)
-		if _, hasCallCount := item["call_count"]; !hasCallCount {
-			item["call_count"] = i + 1
-		}
 	}
 	return expected
 }
@@ -1177,7 +1397,7 @@ func (b *PeripheralDataSimulatorBuilder) Simulate(verbose bool) (*PeripheralData
 		}
 	}
 
-	// Always log simulation start with summary
+	// Always log simulation starts with a summary
 	b.logf("DEBUG: Starting BLE simulation - services=%d characteristics=%d max_notifications_per_char=%d",
 		serviceCount, charCount, maxIndex)
 

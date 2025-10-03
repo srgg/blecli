@@ -1,0 +1,22 @@
+test_cases:
+# GOAL: Verify that inline scripts work and the arg [] table is initialized
+#
+# TEST SCENARIO: Execute an inline Lua script → verify the arg table is available
+  - name: "Inline Script with arg[] table"
+    script: |
+      -- Verify arg table is initialized even without URL params
+      assert(type(arg) == "table", "arg should be a table")
+      print("Script executed successfully")
+    wait_after: 100ms
+    expected_stdout: |
+      Script executed successfully
+
+# GOAL: Verify that URL query parameters are passed to Lua via arg[] table
+#
+# TEST SCENARIO: Load script with URL params → verify arg[] contains params
+  - name: "URL Parameters in arg[] table"
+    script: "file://internal/lua/scenarios/test_arg_url_params.lua?format=json&verbose=true"
+    wait_after: 100ms
+    expected_stdout: |
+      arg["format"] = "json"
+      arg["verbose"] = "true"

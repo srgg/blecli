@@ -24,7 +24,7 @@ test_cases:
             values:
               - char: "5678"
                 value: [0x01, 0x02]
-    expected_output:
+    expected_json_output:
       - call_count: 0
         errors:
           - message: "Callback error: [string \"...\"]:10: Intentional test error in Lua callback"
@@ -79,7 +79,7 @@ test_cases:
                 value: [0x00, 0x5A]
               - char: "5678"
                 value: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
-    expected_output:
+    expected_json_output:
       - record:
           Values:
             "5678": [0x58, 0x59, 0x5A]
@@ -113,7 +113,7 @@ test_cases:
                 value: [0x58, 0x59, 0x5A]
               - char: "5678"
                 value: [0x01, 0x02, 0x03]
-        expected_output:
+        expected_json_output:
           - call_count: 1
             record:
               Values:
@@ -125,7 +125,7 @@ test_cases:
                 value: [0x00, 0x5A]
               - char: "5678"
                 value: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
-        expected_output:
+        expected_json_output:
           - call_count: 2
             record:
               Values:
@@ -152,7 +152,7 @@ test_cases:
                 value: [0x58, 0x59, 0x5A]
               - char: "5678"
                 value: [0x01, 0x02, 0x03]
-        expected_output:
+        expected_json_output:
           - call_count: 1
             record:
               BatchValues:
@@ -166,7 +166,7 @@ test_cases:
                 value: [0x00, 0x5A]
               - char: "5678"
                 value: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
-        expected_output:
+        expected_json_output:
           - call_count: 2
             record:
               BatchValues:
@@ -192,7 +192,7 @@ test_cases:
                 value: [0x58, 0x59, 0x5A]
               - char: "2A38"
                 value: [0x01, 0x02, 0x03]
-        expected_output:
+        expected_json_output:
           - call_count: 1
             record:
               Values:
@@ -201,3 +201,84 @@ test_cases:
             record:
               Values:
                 "2a38": [0x01, 0x02, 0x03]
+
+# GOAL: Verify that inspect.lua produces the expected text output format
+#
+# TEST SCENARIO: Execute inspect.lua script → verify text format output matches an expected format
+  - name: "Inspect Device Test"
+    script: "file://examples/inspect.lua"
+    wait_after: 500ms
+    expected_stdout: |
+      Device info:
+        ID: 00:00:00:00:00:01
+        Address: 00:00:00:00:00:01
+        RSSI: 0
+        Connectable: false
+        Advertised Services: none
+        Manufacturer Data: none
+        Service Data: none
+        GATT Services: 3
+
+      [1] Service 1234
+        [1.1] Characteristic 5678 (props: 0x12)
+
+      [2] Service 180d
+        [2.1] Characteristic 2a37 (props: 0x12)
+        [2.2] Characteristic 2a38 (props: 0x12)
+
+      [3] Service 180f
+        [3.1] Characteristic 2a19 (props: 0x12)
+
+# GOAL: Verify that inspect.lua produce expected JSON output format
+#
+# TEST SCENARIO: Execute inspect.lua with ?format=json → verify JSON structure via expected_output
+  - name: "Inspect Device Test (JSON format)"
+    script: "file://examples/inspect.lua?format=json"
+    wait_after: 500ms
+    expected_json_output:
+      - device:
+          id: "00:00:00:00:00:01"
+          address: "00:00:00:00:00:01"
+          name: ""
+          rssi: 0
+          connectable: false
+          advertised_services: []
+          manufacturer_data: ""
+          service_data: []
+        services:
+          - uuid: "1234"
+            characteristics:
+              - uuid: "5678"
+                properties:
+                  read: true
+                  write: false
+                  notify: true
+                  indicate: false
+                descriptors: []
+          - uuid: "180d"
+            characteristics:
+              - uuid: "2a37"
+                properties:
+                  read: true
+                  write: false
+                  notify: true
+                  indicate: false
+                descriptors: []
+              - uuid: "2a38"
+                properties:
+                  read: true
+                  write: false
+                  notify: true
+                  indicate: false
+                descriptors: []
+          - uuid: "180f"
+            characteristics:
+              - uuid: "2a19"
+                properties:
+                  read: true
+                  write: false
+                  notify: true
+                  indicate: false
+                descriptors: []
+
+
