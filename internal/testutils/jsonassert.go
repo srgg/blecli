@@ -3,6 +3,7 @@ package testutils
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/mcuadros/go-defaults"
@@ -25,6 +26,7 @@ type JSONAssertOptions struct {
 	AllowPresencePlaceholder bool     `default:"true"`
 	CompareOnlyExpectedKeys  bool     `default:"false"`
 	IgnoredFields            []string `default:""`
+	IgnoreArrayOrder         bool     `default:"false"`
 }
 
 // Option is a functional option for configuring JSONAsserter
@@ -60,6 +62,7 @@ func (ja *JSONAsserter) WithOptionsStruct(opts JSONAssertOptions) *JSONAsserter 
 	ja.options.AllowPresencePlaceholder = opts.AllowPresencePlaceholder
 	ja.options.CompareOnlyExpectedKeys = opts.CompareOnlyExpectedKeys
 	ja.options.IgnoredFields = opts.IgnoredFields
+	ja.options.IgnoreArrayOrder = opts.IgnoreArrayOrder
 	return ja
 }
 
@@ -100,6 +103,11 @@ func (ja *JSONAsserter) diff(actualJSON, expectedJSON string) string {
 	// Apply other normalization options
 	if ja.options.NilToEmptyArray {
 		normalizeNilArrays(expected, actual)
+	}
+	// Sort arrays BEFORE pruning extra keys so elements align correctly
+	if ja.options.IgnoreArrayOrder {
+		sortArrays(expected)
+		sortArrays(actual)
 	}
 	if ja.options.IgnoreExtraKeys {
 		pruneExtraKeys(actual, expected)
@@ -439,5 +447,35 @@ func WithCompareOnlyExpectedKeys(allow bool) Option {
 func WithIgnoredFields(fields ...string) Option {
 	return func(opts *JSONAssertOptions) {
 		opts.IgnoredFields = fields
+	}
+}
+
+// WithIgnoreArrayOrder sets whether to ignore array element order during comparison
+func WithIgnoreArrayOrder(ignore bool) Option {
+	return func(opts *JSONAssertOptions) {
+		opts.IgnoreArrayOrder = ignore
+	}
+}
+
+// sortArrays recursively sorts arrays in JSON structures for order-independent comparison.
+// Arrays are sorted by the JSON representation of their elements to ensure consistent ordering.
+func sortArrays(data interface{}) {
+	switch v := data.(type) {
+	case map[string]interface{}:
+		// Recursively sort arrays in nested objects
+		for key := range v {
+			sortArrays(v[key])
+		}
+	case []interface{}:
+		// Sort array by JSON representation of elements
+		sort.Slice(v, func(i, j int) bool {
+			iJSON, _ := json.Marshal(v[i])
+			jJSON, _ := json.Marshal(v[j])
+			return string(iJSON) < string(jJSON)
+		})
+		// Recursively sort nested structures within array elements
+		for _, elem := range v {
+			sortArrays(elem)
+		}
 	}
 }

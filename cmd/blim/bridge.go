@@ -11,8 +11,10 @@ import (
 	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/srg/blim"
 	"github.com/srg/blim/bridge"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/lua"
 	"github.com/srg/blim/pkg/config"
 )
 
@@ -98,70 +100,75 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	go func() {
 		<-sigChan
 		logger.Info("Received interrupt signal, shutting down...")
-		logger.Debug("About to cancel context")
 		cancel()
-		logger.Debug("Context cancelled")
 	}()
 
-	// Create a Lua-based PTY bridge
-	bridge, err := bridge.NewBridge(logger, bridge.Bridge2Config{
-		Address:    deviceAddress,
-		ScriptFile: bridgeLuaScript,
-		Script:     "",
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create bridge: %w", err)
-	}
-
-	if err = bridge.Start(ctx, &device.ConnectOptions{
-		Services: []device.SubscribeOptions{
-			{
-				Service: serviceUUID.String(),
-			},
-		},
-	}); err != nil {
-		return fmt.Errorf("failed to start bridge: %w", err)
-	}
-
-	defer func() {
-		logger.Debug("=== DEFER STOP BEGIN ===")
-		start := time.Now()
-
-		if err := bridge.Stop(); err != nil {
-			logger.WithError(err).Error("Defer stop failed")
-		} else {
-			logger.WithField("duration", time.Since(start)).Debug("Defer stop completed")
+	// Load script content before creating the callback
+	var scriptContent string
+	if bridgeLuaScript != "" {
+		// Read custom script file
+		logger.WithField("file", bridgeLuaScript).Info("Loading custom Lua script")
+		content, err := os.ReadFile(bridgeLuaScript)
+		if err != nil {
+			return fmt.Errorf("failed to read script file: %w", err)
 		}
-		logger.Debug("=== DEFER STOP END ===")
-	}()
-
-	// TODO: generate BLE Bridge info message by Lua script
-	services := bridge.GetServices()
-	fmt.Printf("\n=== BLE-PTY Bridge is Active ===\n")
-	fmt.Printf("Device: %s\n", deviceAddress)
-	fmt.Printf("PTY: %s\n", bridge.GetPTYName())
-	fmt.Printf("Service: %s\n", serviceUUID.String())
-
-	// Find the specific service and display its characteristics
-	if svc, ok := services[serviceUUID.String()]; ok {
-		characteristics := svc.GetCharacteristics()
-		fmt.Printf("Characteristics: %d\n", len(characteristics))
-		for _, char := range characteristics {
-			fmt.Printf("  - %s\n", char.GetUUID())
-		}
+		scriptContent = string(content)
 	} else {
-		fmt.Printf("Characteristics: 0 (service not found)\n")
+		// Use default bridge script
+		logger.Info("Using default bridge script")
+		scriptContent = blecli.DefaultBridgeLuaScript
 	}
-	fmt.Printf("\nBridge is running. Connect your application to %s\n", bridge.GetPTYName())
-	fmt.Printf("Press Ctrl+C to stop the bridge.\n\n")
 
-	// Run until context is canceled
-	logger.Debug("Waiting for context cancellation...")
-	<-ctx.Done()
+	var scriptArgs map[string]string
 
-	logger.Info("Bridge shutting down...")
-	logger.Debug("Function returning, defer will trigger...")
-	return nil
+	// Setup progress printer
+	progress := NewProgressPrinter(fmt.Sprintf("Starting bridge for %s", deviceAddress), "Connecting", "Running")
+	progress.Start()
+	defer progress.Stop()
+
+	// Bridge callback - executes the Lua script with output streaming
+	bridgeCallback := func(b bridge.Bridge) (error, error) {
+		// Execute the Lua script to set up subscriptions
+		err := lua.ExecuteDeviceScriptWithOutput(
+			ctx,
+			b.GetDevice(),
+			logger,
+			scriptContent,
+			scriptArgs,
+			os.Stdout,
+			os.Stderr,
+			50*time.Millisecond,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Script executed successfully and subscriptions are active
+		// Wait for context cancellation (Ctrl+C) to keep the bridge running
+		<-ctx.Done()
+		logger.Info("Bridge shutting down...")
+
+		return nil, nil
+	}
+
+	// Run the bridge with callback
+	_, err = bridge.RunDeviceBridge(
+		ctx,
+		&bridge.BridgeOptions{
+			Address:        deviceAddress,
+			ConnectTimeout: bridgeConnectTimeout,
+			Services: []device.SubscribeOptions{
+				{
+					Service: serviceUUID.String(),
+				},
+			},
+			Logger: logger,
+		},
+		progress.Callback(),
+		bridgeCallback,
+	)
+
+	return err
 }
 
 func parseUUID(uuidStr, name string) (*blelib.UUID, error) {

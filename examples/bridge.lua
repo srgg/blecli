@@ -44,45 +44,47 @@ if service_count == 0 then
     error("No services found - cannot start bridge")
 end
 
--- Build subscription services array and count total characteristics
+-- Sort service UUIDs for consistent output
+local service_uuids = {}
+for uuid in pairs(services_table) do
+    table.insert(service_uuids, uuid)
+end
+table.sort(service_uuids)
+
+-- Build subscription services array - only include characteristics that support notify/indicate
 local services = {}
 local total_chars = 0
-for service_uuid, service_info in pairs(services_table) do
-    local chars = {}
+for _, service_uuid in ipairs(service_uuids) do
+    local service_info = services_table[service_uuid]
+
+    -- Filter characteristics to only those that support notifications
+    local notifiable_chars = {}
     for i, char_uuid in ipairs(service_info.characteristics) do
-        table.insert(chars, char_uuid)
-        total_chars = total_chars + 1
+        local char_info = ble.characteristic(service_uuid, char_uuid) or {}
+        if char_info.properties and (char_info.properties.notify or char_info.properties.indicate) then
+            table.insert(notifiable_chars, char_uuid)
+        end
     end
-    table.insert(services, {
-        service = service_uuid,
-        chars = chars
-    })
+
+    -- Only add service if it has notifiable characteristics
+    if #notifiable_chars > 0 then
+        -- Sort characteristics for deterministic order
+        table.sort(notifiable_chars)
+
+        total_chars = total_chars + #notifiable_chars
+        table.insert(services, {
+            service = service_uuid,
+            chars = notifiable_chars
+        })
+    end
 end
 
--- Verify at least one characteristic exists
+-- Verify at least one notifiable characteristic exists
 if total_chars == 0 then
-    error("No characteristics found - cannot start bridge")
+    error("No notifiable characteristics found - cannot start bridge")
 end
 
--- Print header in bridge.go format (only after validation)
-print("")
-print("=== BLE-PTY Bridge is Active ===")
-print(string.format("Device: %s", ble.device.address))
-
--- Print all services and their characteristics
-for service_uuid, service_info in pairs(services_table) do
-    print(string.format("Service: %s", service_uuid))
-    print(string.format("Characteristics: %d", #service_info.characteristics))
-    for i, char_uuid in ipairs(service_info.characteristics) do
-        print(string.format("  - %s", char_uuid))
-    end
-    print("")
-end
-
-print("Bridge is running. Press Ctrl+C to stop the bridge.")
-print("")
-
--- Subscribe to all available characteristics with human-readable output
+-- Subscribe FIRST (before printing header) - this validates the subscription
 ble.subscribe{
     services = services,
     Mode = "EveryUpdate",
@@ -100,3 +102,21 @@ ble.subscribe{
         end
     end
 }
+
+-- If we reach here, subscription succeeded - print header
+print("")
+print("=== BLE-PTY Bridge is Active ===")
+print(string.format("Device: %s", ble.device.address))
+
+-- Print only services with notifiable characteristics
+for _, svc in ipairs(services) do
+    print(string.format("Service: %s", svc.service))
+    print(string.format("Characteristics: %d", #svc.chars))
+    for i, char_uuid in ipairs(svc.chars) do
+        print(string.format("  - %s", char_uuid))
+    end
+    print("")
+end
+
+print("Bridge is running. Press Ctrl+C to stop the bridge.")
+print("")

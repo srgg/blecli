@@ -707,3 +707,179 @@ func TestJSONAsserter_IgnoredFields(t *testing.T) {
 		}
 	})
 }
+
+func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
+	t.Run("arrays with same elements in different order match when enabled", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoreArrayOrder(true),
+		)
+
+		actualJSON := `{"items": [3, 1, 2]}`
+		expectedJSON := `{"items": [1, 2, 3]}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with IgnoreArrayOrder enabled, got: %s", diff)
+		}
+	})
+
+	t.Run("arrays with same elements in different order fail when disabled", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoreArrayOrder(false),
+		)
+
+		actualJSON := `{"items": [3, 1, 2]}`
+		expectedJSON := `{"items": [1, 2, 3]}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff == "" {
+			t.Error("Expected diff with IgnoreArrayOrder disabled, got no diff")
+		}
+	})
+
+	t.Run("arrays with different elements fail regardless of option", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoreArrayOrder(true),
+		)
+
+		actualJSON := `{"items": [1, 2, 3]}`
+		expectedJSON := `{"items": [1, 2, 4]}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff == "" {
+			t.Error("Expected diff for different array elements even with IgnoreArrayOrder enabled, got no diff")
+		}
+	})
+
+	t.Run("nested arrays are sorted correctly", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoreArrayOrder(true),
+		)
+
+		actualJSON := `{"data": [{"values": [3, 2, 1]}, {"values": [6, 5, 4]}]}`
+		expectedJSON := `{"data": [{"values": [1, 2, 3]}, {"values": [4, 5, 6]}]}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with nested arrays sorted, got: %s", diff)
+		}
+	})
+
+	t.Run("objects in arrays sorted by JSON representation", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoreArrayOrder(true),
+		)
+
+		actualJSON := `{"devices": [{"id": "2", "name": "b"}, {"id": "1", "name": "a"}]}`
+		expectedJSON := `{"devices": [{"id": "1", "name": "a"}, {"id": "2", "name": "b"}]}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with object arrays sorted, got: %s", diff)
+		}
+	})
+
+	t.Run("mixed nested structures with arrays and objects", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoreArrayOrder(true),
+		)
+
+		actualJSON := `{
+			"services": [
+				{"id": "2", "chars": ["d", "c"]},
+				{"id": "1", "chars": ["b", "a"]}
+			]
+		}`
+		expectedJSON := `{
+			"services": [
+				{"id": "1", "chars": ["a", "b"]},
+				{"id": "2", "chars": ["c", "d"]}
+			]
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with mixed nested structures, got: %s", diff)
+		}
+	})
+
+	t.Run("empty arrays match regardless of order option", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoreArrayOrder(true),
+		)
+
+		actualJSON := `{"items": []}`
+		expectedJSON := `{"items": []}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff for empty arrays, got: %s", diff)
+		}
+	})
+
+	t.Run("single element arrays match regardless of order", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoreArrayOrder(true),
+		)
+
+		actualJSON := `{"items": [1]}`
+		expectedJSON := `{"items": [1]}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff for single element arrays, got: %s", diff)
+		}
+	})
+
+	t.Run("combines with IgnoredFields option", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoreArrayOrder(true),
+			WithIgnoredFields("timestamp"),
+		)
+
+		actualJSON := `{
+			"events": [
+				{"id": "2", "timestamp": 2000},
+				{"id": "1", "timestamp": 1000}
+			]
+		}`
+		expectedJSON := `{
+			"events": [
+				{"id": "1", "timestamp": 9999},
+				{"id": "2", "timestamp": 8888}
+			]
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff with IgnoreArrayOrder + IgnoredFields, got: %s", diff)
+		}
+	})
+
+	t.Run("BLE notification use case - multiple characteristics", func(t *testing.T) {
+		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+			WithIgnoreArrayOrder(true),
+		)
+
+		// Wrap arrays in an object since jsonassert doesn't support root-level arrays
+		actualJSON := `{
+			"array": [
+				{"record": {"Values": {"6e400003b5a3f393e0a9e50e24dcca9e": "Hello"}}},
+				{"record": {"Values": {"2a19": "*"}}},
+				{"record": {"Values": {"6e400002b5a3f393e0a9e50e24dcca9e": "World"}}}
+			]
+		}`
+		expectedJSON := `{
+			"array": [
+				{"record": {"Values": {"6e400003b5a3f393e0a9e50e24dcca9e": "Hello"}}},
+				{"record": {"Values": {"6e400002b5a3f393e0a9e50e24dcca9e": "World"}}},
+				{"record": {"Values": {"2a19": "*"}}}
+			]
+		}`
+
+		diff := ja.diff(actualJSON, expectedJSON)
+		if diff != "" {
+			t.Errorf("Expected no diff for BLE notification case, got: %s", diff)
+		}
+	})
+}

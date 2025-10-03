@@ -231,11 +231,6 @@ func (suite *ScanTestSuite) TestScanCmd_WatchMode() {
 	}
 }
 
-// TestScanCommandSuite runs the test suite
-func TestScanCommandSuite(t *testing.T) {
-	suite.Run(t, new(ScanTestSuite))
-}
-
 func TestDisplayDevicesTable(t *testing.T) {
 	// Create devices using mock advertisements
 	logger := logrus.New()
@@ -414,4 +409,9 @@ func executeCommand(root *cobra.Command, args ...string) (string, error) {
 
 	err := root.Execute()
 	return buf.String(), err
+}
+
+// TestScanCommandSuite runs the test suite
+func TestScanCommandSuite(t *testing.T) {
+	suite.Run(t, new(ScanTestSuite))
 }

@@ -2,7 +2,12 @@ package blecli
 
 import _ "embed"
 
-// InspectLuaScript contains the embedded inspect.lua script
+// DefaultInspectLuaScript contains the embedded inspect.lua script
 //
 //go:embed examples/inspect.lua
-var InspectLuaScript string
+var DefaultInspectLuaScript string
+
+// DefaultBridgeLuaScript contains the embedded inspect.lua script
+//
+//go:embed examples/bridge.lua
+var DefaultBridgeLuaScript string

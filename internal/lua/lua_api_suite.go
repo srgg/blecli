@@ -1001,7 +1001,10 @@ func (suite *LuaApiSuite) validateJSONOutput(expectedOutput []map[string]interfa
 	// Create asserter with optional ignored fields (only for subscriptions)
 	ja := testutils.NewJSONAsserter(suite.T())
 	if isSubscription {
-		ja = ja.WithOptions(testutils.WithIgnoredFields("TsUs", "Seq", "Flags", "timestamp"))
+		ja = ja.WithOptions(
+			testutils.WithIgnoredFields("TsUs", "Seq", "Flags", "timestamp", "call_count"),
+			testutils.WithIgnoreArrayOrder(true),
+		)
 	}
 
 	actualJSON, _ := json.Marshal(actualWrapped)

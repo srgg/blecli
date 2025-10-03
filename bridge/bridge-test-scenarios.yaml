@@ -39,7 +39,7 @@ test_cases:
             values:
               - char: "2a19"
                 value: [0x42]
-    expected_stdout: "Battery notification received"
+    expected_stdout: "Battery notification received\n"
 #    wait_after: 200ms
 
   - name: "Bridge Mixed Output: Stdout and Stderr"
@@ -61,7 +61,7 @@ test_cases:
             values:
               - char: "5678"
                 value: [0xAA, 0xBB]
-    expected_stdout: "Callback executed"
+    expected_stdout: "Callback executed\n"
     expected_errors:
       - "Error from callback"
 #    wait_after: 200ms
@@ -104,20 +104,13 @@ test_cases:
 #    wait_after: 100ms
 
   - name: "Bridge Monitor2 Script: Human-Readable PTY Output with Header"
-    # GOAL: Load and execute examples/monitor.lua - bridge.go header format + notifications
+    # GOAL: Load and execute examples/bridge.lua - bridge.go header format + notifications
     #
-    # TEST SCENARIO: Load monitor.lua from file:// → validates services/characteristics →
+    # TEST SCENARIO: Load bridge.lua from file:// → validates services/characteristics →
     # prints "Bridge is Active" header → dumps notifications in compact format
     # Tests file:// protocol and proper startup validation
-    subscription:
-      mode: "EveryUpdate"
-      max_rate: 0ms
-      services:
-        - service: "180f"
-          characteristics: ["2a19"]
-        - service: "180d"
-          characteristics: ["2a37"]
-      callback_script: "file://examples/monitor.lua"
+    # NOTE: bridge.lua lists ALL services from default test peripheral (1234, 180d, 180f, 6e400001...)
+    script: "file://examples/bridge.lua"
     steps:
       - services:
           - service: "180f"
@@ -138,12 +131,26 @@ test_cases:
 
       === BLE-PTY Bridge is Active ===
       Device: 00:00:00:00:00:01
+      Service: 1234
+      Characteristics: 1
+        - 5678
+
+      Service: 180d
+      Characteristics: 2
+        - 2a37
+        - 2a38
+
       Service: 180f
       Characteristics: 1
         - 2a19
 
-      Service: 180d
-      Characteristics: 1
-        - 2a37
+      Service: 6e400001b5a3f393e0a9e50e24dcca9e
+      Characteristics: 2
+        - 6e400002b5a3f393e0a9e50e24dcca9e
+        - 6e400003b5a3f393e0a9e50e24dcca9e
 
       Bridge is running. Press Ctrl+C to stop the bridge.
+
+      [0] 2a19: 42 | B (1b)
+      [0] 2a37: 48 65 6C 6C 6F | Hello (5b)
+      [0] 2a19: FF AA BB | ... (3b)

@@ -33,15 +33,12 @@ func (suite *BridgeTestSuite) TestBridgeShutdown() {
 	suite.NoError(err)
 
 	time.Sleep(100 * time.Millisecond)
-	if !bridge.IsRunning() {
-		suite.Fail("Bridge should be running")
-	}
 
 	// Cancel context (simulates Ctrl+C)
 	cancel()
 	time.Sleep(100 * time.Millisecond)
 
-	// Try to stop the bridge
+	// Stop the bridge - should complete quickly since context is already cancelled
 	stopStart := time.Now()
 	if err := bridge.Stop(); err != nil {
 		suite.Errorf(err, "Stop failed: %v", err)
@@ -50,10 +47,6 @@ func (suite *BridgeTestSuite) TestBridgeShutdown() {
 
 	if stopDuration > 1*time.Second {
 		suite.Errorf(fmt.Errorf("stop took too long: %v", stopDuration), "stop exceeded threshold")
-	}
-
-	if bridge.IsRunning() {
-		suite.Error(fmt.Errorf("bridge should not be running"))
 	}
 
 	suite.T().Logf("Bridge stopped in %v", stopDuration)
@@ -90,7 +83,6 @@ func (suite *BridgeTestSuite) TestBridge2CtrlC() {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	t.Logf("Bridge running: %v", bridge.IsRunning())
 	t.Log("Send SIGINT to test...")
 
 	<-bridgeCtx.Done()

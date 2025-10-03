@@ -93,7 +93,7 @@ func executeInspectLuaScript(ctx context.Context, dev device.Device, logger *log
 		ctx,
 		dev,
 		logger,
-		blecli.InspectLuaScript,
+		blecli.DefaultInspectLuaScript,
 		args,
 		os.Stdout,
 		os.Stderr,

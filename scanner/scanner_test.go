@@ -217,7 +217,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 
 			// Run the actual scan with filters to check it works
 			ctx := context.Background()
-			devices, err := s.Scan(ctx, tt.scanOptions)
+			devices, err := s.Scan(ctx, tt.scanOptions, nil)
 
 			// Scan should complete successfully
 			require.NoError(suite.T(), err, "Scan should complete without error")
