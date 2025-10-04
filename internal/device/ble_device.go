@@ -2,7 +2,6 @@ package device
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -621,34 +620,3 @@ func (d *BLEDevice) hasServiceUUID(uuid string) bool {
 	}
 	return false
 }
-
-// MarshalJSON implements json.Marshaler, converting BLEDevice into a
-// DeviceInfoJSON for JSON serialization.
-func (d *BLEDevice) MarshalJSON() ([]byte, error) {
-	jd := deviceInfo2DeviceInfoJson(d)
-	return json.Marshal(jd)
-}
-
-//// UnmarshalJSON implements json.Unmarshaler, populating BLEDevice from
-//// a deviceInfoJSON representation.
-//func (d *BLEDevice) UnmarshalJSON(data []byte) error {
-//	var jd DeviceInfoJSON
-//	if err := json.Unmarshal(data, &jd); err != nil {
-//		return err
-//	}
-//
-//	// copy fields from DTO into BLEDevice
-//	d.ID = jd.ID
-//	d.Name = jd.Name
-//	d.Address = jd.Address
-//	d.RSSI = jd.RSSI
-//	d.TxPower = jd.TxPower
-//	d.Connectable = jd.Connectable
-//	d.LastSeen = jd.LastSeen
-//	d.AdvertisedServices = jd.AdvertisedServices
-//	d.ManufacturerData = jd.ManufacturerData
-//	d.ServiceData = jd.ServiceData
-//	d.DisplayName = jd.DisplayName
-//
-//	return nil
-//}

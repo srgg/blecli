@@ -23,40 +23,6 @@ type DeviceInfo interface {
 	IsExpired(timeout time.Duration) bool
 }
 
-type DeviceInfoJSON struct {
-	ID                 string            `json:"id"`
-	Name               string            `json:"name"`
-	Address            string            `json:"address"`
-	RSSI               int               `json:"rssi"`
-	TxPower            *int              `json:"txPower,omitempty"`
-	Connectable        bool              `json:"connectable"`
-	LastSeen           time.Time         `json:"lastSeen"`
-	AdvertisedServices []string          `json:"advertisedServices,omitempty"`
-	ManufacturerData   []byte            `json:"manufData,omitempty"`
-	ServiceData        map[string][]byte `json:"serviceData,omitempty"`
-}
-
-func deviceInfo2DeviceInfoJson(d DeviceInfo) DeviceInfoJSON {
-	// Convert []Service to []string
-	svcStrUUIDS := make([]string, len(d.GetAdvertisedServices()))
-	for i, s := range d.GetAdvertisedServices() {
-		svcStrUUIDS[i] = s
-	}
-
-	return DeviceInfoJSON{
-		ID:                 d.GetID(),
-		Name:               d.GetName(),
-		Address:            d.GetAddress(),
-		RSSI:               d.GetRSSI(),
-		TxPower:            d.GetTxPower(),
-		Connectable:        d.IsConnectable(),
-		LastSeen:           d.GetLastSeen(),
-		AdvertisedServices: svcStrUUIDS,
-		ManufacturerData:   d.GetManufacturerData(),
-		ServiceData:        d.GetServiceData(),
-	}
-}
-
 // Device defines the interface for all device types
 type Device interface {
 	DeviceInfo
