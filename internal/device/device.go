@@ -86,8 +86,8 @@ type Characteristic interface {
 	GetUUID() string
 	GetProperties() string
 	GetDescriptors() []Descriptor
-	GetValue() []byte
-	SetValue([]byte)
+	//GetValue() []byte
+	//SetValue([]byte)
 }
 
 // Descriptor represents a GATT descriptor interface

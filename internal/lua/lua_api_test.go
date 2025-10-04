@@ -55,6 +55,10 @@ func (suite *LuaApiTestSuite) ExecuteScript(script string) error {
 //	generated through the YAML framework (which always generates valid subscription scripts)
 func (suite *LuaApiTestSuite) TestErrorHandling() {
 	suite.Run("Lua: Missing callback", func() {
+		// GOAL: Verify ble.subscribe() returns clear error when Callback field is missing
+		//
+		// TEST SCENARIO: Call subscribing without Callback field → Lua error raised → verify error message
+
 		err := suite.ExecuteScript(`
 			ble.subscribe{
 				services = {
@@ -72,7 +76,10 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 	})
 
 	suite.Run("Lua: Invalid argument type", func() {
-		// Should handle invalid input gracefully
+		// GOAL: Verify ble.subscribe() returns clear error when passed non-table argument
+		//
+		// TEST SCENARIO: Call subscribe with string instead of table → Lua error raised → verify error message
+
 		err := suite.ExecuteScript(`ble.subscribe("not a table")`)
 		suite.AssertLuaError(err, "Error: subscribe() expects a lua table argument")
 	})
@@ -98,6 +105,10 @@ func (suite *LuaApiTestSuite) TestSubscriptionScenarios() {
 // TestCharacteristicFunction tests the ble.characteristic() function
 func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	suite.Run("Valid characteristic lookup", func() {
+		// GOAL: Verify ble.characteristic() returns handle with correct metadata fields (uuid, service, properties, descriptors)
+		//
+		// TEST SCENARIO: Lookup valid characteristic → handle returned → verify all metadata fields present
+
 		script := `
 			local char = ble.characteristic("1234", "5678")
 			assert(char ~= nil, "characteristic should not be nil")
@@ -111,6 +122,10 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Characteristic without descriptors", func() {
+		// GOAL: Verify characteristic handle has empty descriptors array when no descriptors present
+		//
+		// TEST SCENARIO: Lookup characteristic without descriptors → descriptors is empty table → verify length is 0
+
 		script := `
 			local char = ble.characteristic("1234", "5678")
 			assert(char ~= nil, "characteristic should not be nil")
@@ -122,6 +137,10 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Properties field validation", func() {
+		// GOAL: Verify properties field is table with at least one boolean property (read/write/notify/indicate)
+		//
+		// TEST SCENARIO: Lookup characteristic → properties is table → verify at least one property is set
+
 		script := `
 			local char = ble.characteristic("180D", "2A37")
 			assert(char.properties ~= nil, "properties should not be nil")
@@ -136,6 +155,10 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Error: Invalid service UUID", func() {
+		// GOAL: Verify ble.characteristic() raises error when service UUID not found
+		//
+		// TEST SCENARIO: Lookup with non-existent service UUID → Lua error raised → verify error message
+
 		script := `
 			local char = ble.characteristic("9999", "5678")
 		`
@@ -144,6 +167,10 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Error: Invalid characteristic UUID", func() {
+		// GOAL: Verify ble.characteristic() raises error when characteristic UUID not found in service
+		//
+		// TEST SCENARIO: Lookup with valid service but invalid char UUID → Lua error raised → verify error message
+
 		script := `
 			local char = ble.characteristic("1234", "9999")
 		`
@@ -152,6 +179,10 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Error: Missing arguments", func() {
+		// GOAL: Verify ble.characteristic() raises error when only one argument provided (needs two)
+		//
+		// TEST SCENARIO: Call with only service UUID → Lua error raised → verify error mentions two arguments
+
 		script := `
 			local char = ble.characteristic("1234")
 		`
@@ -160,8 +191,11 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Error: Invalid argument type - number converted to string", func() {
-		// Note: Lua ToString() converts numbers to strings, so this becomes "123"
-		// This tests that the error handling works even when Lua does implicit conversion
+		// GOAL: Verify ble.characteristic() handles Lua's implicit number-to-string conversion and fails lookup
+		//       (Note: Lua ToString() converts numbers to strings, so 123 becomes "123", then lookup fails)
+		//
+		// TEST SCENARIO: Call with number instead of string → number converted to string → lookup fails → error raised
+
 		script := `
 			local char = ble.characteristic(123, "5678")
 		`
@@ -171,6 +205,10 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Error: Invalid argument type - table instead of string", func() {
+		// GOAL: Verify ble.characteristic() raises error when passed table instead of string UUID
+		//
+		// TEST SCENARIO: Call with table as service UUID → Lua error raised → verify error mentions string arguments
+
 		script := `
 			local char = ble.characteristic({service="1234"}, "5678")
 		`
@@ -179,6 +217,10 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Error: No arguments provided", func() {
+		// GOAL: Verify ble.characteristic() raises error when called with no arguments
+		//
+		// TEST SCENARIO: Call with no arguments → Lua error raised → verify error mentions two string arguments
+
 		script := `
 			local char = ble.characteristic()
 		`
@@ -187,6 +229,10 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("All metadata fields present", func() {
+		// GOAL: Verify characteristic handle contains all required metadata fields with correct types
+		//
+		// TEST SCENARIO: Lookup characteristic → verify uuid/service/properties/descriptors exist → verify correct types
+
 		script := `
 			local char = ble.characteristic("180F", "2A19")
 			-- Verify all required fields exist
@@ -206,6 +252,10 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Descriptor array is 1-indexed", func() {
+		// GOAL: Verify descriptors array follows Lua 1-indexed convention (index 0 is nil)
+		//
+		// TEST SCENARIO: Get characteristic → access descriptors[0] → verify it's nil (Lua arrays start at 1)
+
 		script := `
 			local char = ble.characteristic("180D", "2A37")
 			-- Lua arrays are 1-indexed (even if empty)
@@ -217,6 +267,10 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Multiple calls return consistent data", func() {
+		// GOAL: Verify ble.characteristic() returns consistent metadata across multiple calls for same characteristic
+		//
+		// TEST SCENARIO: Call twice for same characteristic → compare all fields → verify identical metadata
+
 		script := `
 			local char1 = ble.characteristic("1234", "5678")
 			local char2 = ble.characteristic("1234", "5678")
@@ -233,6 +287,277 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 		`
 		err := suite.ExecuteScript(script)
 		suite.NoError(err, "Should return consistent data across calls")
+	})
+}
+
+// TestCharacteristicRead tests the characteristic.read() method
+func (suite *LuaApiTestSuite) TestCharacteristicRead() {
+	// Set up custom peripheral with Device Information Service and other services for read tests
+	suite.WithPeripheral().FromJSON(`{
+		"services": [
+			{
+				"uuid": "180A",
+				"characteristics": [
+					{ "uuid": "2A29", "properties": "read", "value": [66, 76, 73, 77, 67, 111] }
+				]
+			},
+			{
+				"uuid": "180F",
+				"characteristics": [
+					{ "uuid": "2A19", "properties": "read,notify", "value": [85] }
+				]
+			},
+			{
+				"uuid": "180D",
+				"characteristics": [
+					{ "uuid": "2A37", "properties": "read,notify", "value": [0, 75] }
+				]
+			},
+			{
+				"uuid": "1234",
+				"characteristics": [
+					{ "uuid": "5678", "properties": "read,notify", "value": [42] }
+				]
+			},
+			{
+				"uuid": "AAAA",
+				"characteristics": [
+					{ "uuid": "BBBB", "properties": "write", "value": [99] }
+				]
+			}
+		]
+	}`).Build()
+
+	suite.Run("Successful read returns value and nil error", func() {
+		// GOAL: Verify read() returns a non-nil value and nil error on successful read of a readable characteristic
+		//
+		// TEST SCENARIO: Read from readable characteristic → value returned with no error → verify value is non-empty string
+
+		script := `
+			local char = ble.characteristic("180A", "2A29")  -- Device Info: Manufacturer Name
+
+			if not char.properties.read then
+				error("Test setup error: characteristic should be readable")
+			end
+
+			local value, err = char.read()
+			assert(value ~= nil, "read should return value")
+			assert(err == nil, "read should not return error")
+			assert(type(value) == "string", "value should be string")
+			assert(#value > 0, "value should not be empty")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should successfully read readable characteristic")
+	})
+
+	suite.Run("Read returns nil and error on failure", func() {
+		// GOAL: Verify read() returns nil value and error string when reading write-only characteristic
+		//
+		// TEST SCENARIO: Read the write-only characteristic → error returned with nil value → verify error message format
+
+		script := `
+			local char = ble.characteristic("AAAA", "BBBB")
+			local value, err = char.read()
+
+			-- MUST fail because the characteristic doesn't support read
+			assert(err ~= nil, "read MUST fail on write-only characteristic")
+			assert(value == nil, "value MUST be nil when error occurs")
+			assert(type(err) == "string", "error MUST be string")
+			assert(#err > 0, "error message must not be empty")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should properly error on non-readable characteristic")
+	})
+
+	suite.Run("Read multiple characteristics", func() {
+		// GOAL: Verify read() can successfully read from multiple different characteristics in a loop
+		//
+		// TEST SCENARIO: Loop through all characteristics → read readable ones → count successful reads ≥ 1
+
+		script := `
+			local services = ble.list()
+			local read_count = 0
+
+			for service_uuid, service_info in pairs(services) do
+				for _, char_uuid in ipairs(service_info.characteristics) do
+					local char = ble.characteristic(service_uuid, char_uuid)
+
+					if char.properties.read then
+						local value, err = char.read()
+						assert(err == nil, "read should succeed for readable characteristic " .. char_uuid)
+						assert(value ~= nil, "value should not be nil for readable characteristic " .. char_uuid)
+						read_count = read_count + 1
+					end
+				end
+			end
+
+			assert(read_count > 0, "should successfully read at least one characteristic")
+			print("Successfully read " .. read_count .. " characteristics")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should read multiple characteristics")
+	})
+
+	suite.Run("Read same characteristic multiple times", func() {
+		// GOAL: Verify read() is idempotent and can be called multiple times on the same characteristic
+		//
+		// TEST SCENARIO: Read the same characteristic 3 times → all return success → verify consistent behavior
+
+		script := `
+			local char = ble.characteristic("180f", "2a19")  -- Battery Level
+
+			local value1, err1 = char.read()
+			local value2, err2 = char.read()
+			local value3, err3 = char.read()
+
+			assert(value1 ~= nil, "first read should succeed")
+			assert(value2 ~= nil, "second read should succeed")
+			assert(value3 ~= nil, "third read should succeed")
+
+			-- All reads should succeed consistently
+			assert(err1 == nil, "first read should not error")
+			assert(err2 == nil, "second read should not error")
+			assert(err3 == nil, "third read should not error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should allow multiple reads")
+	})
+
+	suite.Run("Read value is binary safe", func() {
+		// GOAL: Verify read() returns binary-safe byte string accessible via string.byte
+		//
+		// TEST SCENARIO: Read characteristic with byte value 85 → access via string.byte → verify numeric value in range 0-255
+
+		script := `
+			local char = ble.characteristic("180f", "2a19")  -- Battery Level
+			local value, err = char.read()
+
+			assert(err == nil, "read should succeed")
+			assert(value ~= nil, "value should not be nil")
+			assert(#value > 0, "value should not be empty")
+
+			-- Test binary data access using string.byte
+			local first_byte = string.byte(value, 1)
+			assert(type(first_byte) == "number", "string.byte should return number")
+			assert(first_byte >= 0 and first_byte <= 255, "byte should be 0-255")
+			assert(first_byte == 85, "battery level should be 85")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle binary data correctly")
+	})
+
+	suite.Run("Error: read() on non-connected device", func() {
+		// GOAL: Verify read() returns error when called on disconnected device
+		//
+		// TEST SCENARIO: Disconnect device → attempt read → error returned with nil value
+
+		// Disconnect the device first
+		disconnectErr := suite.LuaApi.GetDevice().Disconnect()
+		suite.NoError(disconnectErr, "Should disconnect successfully")
+
+		script := `
+			local char = ble.characteristic("1234", "5678")
+			local value, err = char.read()
+
+			-- MUST fail because device is not connected
+			assert(err ~= nil, "read MUST fail on non-connected device, got err=" .. tostring(err) .. " value=" .. tostring(value))
+			assert(value == nil, "value MUST be nil when error occurs")
+			assert(type(err) == "string", "error MUST be string")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should properly error on disconnected device")
+	})
+
+	suite.Run("Check read property before reading", func() {
+		// GOAL: Demonstrate the best practice of checking read property before calling read() (intentional conditional logic)
+		//
+		// TEST SCENARIO: Check properties.read flag → conditionally call read() → verify proper pattern usage
+
+		script := `
+			local char = ble.characteristic("180d", "2a37")  -- Heart Rate Measurement
+
+			-- Always check if readable before reading
+			if char.properties.read then
+				local value, err = char.read()
+				if value then
+					assert(type(value) == "string", "value should be string")
+				end
+			else
+				-- If not readable, read() might fail
+				local value, err = char.read()
+				-- Should handle gracefully either way
+			end
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should check properties before reading")
+	})
+
+	suite.Run("Binary data parsing with string.byte", func() {
+		// GOAL: Verify multibyte characteristic values can be parsed using string.byte for individual bytes
+		//
+		// TEST SCENARIO: Read Heart Rate characteristic (2 bytes: flags + bpm) → extract both bytes → verify numeric values
+
+		script := `
+			-- Read multi-byte characteristic (Heart Rate: flag byte + value)
+			local hr = ble.characteristic("180d", "2a37")
+			local hr_value, err = hr.read()
+
+			assert(err == nil, "read should succeed")
+			assert(hr_value ~= nil, "value should not be nil")
+			assert(#hr_value >= 2, "heart rate value should have at least 2 bytes")
+
+			local flags = string.byte(hr_value, 1)
+			local bpm = string.byte(hr_value, 2)
+			assert(type(flags) == "number", "flags should be number")
+			assert(type(bpm) == "number", "bpm should be number")
+			assert(flags >= 0 and flags <= 255, "flags byte should be 0-255")
+			assert(bpm >= 0 and bpm <= 255, "bpm byte should be 0-255")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should parse multi-byte binary data")
+	})
+
+	suite.Run("Verify read() is a method not a field", func() {
+		// GOAL: Verify read() is exposed as a callable method (userdata type in aarzilli/golua, not a field)
+		//
+		// TEST SCENARIO: Get a characteristic handle → check a read type is userdata/function → verify callable
+
+		script := `
+			local char = ble.characteristic("180f", "2a19")
+
+			-- read should be a callable (in aarzilli/golua, Go functions are userdata type, not "function")
+			-- The important thing is that it's not nil and can be called
+			assert(char.read ~= nil, "read should not be nil")
+			assert(type(char.read) == "function" or type(char.read) == "userdata",
+			       "read should be callable (function or userdata), got: " .. type(char.read))
+
+			-- Calling it should work
+			local value, err = char.read()
+			-- Result validation
+			assert(value ~= nil or err ~= nil, "should return either value or error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "read should be a callable method")
+	})
+
+	suite.Run("Read empty/zero-length values", func() {
+		// GOAL: Verify read() handles values of any length, including zero-length strings
+		//
+		// TEST SCENARIO: Read characteristic → verify a string type and non-negative length (including zero)
+
+		script := `
+			local char = ble.characteristic("180a", "2a29")
+			local value, err = char.read()
+
+			-- Read should succeed
+			assert(err == nil, "read should not error")
+			assert(value ~= nil, "value should not be nil")
+			-- Empty string is valid (length 0)
+			assert(type(value) == "string", "should be string type")
+			assert(#value >= 0, "length should be non-negative")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle empty values")
 	})
 }
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aarzilli/golua/lua"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/testutils"
 	"github.com/stretchr/testify/suite"
@@ -314,6 +315,132 @@ func (suite *LuaEngineTestSuite) TestExecuteScript_BlockedFunctions() {
 			suite.Contains(err.Error(), "is blocked", "Error should mention function is blocked")
 		})
 	}
+}
+
+// TestSafeWrapGoFunction tests that SafeWrapGoFunction properly handles panics
+func (suite *LuaEngineTestSuite) TestSafeWrapGoFunction() {
+	suite.Run("ExpectedLuaError_PropagatesCorrectly", func() {
+		// Register a Go function that raises a Lua error
+		suite.luaEngine.DoWithState(func(L *lua.State) interface{} {
+			L.PushGoFunction(suite.luaEngine.SafeWrapGoFunction("test_expected_error", func(L *lua.State) int {
+				L.RaiseError("expected error message")
+				return 0
+			}))
+			L.SetGlobal("test_expected_error")
+			return nil
+		})
+
+		// Execute script that calls the function
+		script := `test_expected_error()`
+		err := suite.luaEngine.ExecuteScript(context.Background(), script)
+
+		// Should get a Lua error with the original message
+		suite.Error(err, "Should return error from L.RaiseError")
+		suite.Contains(err.Error(), "expected error message", "Error message should propagate correctly")
+	})
+
+	suite.Run("UnexpectedPanic_ConvertedToLuaError", func() {
+		// Reset engine for this sub-test
+		suite.luaEngine.Reset()
+
+		// Register a Go function that panics with a non-Lua error
+		suite.luaEngine.DoWithState(func(L *lua.State) interface{} {
+			L.PushGoFunction(suite.luaEngine.SafeWrapGoFunction("test_unexpected_panic", func(L *lua.State) int {
+				panic("unexpected Go panic")
+			}))
+			L.SetGlobal("test_unexpected_panic")
+			return nil
+		})
+
+		// Execute script that calls the function
+		script := `test_unexpected_panic()`
+		err := suite.luaEngine.ExecuteScript(context.Background(), script)
+
+		// Should get a Lua error indicating panic in Go
+		suite.Error(err, "Should return error from unexpected panic")
+		suite.Contains(err.Error(), "panicked in Go", "Error should indicate panic in Go function")
+	})
+
+	suite.Run("NormalExecution_WorksCorrectly", func() {
+		// Register a Go function that works normally
+		suite.luaEngine.DoWithState(func(L *lua.State) interface{} {
+			L.PushGoFunction(suite.luaEngine.SafeWrapGoFunction("test_normal", func(L *lua.State) int {
+				L.PushString("success")
+				return 1
+			}))
+			L.SetGlobal("test_normal")
+			return nil
+		})
+
+		// Execute script that calls the function
+		script := `
+			result = test_normal()
+			print(result)
+		`
+		err := suite.luaEngine.ExecuteScript(context.Background(), script)
+
+		// Should execute successfully
+		suite.NoError(err, "Normal function should execute without error")
+
+		time.Sleep(10 * time.Millisecond)
+		output, _ := suite.luaOutputCapture.ConsumePlainText()
+		suite.Contains(output, "success", "Function should return correct value")
+	})
+
+	suite.Run("StructPanic_ConvertedToLuaError", func() {
+		type CustomError struct {
+			Message string
+		}
+
+		// Reset engine for this sub-test
+		suite.luaEngine.Reset()
+
+		// Register a Go function that panics with a struct
+		suite.luaEngine.DoWithState(func(L *lua.State) interface{} {
+			L.PushGoFunction(suite.luaEngine.SafeWrapGoFunction("test_struct_panic", func(L *lua.State) int {
+				panic(CustomError{Message: "custom error"})
+			}))
+			L.SetGlobal("test_struct_panic")
+			return nil
+		})
+
+		// Execute script that calls the function
+		script := `test_struct_panic()`
+		err := suite.luaEngine.ExecuteScript(context.Background(), script)
+
+		// Should get a Lua error indicating panic in Go
+		suite.Error(err, "Should return error from struct panic")
+		suite.Contains(err.Error(), "panicked in Go", "Error should indicate panic in Go function")
+	})
+
+	suite.Run("MultipleWrappedFunctions_IndependentErrorHandling", func() {
+		// Register two functions - one that errors, one that works
+		suite.luaEngine.DoWithState(func(L *lua.State) interface{} {
+			L.PushGoFunction(suite.luaEngine.SafeWrapGoFunction("good_func", func(L *lua.State) int {
+				L.PushString("good")
+				return 1
+			}))
+			L.SetGlobal("good_func")
+
+			L.PushGoFunction(suite.luaEngine.SafeWrapGoFunction("bad_func", func(L *lua.State) int {
+				L.RaiseError("bad function error")
+				return 0
+			}))
+			L.SetGlobal("bad_func")
+			return nil
+		})
+
+		// Test good function works
+		script1 := `print(good_func())`
+		err1 := suite.luaEngine.ExecuteScript(context.Background(), script1)
+		suite.NoError(err1, "Good function should work")
+
+		// Test bad function errors correctly
+		script2 := `bad_func()`
+		err2 := suite.luaEngine.ExecuteScript(context.Background(), script2)
+		suite.Error(err2, "Bad function should error")
+		suite.Contains(err2.Error(), "bad function error", "Error should have correct message")
+	})
 }
 
 // TestLuaEngineTestSuite runs the test suite using testify/suite

@@ -37,3 +37,6 @@ internal/testutils/mocks/
 
 # Code coverage reports
 coverage/
+
+# PlatformIO build
+.pio/

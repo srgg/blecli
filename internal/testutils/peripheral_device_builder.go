@@ -169,6 +169,13 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 			mockClient.On("Subscribe", char, false, mock.Anything).Return(nil)
 			mockClient.On("Unsubscribe", char, false).Return(nil)
 			mockClient.On("Unsubscribe", char, true).Return(nil)
+
+			// Add read expectations - return value only if characteristic supports reading
+			if char.Property&blelib.CharRead != 0 {
+				mockClient.On("ReadCharacteristic", char).Return(char.Value, nil)
+			} else {
+				mockClient.On("ReadCharacteristic", char).Return(nil, fmt.Errorf("characteristic does not support read"))
+			}
 		}
 	}
 

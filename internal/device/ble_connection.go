@@ -97,13 +97,14 @@ type BLECharacteristic struct {
 	descriptors []Descriptor
 	value       []byte
 	BLEChar     *ble.Characteristic
+	connection  *BLEConnection // reference to parent connection for reading
 
 	updates chan *BLEValue
 	mu      sync.RWMutex
 	subs    []func(*BLEValue)
 }
 
-func NewCharacteristic(c *ble.Characteristic, buffer int) *BLECharacteristic {
+func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection) *BLECharacteristic {
 	return &BLECharacteristic{
 		uuid:        c.UUID.String(),
 		BLEChar:     c,
@@ -111,6 +112,7 @@ func NewCharacteristic(c *ble.Characteristic, buffer int) *BLECharacteristic {
 		updates:     make(chan *BLEValue, buffer),
 		descriptors: []Descriptor{},
 		subs:        nil,
+		connection:  conn,
 	}
 }
 
@@ -162,6 +164,28 @@ func (c *BLECharacteristic) SetValue(value []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.value = value
+}
+
+// Read reads the current value of the characteristic from the device
+func (c *BLECharacteristic) Read() ([]byte, error) {
+	if c.connection == nil {
+		return nil, fmt.Errorf("no connection available for reading")
+	}
+
+	if c.BLEChar == nil {
+		return nil, fmt.Errorf("characteristic not initialized")
+	}
+
+	if c.connection.client == nil {
+		return nil, fmt.Errorf("not connected to device")
+	}
+
+	data, err := c.connection.client.ReadCharacteristic(c.BLEChar)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read characteristic: %w", err)
+	}
+
+	return data, nil
 }
 
 // ----------------------------
@@ -374,8 +398,8 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 			}).Debug("Found characteristic UUID")
 			characteristic, ok := svc.Characteristics[uuid]
 			if !ok {
-				// Create BLECharacteristic
-				characteristic = NewCharacteristic(bleCharacteristic, 128)
+				// Create BLECharacteristic with connection reference for reading
+				characteristic = NewCharacteristic(bleCharacteristic, 128, c)
 				svc.Characteristics[uuid] = characteristic
 			} else {
 				// Update live handle

@@ -49,6 +49,21 @@ func (api *BLEAPI2) GetDevice() device.Device {
 	return api.device
 }
 
+// SafePushGoFunction pushes a function name and safe-wrapped Go function onto the Lua stack.
+// The function will be automatically wrapped with panic recovery and error logging.
+// After calling this, you typically call L.SetTable(-3) to add it to the parent table.
+//
+// Example:
+//
+//	api.SafePushGoFunction(L, "read", func(L *lua.State) int {
+//	    // your implementation
+//	})
+//	L.SetTable(-3)
+func (api *BLEAPI2) SafePushGoFunction(L *lua.State, name string, fn func(*lua.State) int) {
+	L.PushString(name)
+	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction(name+"()", fn))
+}
+
 // parseStreamPattern converts a string pattern to a device.StreamPattern
 func parseStreamPattern(pattern string) device.StreamMode {
 	switch pattern {
@@ -122,8 +137,7 @@ func (api *BLEAPI2) registerLuaAPI() {
 
 // registerSubscribeFunction registers the ble.subscribe() function
 func (api *BLEAPI2) registerSubscribeFunction(L *lua.State) {
-	L.PushString("subscribe")
-	L.PushGoFunction(func(L *lua.State) int {
+	api.SafePushGoFunction(L, "subscribe", func(L *lua.State) int {
 		// Expect a table as the first argument
 		if !L.IsTable(1) {
 			L.RaiseError("Error: subscribe() expects a lua table argument")
@@ -151,10 +165,13 @@ func (api *BLEAPI2) registerSubscribeFunction(L *lua.State) {
 
 // registerListFunction registers the ble.list() function
 func (api *BLEAPI2) registerListFunction(L *lua.State) {
-	connection := api.device.GetConnection()
-
-	L.PushString("list")
-	L.PushGoFunction(func(L *lua.State) int {
+	api.SafePushGoFunction(L, "list", func(L *lua.State) int {
+		// Get connection when function is called, not when registered
+		connection := api.device.GetConnection()
+		if connection == nil {
+			L.NewTable() // Return empty table if no connection
+			return 1
+		}
 		services := connection.GetServices()
 		L.NewTable()
 		for uuid, service := range services {
@@ -493,10 +510,7 @@ func (api *BLEAPI2) callLuaCallback(callbackRef int, record *device.Record) {
 
 // registerCharacteristicFunction registers the ble.characteristic() function
 func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
-	connection := api.device.GetConnection()
-
-	L.PushString("characteristic")
-	L.PushGoFunction(func(L *lua.State) int {
+	api.SafePushGoFunction(L, "characteristic", func(L *lua.State) int {
 		// Validate arguments
 		if !L.IsString(1) || !L.IsString(2) {
 			L.RaiseError("characteristic(service_uuid, char_uuid) expects two string arguments")
@@ -505,6 +519,13 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 
 		serviceUUID := L.ToString(1)
 		charUUID := L.ToString(2)
+
+		// Get connection when function is called, not when registered
+		connection := api.device.GetConnection()
+		if connection == nil {
+			L.RaiseError("no connection available")
+			return 0
+		}
 
 		// Get characteristic from connection
 		char, err := connection.GetCharacteristic(serviceUUID, charUUID)
@@ -566,8 +587,24 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 		}
 		L.SetTable(-3)
 
-		// TODO: Add methods (read, write, subscribe, unsubscribe) if needed
-		// For now, inspect.lua only needs the metadata fields above
+		// Method: read() - reads the characteristic value from the device
+		// Returns (value, nil) on success or (nil, error_message) on failure
+		api.SafePushGoFunction(L, "read", func(L *lua.State) int {
+			value, err := char.Read()
+			if err != nil {
+				// Return (nil, error_message) for expected errors
+				L.PushNil()
+				L.PushString(fmt.Sprintf("read() failed: %v", err))
+				return 2
+			}
+			// Return (value, nil) on success
+			L.PushString(string(value))
+			L.PushNil()
+			return 2
+		})
+		L.SetTable(-3)
+
+		// TODO: Add methods (write, subscribe, unsubscribe) if needed
 
 		return 1
 	})

@@ -249,21 +249,21 @@ func (suite *LuaApiSuite) SetupTest() {
 							{
 								"uuid": "5678",
 								"properties": "read,notify",
-								"value": [0]
+								"value": []
 							}
 						]
 					},
 					{
 						"uuid": "180D",
 						"characteristics": [
-							{ "uuid": "2A37", "properties": "read,notify", "value": [0] },
-							{ "uuid": "2A38", "properties": "read,notify", "value": [0] }
+							{ "uuid": "2A37", "properties": "read,notify", "value": [] },
+							{ "uuid": "2A38", "properties": "read,notify", "value": [] }
 						]
 					},
 					{
 						"uuid": "180F",
 						"characteristics": [
-							{ "uuid": "2A19", "properties": "read,notify", "value": [0] }
+							{ "uuid": "2A19", "properties": "read,notify", "value": [] }
 						]
 					}
 				]
@@ -335,6 +335,7 @@ func (suite *LuaApiSuite) createLuaApi() *BLEAPI2 {
 	// Connect with mocked device factory (should succeed since we set up mocks in SetupSuite)
 	err := dev.Connect(ctx, opts)
 	suite.NoError(err, "Mock connection should succeed with mocked device factory")
+
 	return NewBLEAPI2(dev, suite.Logger)
 }
 
@@ -540,12 +541,6 @@ func (suite *LuaApiSuite) LuaOutputAsJSON() ([]LuaSubscriptionCallbackData, erro
 		return nil, fmt.Errorf("error consuming lua output: %v", err)
 	}
 
-	// DEBUG: Log the raw Lua output for troubleshooting JSON parsing issues
-	suite.T().Logf("DEBUG: Raw Lua stdout (%d chars): %q", len(output), output)
-	if len(collectedErrors) > 0 {
-		suite.T().Logf("DEBUG: Collected %d stderr errors", len(collectedErrors))
-	}
-
 	suite.Equal(int64(0), suite.luaOutputCapture.GetMetrics().ErrorsOccurred, "error occurred on lua output")
 
 	// Bulletproof detection: try single JSON first, fallback to JSONL
@@ -643,7 +638,8 @@ func (suite *LuaApiSuite) ensurePeripheralService(serviceUUID string, characteri
 	if !serviceExists {
 		svcBuilder := suite.PeripheralBuilder.WithService(serviceUUID)
 		for _, charUUID := range characteristicUUIDs {
-			svcBuilder.WithCharacteristic(charUUID, "read,notify", []byte{0})
+			// Use empty byte slice so char.read() returns empty string (no value in output)
+			svcBuilder.WithCharacteristic(charUUID, "read,notify", []byte{})
 		}
 	}
 }

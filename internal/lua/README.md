@@ -300,7 +300,7 @@ ble.subscribe{
 ```
 
 ### `ble.characteristic(service_uuid, char_uuid)` → `handle`
-Returns a characteristic handle with metadata.
+Returns a characteristic handle with metadata and methods.
 
 **Handle fields:**
 - `uuid` (string) - Characteristic UUID
@@ -312,29 +312,24 @@ Returns a characteristic handle with metadata.
   - `indicate` (boolean) - Supports indications
 - `descriptors` (array) - Array of descriptor UUIDs (1-indexed)
 
-**Example: Metadata inspection**
+**Handle methods:**
+- `read()` → `data, error` - Reads characteristic value from device
+
+**Example: Read characteristic value**
 ```lua
-local hr_char = ble.characteristic("180d", "2a37")
+local char = ble.characteristic("180a", "2a29")  -- Device Info: Manufacturer Name
 
-print("UUID:", hr_char.uuid)
-print("Service:", hr_char.service)
-
--- Check properties
-if hr_char.properties.read then
-    print("Supports READ")
-end
-
-if hr_char.properties.notify then
-    print("Supports NOTIFY")
-end
-
--- List descriptors
-for i, desc_uuid in ipairs(hr_char.descriptors) do
-    print("  Descriptor:", desc_uuid)
+if char.properties.read then
+    local value, err = char.read()
+    if value then
+        print("Manufacturer:", value)
+    else
+        print("Read failed:", err)
+    end
 end
 ```
 
-**Example: Inspect all characteristics**
+**Example: Inspect and read all readable characteristics**
 ```lua
 local services = ble.list()
 
@@ -350,6 +345,14 @@ for service_uuid, service_info in pairs(services) do
         if char.properties.notify then io.write("N") end
         if char.properties.indicate then io.write("I") end
         io.write("]\n")
+
+        -- Read value if readable
+        if char.properties.read then
+            local value, err = char.read()
+            if value then
+                print("    Value:", value)
+            end
+        end
     end
 end
 ```
@@ -359,8 +362,10 @@ end
 Service: 180d
   Char: 2a37 [RN]
   Char: 2a38 [R]
+    Value: Body Sensor Location
 Service: 180f
   Char: 2a19 [RN]
+    Value: 85
 ```
 
 ---
@@ -410,7 +415,7 @@ ble.unsubscribe("180d", "2a37")
 ble.unsubscribe()
 ```
 
-**Note:** The `ble.characteristic()` function is already implemented (see above), but currently only returns metadata. The handle methods (`read()`, `write()`, `subscribe()`, etc.) will be added in future updates.
+**Note:** The handle-based `read()` method is already implemented. The function-based API and other handle methods (`write()`, `subscribe()`, etc.) will be added in future updates.
 
 ---
 
@@ -427,21 +432,118 @@ ble.unsubscribe()
 - When metadata access is needed
 - 6× performance improvement for 1000+ operations
 
-Both approaches coexist - use whichever fits your use case.
+Both approaches will coexist - use whichever fits your use case.
 
 ---
 
-## Current Limitations
+## Current Status
 
-- ⚠️ **No read operations** - Cannot read characteristic values on demand
-- ⚠️ **No write operations** - Cannot write to characteristics
-- ⚠️ **No unsubscribe** - Subscriptions run indefinitely
-- ⚠️ **No service discovery from Lua** - Must know service/characteristic UUIDs beforehand (use `ble.list()` after connection)
-
-**Available features:**
+**✅ Available features:**
+- ✅ **Read operations** - `handle.read()` reads characteristic values on demand
 - ✅ **Characteristic inspection** - `ble.characteristic()` returns metadata (UUID, service, properties, descriptors)
 - ✅ **Service listing** - `ble.list()` enumerates all GATT services and characteristics
 - ✅ **Device information** - `ble.device` provides device metadata and advertisement data
 - ✅ **Subscriptions** - `ble.subscribe()` supports notifications/indications with multiple streaming modes
 
-Remaining limitations will be addressed by the upcoming API extensions described above.
+**⚠️ Planned features:**
+- ⚠️ **Write operations** - Cannot write to characteristics yet
+- ⚠️ **Unsubscribe** - Subscriptions run indefinitely (no way to stop them)
+- ⚠️ **Function-based API** - Simplified `ble.read()`, `ble.write()` not yet available
+
+These will be addressed by the upcoming API extensions described above.
+
+---
+
+# Developer Documentation
+
+## Panic Recovery for Go Functions Exposed to Lua
+
+### Critical Requirement
+
+**ALL Go functions exposed to Lua MUST be wrapped with panic recovery** to prevent crashes and ensure proper error handling.
+
+### Implementation
+
+#### For BLE API Functions
+
+Use `BLEAPI2.SafePushGoFunction()` helper:
+
+```go
+// Correct - wrapped with SafePushGoFunction
+api.SafePushGoFunction(L, "read", func(L *lua.State) int {
+    // Your implementation
+    // Can safely use L.RaiseError() for expected errors
+    L.RaiseError("invalid argument")
+    return 0
+})
+L.SetTable(-3)
+```
+
+#### For Engine-Level Functions
+
+Use `LuaEngine.SafeWrapGoFunction()`:
+
+```go
+// Correct - wrapped with SafeWrapGoFunction
+L.PushGoFunction(e.SafeWrapGoFunction("print()", func(L *lua.State) int {
+    // Your implementation
+    return 0
+}))
+L.SetGlobal("print")
+```
+
+### Panic Recovery Behavior
+
+The wrapper handles panics as follows:
+
+1. **Expected Lua Errors** (`*lua.LuaError` from `L.RaiseError()`)
+   - Re-panicked as-is to propagate to Lua runtime
+   - Error message preserved exactly
+
+2. **Unexpected Panics** (strings, structs, nil pointer, etc.)
+   - Caught and logged with full stack trace for debugging
+   - Converted to clean Lua error: `"function_name() panicked in Go"`
+   - Prevents process crash
+
+### Currently Wrapped Functions
+
+All Go functions exposed to Lua are wrapped:
+
+**BLE API (`lua_api.go`):**
+- ✅ `ble.subscribe()`
+- ✅ `ble.list()`
+- ✅ `ble.characteristic()`
+- ✅ `char.read()` (characteristic handle method)
+
+**Engine Functions (`lua_engine.go`):**
+- ✅ `print()` (overridden for output capture)
+- ✅ `io.write()` (overridden for output capture)
+
+**Blocked Functions:**
+- Stub functions that call `L.RaiseError()` are simple and less critical
+
+### Adding New Lua-Exposed Functions
+
+When adding a new Go function for Lua:
+
+```go
+// ❌ WRONG - Direct PushGoFunction (crashes on panic)
+L.PushGoFunction(func(L *lua.State) int {
+    // dangerous - any panic crashes the process
+    return 0
+})
+
+// ✅ CORRECT - Wrapped with SafePushGoFunction
+api.SafePushGoFunction(L, "new_function", func(L *lua.State) int {
+    // safe - panics are caught and converted to Lua errors
+    return 0
+})
+```
+
+### Testing
+
+See `lua_engine_test.go::TestSafeWrapGoFunction` for comprehensive panic recovery tests covering:
+- Expected Lua errors (from `L.RaiseError`)
+- Unexpected panics (strings, structs, etc.)
+- Normal execution
+- Multiple wrapped functions

@@ -208,6 +208,13 @@ test_cases:
   - name: "Inspect Device Test"
     script: "file://examples/inspect.lua"
     wait_after: 500ms
+    peripheral:
+      - service: "1234"
+        characteristics: ["5678"]
+      - service: "180d"
+        characteristics: ["2a37", "2a38"]
+      - service: "180f"
+        characteristics: ["2a19"]
     expected_stdout: |
       Device info:
         ID: 00:00:00:00:00:01
@@ -235,6 +242,13 @@ test_cases:
   - name: "Inspect Device Test (JSON format)"
     script: "file://examples/inspect.lua?format=json"
     wait_after: 500ms
+    peripheral:
+      - service: "1234"
+        characteristics: ["5678"]
+      - service: "180d"
+        characteristics: ["2a37", "2a38"]
+      - service: "180f"
+        characteristics: ["2a19"]
     expected_json_output:
       - device:
           id: "00:00:00:00:00:01"

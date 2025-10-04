@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +93,31 @@ func NewLuaEngine(logger *logrus.Logger) *LuaEngine {
 	return engine
 }
 
+// SafeWrapGoFunction wraps a Go function with panic recovery and error logging.
+// ALL Lua-exposed Go functions MUST be wrapped to ensure:
+// - Expected Lua errors (from L.RaiseError) propagate correctly
+// - Unexpected panics are logged with full stack trace for debugging
+// - Unexpected panics are converted to clean Lua errors (L.RaiseError)
+// - Consistent error handling across all Go-Lua boundaries
+func (e *LuaEngine) SafeWrapGoFunction(name string, fn func(*lua.State) int) func(*lua.State) int {
+	return func(L *lua.State) int {
+		defer func() {
+			if r := recover(); r != nil {
+				// If it's a *lua.LuaError, it's from L.RaiseError - re-panic as-is
+				if _, ok := r.(*lua.LuaError); ok {
+					panic(r)
+				}
+
+				// Otherwise it's an unexpected panic (including string panics) - LOG and raise generic error
+				stack := string(debug.Stack())
+				e.logger.Errorf("%s unexpected panic: %v\nStack:\n%s", name, r, stack)
+				L.RaiseError(fmt.Sprintf("%s panicked in Go", name))
+			}
+		}()
+		return fn(L)
+	}
+}
+
 func (e *LuaEngine) DoWithState(callback func(*lua.State) interface{}) interface{} {
 	e.stateMutex.Lock()
 	defer e.stateMutex.Unlock()
@@ -161,7 +187,7 @@ func (e *LuaEngine) registerBlockedLuaFunctions() {
 func (e *LuaEngine) registerPrintCaptureInternal() {
 	e.doWithStateInternal(func(L *lua.State) interface{} {
 		// Override print
-		L.PushGoFunction(func(L *lua.State) int {
+		L.PushGoFunction(e.SafeWrapGoFunction("print()", func(L *lua.State) int {
 			top := L.GetTop()
 			parts := make([]string, 0, top)
 
@@ -199,7 +225,7 @@ func (e *LuaEngine) registerPrintCaptureInternal() {
 			})
 
 			return 0
-		})
+		}))
 
 		L.SetGlobal("print")
 
@@ -214,7 +240,7 @@ func (e *LuaEngine) registerIOWriteCaptureInternal() {
 		L.GetGlobal("io")
 		if L.IsTable(-1) {
 			L.PushString("write")
-			L.PushGoFunction(func(L *lua.State) int {
+			L.PushGoFunction(e.SafeWrapGoFunction("io.write()", func(L *lua.State) int {
 				top := L.GetTop()
 				var output strings.Builder
 
@@ -251,7 +277,7 @@ func (e *LuaEngine) registerIOWriteCaptureInternal() {
 				}
 
 				return 0
-			})
+			}))
 			L.SetTable(-3)
 		}
 		L.Pop(1) // Pop io table
@@ -355,6 +381,17 @@ func (e *LuaEngine) safeExecuteScript3(ctx context.Context, script string) error
 	done := make(chan error, 1)
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				e.outputChan.ForceSend(LuaOutputRecord{
+					Content:   fmt.Sprintf("Panic during Lua execution: %v", r),
+					Timestamp: time.Now(),
+					Source:    "stderr",
+				})
+				done <- fmt.Errorf("panic during lua execution: %v", r)
+			}
+		}()
+
 		var execErr error
 		e.DoWithState(func(L *lua.State) interface{} {
 			// Hook for cooperative cancellation

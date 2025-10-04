@@ -81,10 +81,20 @@ local function collect_device_data()
                     indicate = char_info.properties and char_info.properties.indicate or false
                 }
 
+                -- Try to read the characteristic value if it's readable
+                local value = nil
+                if props.read and char_info.read then
+                    local val, err = char_info.read()
+                    if err == nil then
+                        value = val
+                    end
+                    -- Silently ignore read errors in inspect (characteristic may not be readable)
+                end
+
                 table.insert(service_data.characteristics, {
                     uuid = char_uuid,
                     properties = props,
-                    value = char_info.value,
+                    value = value,
                     descriptors = char_info.descriptors or {}
                 })
             end
