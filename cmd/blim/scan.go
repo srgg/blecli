@@ -47,7 +47,7 @@ var (
 
 func init() {
 	scanCmd.Flags().DurationVarP(&scanDuration, "duration", "d", 10*time.Second, "Scan duration (0 for indefinite)")
-	scanCmd.Flags().StringVarP(&scanFormat, "format", "f", "table", "Output format (table, json, csv)")
+	scanCmd.Flags().StringVarP(&scanFormat, "format", "f", "table", "Output format (table, json)")
 	scanCmd.Flags().BoolVarP(&scanVerbose, "verbose", "v", false, "Verbose output")
 	scanCmd.Flags().StringSliceVarP(&scanServices, "services", "s", nil, "Filter by service UUIDs")
 	scanCmd.Flags().StringSliceVar(&scanAllowList, "allow", nil, "Only show devices with these addresses")
@@ -58,7 +58,7 @@ func init() {
 
 func runScan(cmd *cobra.Command, args []string) error {
 	// Validate format parameter
-	validFormats := []string{"table", "json", "csv"}
+	validFormats := []string{"table", "json"}
 	isValidFormat := false
 	for _, format := range validFormats {
 		if scanFormat == format {
@@ -230,35 +230,45 @@ func runWatchMode(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *conf
 	}
 }
 
+type deviceWithTime struct {
+	device.DeviceInfo
+	lastSeen time.Time
+}
+
 func displayDevicesTableFromMap(devices map[string]device.DeviceInfo, cfg *config.Config) error {
 	if len(devices) == 0 {
 		fmt.Println("No devices discovered")
 		return nil
 	}
 
-	devList := make([]device.DeviceInfo, 0, len(devices))
+	// Track last seen time for scan display
+	devList := make([]deviceWithTime, 0, len(devices))
 	for _, d := range devices {
-		devList = append(devList, d)
+		devList = append(devList, deviceWithTime{
+			DeviceInfo: d,
+			lastSeen:   time.Now(), // Track when we saw this device
+		})
 	}
 
 	// Sort by RSSI
 	sort.Slice(devList, func(i, j int) bool {
-		rssi1 := devList[i].GetRSSI()
-		rssi2 := devList[j].GetRSSI()
-		return rssi1 > rssi2
+		return devList[i].GetRSSI() > devList[j].GetRSSI()
 	})
 
 	switch cfg.OutputFormat {
 	case "json":
-		return displayDevicesJSON(devList)
-	case "csv":
-		return displayDevicesCSV(devList)
+		// Extract just the DeviceInfo for JSON
+		infoList := make([]device.DeviceInfo, len(devList))
+		for i, d := range devList {
+			infoList[i] = d.DeviceInfo
+		}
+		return displayDevicesJSON(infoList)
 	default:
 		return displayDevicesTable(devList)
 	}
 }
 
-func displayDevicesTable(devices []device.DeviceInfo) error {
+func displayDevicesTable(devices []deviceWithTime) error {
 	var base io.Writer = os.Stdout
 	if base == nil {
 		base = io.Discard
@@ -268,8 +278,7 @@ func displayDevicesTable(devices []device.DeviceInfo) error {
 	fmt.Fprintln(w, strings.Repeat("-", 80))
 
 	for _, dev := range devices {
-
-		name := dev.DisplayName()
+		name := dev.GetName()
 		if len(name) > 20 {
 			name = name[:17] + "..."
 		}
@@ -284,7 +293,7 @@ func displayDevicesTable(devices []device.DeviceInfo) error {
 			services = services[:27] + "..."
 		}
 
-		lastSeen := time.Since(dev.GetLastSeen()).Truncate(time.Second)
+		lastSeen := time.Since(dev.lastSeen).Truncate(time.Second)
 
 		fmt.Fprintf(w, "%s\t%s\t%d dBm\t%s\t%s ago\n",
 			name, dev.GetAddress(), dev.GetRSSI(), services, lastSeen)
@@ -301,24 +310,6 @@ func displayDevicesJSON(devices []device.DeviceInfo) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(devices)
-}
-
-func displayDevicesCSV(devices []device.DeviceInfo) error {
-	var w io.Writer = os.Stdout
-	if w == nil {
-		w = io.Discard
-	}
-	fmt.Fprintln(w, "Name,Address,RSSI,Services,LastSeen")
-	for _, dev := range devices {
-		uuids := make([]string, 0, len(dev.GetAdvertisedServices()))
-		for _, s := range dev.GetAdvertisedServices() {
-			uuids = append(uuids, s)
-		}
-		services := strings.Join(uuids, ";")
-		fmt.Fprintf(w, "%s,%s,%d,%s,%s\n",
-			dev.DisplayName(), dev.GetAddress(), dev.GetRSSI(), services, dev.GetLastSeen().Format(time.RFC3339))
-	}
-	return nil
 }
 
 func clearScreen() {

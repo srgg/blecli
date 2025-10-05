@@ -17,7 +17,6 @@ type DeviceJSONFull struct {
 	Services         []ServiceJSON `json:"services"`
 	ManufacturerData interface{}   `json:"manufacturer_data,omitempty"`
 	ServiceData      interface{}   `json:"service_data,omitempty"`
-	DisplayName      string        `json:"display_name"`
 }
 
 type ServiceJSON struct {
@@ -79,11 +78,9 @@ func DeviceToJSON(d device.Device) string {
 		RSSI:             d.GetRSSI(),
 		TxPower:          d.GetTxPower(),
 		Connectable:      d.IsConnectable(),
-		LastSeen:         d.GetLastSeen().Unix(),
 		Services:         services,
 		ManufacturerData: manufData,
 		ServiceData:      serviceData,
-		DisplayName:      d.DisplayName(),
 	}
 
 	b, err := json.Marshal(jsonStruct)

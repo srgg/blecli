@@ -12,7 +12,7 @@ func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
 	assert.NotNil(t, cfg)
-	assert.Equal(t, logrus.InfoLevel, cfg.LogLevel)
+	assert.Equal(t, logrus.PanicLevel, cfg.LogLevel)
 	assert.Equal(t, 10*time.Second, cfg.ScanTimeout)
 	assert.Equal(t, 30*time.Second, cfg.DeviceTimeout)
 	assert.Equal(t, "table", cfg.OutputFormat)

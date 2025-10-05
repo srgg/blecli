@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 	"time"
 
@@ -80,7 +79,7 @@ func (suite *ScanTestSuite) SetupTest() {
 
 	// Re-add all the flags with their default values
 	scanCmd.Flags().DurationVarP(&scanDuration, "duration", "d", 10*time.Second, "Scan duration (0 for indefinite)")
-	scanCmd.Flags().StringVarP(&scanFormat, "format", "f", "table", "Output format (table, json, csv)")
+	scanCmd.Flags().StringVarP(&scanFormat, "format", "f", "table", "Output format (table, json)")
 	scanCmd.Flags().BoolVarP(&scanVerbose, "verbose", "v", false, "Verbose output")
 	scanCmd.Flags().StringSliceVarP(&scanServices, "services", "s", nil, "Filter by service UUIDs")
 	scanCmd.Flags().StringSliceVar(&scanAllowList, "allow", nil, "Only show devices with these addresses")
@@ -117,7 +116,7 @@ func (suite *ScanTestSuite) TestScanCmd_InvalidFormat() {
 		suite.T().Logf("scanFormat value is: %s", scanFormat)
 	}
 	suite.Require().Error(err)
-	suite.Assert().Contains(err.Error(), "invalid format 'invalid': must be one of [table json csv]")
+	suite.Assert().Contains(err.Error(), "invalid format 'invalid': must be one of [table json]")
 }
 
 func (suite *ScanTestSuite) TestScanCmd_Flags() {
@@ -260,7 +259,10 @@ func TestDisplayDevicesTable(t *testing.T) {
 			"connectable": true
 		}`).BuildDevice(logger)
 
-	devices := []device.DeviceInfo{device1, device2}
+	devices := []deviceWithTime{
+		{DeviceInfo: device1, lastSeen: time.Now()},
+		{DeviceInfo: device2, lastSeen: time.Now()},
+	}
 
 	// In a real implementation, we would redirect stdout
 	_ = bytes.Buffer{} // Placeholder for output capture
@@ -293,39 +295,6 @@ func TestDisplayDevicesJSON(t *testing.T) {
 	assert.Equal(t, "AA:BB:CC:DD:EE:FF", devices[0].GetID())
 	assert.Equal(t, "Test Device", devices[0].GetName())
 	assert.Equal(t, -45, devices[0].GetRSSI())
-}
-
-func TestDisplayDevicesCSV(t *testing.T) {
-	// Create device using mock advertisement
-	logger := logrus.New()
-	logger.SetLevel(logrus.PanicLevel)
-
-	device1 := testutils.CreateMockAdvertisementFromJSON(`{
-			"name": "Test Device",
-			"address": "AA:BB:CC:DD:EE:FF",
-			"rssi": -45,
-			"services": ["180F", "180A"],
-			"connectable": true,
-			"manufacturerData": null,
-			"serviceData": null,
-			"txPower": 0
-		}`).BuildDevice(logger)
-
-	devices := []device.Device{device1}
-
-	// Test CSV formatting logic
-	expectedHeader := "Name,Address,RSSI,Services,LastSeen"
-
-	// Verify header format
-	assert.Equal(t, "Name,Address,RSSI,Services,LastSeen", expectedHeader)
-
-	// Test service joining
-	uuids := make([]string, 0, len(devices[0].GetAdvertisedServices()))
-	for _, s := range devices[0].GetAdvertisedServices() {
-		uuids = append(uuids, s)
-	}
-	services := strings.Join(uuids, ";")
-	assert.Equal(t, "180f;180a", services) // UUIDs are lowercase
 }
 
 func TestDevice_DisplayName_Integration(t *testing.T) {
@@ -371,7 +340,7 @@ func TestDevice_DisplayName_Integration(t *testing.T) {
 				"txPower": 0
 			}`, tt.localName, tt.address).BuildDevice(logger)
 
-			result := device.DisplayName()
+			result := device.GetName()
 			assert.Equal(t, tt.expected, result)
 		})
 	}

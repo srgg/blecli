@@ -1,10 +1,7 @@
 package device_test
 
 import (
-	"reflect"
 	"testing"
-	"time"
-	"unsafe"
 
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
@@ -39,8 +36,7 @@ func TestNewDevice(t *testing.T) {
 			"connectable": true,
 			"manufacturer_data": [76,0,1,2],
 			"service_data": {"180f": [100]},
-			"services": [{"uuid": "180f", "characteristics": []}, {"uuid": "180a", "characteristics": []}],
-			"display_name": "Test Device"
+			"services": [{"uuid": "180a", "characteristics": []}, {"uuid": "180f", "characteristics": []}]
 		}`
 
 		ja.Assert(actualJSON, expectedJSON)
@@ -64,15 +60,14 @@ func TestNewDevice(t *testing.T) {
 		actualJSON := testutils.DeviceToJSON(device)
 		ja.Assert(actualJSON, `{
 			"id": "11:22:33:44:55:66",
-			"name": "",
+			"name": "11:22:33:44:55:66",
 			"rssi": -70,
 			"connectable": false,
 			"manufacturer_data": null,
 			"service_data": null,
 			"services": [],
 			"tx_power": null,
-			"address": "11:22:33:44:55:66",
-			"display_name": "11:22:33:44:55:66"
+			"address": "11:22:33:44:55:66"
 		}`)
 	})
 }
@@ -99,11 +94,6 @@ func TestDevice_Update(t *testing.T) {
 	device := device.NewDevice(initialAdv, logger)
 	initialAdv.AssertExpectations(t)
 
-	initialTime := device.GetLastSeen()
-
-	// Wait a bit to ensure time difference
-	time.Sleep(10 * time.Millisecond)
-
 	// Create update advertisement
 	updateAdv := testutils.CreateMockAdvertisementFromJSON(`{
 		"name": "Updated Name",
@@ -128,94 +118,91 @@ func TestDevice_Update(t *testing.T) {
 			"service_data": {"180f": [80]},
 			"services": [],
 			"tx_power": 8,
-			"connectable": true,
-			"display_name": "Updated Name"
+			"connectable": true
 	}`)
-
-	assert.True(t, device.GetLastSeen().After(initialTime))
 
 	updateAdv.AssertExpectations(t)
 }
 
-func TestDevice_DisplayName(t *testing.T) {
-	helper := testutils.NewTestHelper(t)
+//func TestDevice_DisplayName(t *testing.T) {
+//	helper := testutils.NewTestHelper(t)
+//
+//	t.Run("returns device name when available", func(t *testing.T) {
+//		device := testutils.CreateMockAdvertisementFromJSON(`{
+//			"name": "My BLE Device",
+//			"address": "AA:BB:CC:DD:EE:FF",
+//			"rssi": -50,
+//			"manufacturerData": null,
+//			"serviceData": null,
+//			"services": [],
+//			"txPower": null,
+//			"connectable": true
+//		}`).BuildDevice(helper.Logger)
+//
+//		result := device.DisplayName()
+//		assert.Equal(t, "My BLE Device", result)
+//	})
+//
+//	t.Run("returns address when name is empty", func(t *testing.T) {
+//		device := testutils.CreateMockAdvertisementFromJSON(`{
+//			"name": "",
+//			"address": "11:22:33:44:55:66",
+//			"rssi": -50,
+//			"manufacturerData": null,
+//			"serviceData": null,
+//			"services": [],
+//			"txPower": null,
+//			"connectable": true
+//		}`).BuildDevice(helper.Logger)
+//
+//		assert.Equal(t, "11:22:33:44:55:66", device.DisplayName())
+//	})
+//}
 
-	t.Run("returns device name when available", func(t *testing.T) {
-		device := testutils.CreateMockAdvertisementFromJSON(`{
-			"name": "My BLE Device",
-			"address": "AA:BB:CC:DD:EE:FF",
-			"rssi": -50,
-			"manufacturerData": null,
-			"serviceData": null,
-			"services": [],
-			"txPower": null,
-			"connectable": true
-		}`).BuildDevice(helper.Logger)
-
-		result := device.DisplayName()
-		assert.Equal(t, "My BLE Device", result)
-	})
-
-	t.Run("returns address when name is empty", func(t *testing.T) {
-		device := testutils.CreateMockAdvertisementFromJSON(`{
-			"name": "",
-			"address": "11:22:33:44:55:66",
-			"rssi": -50,
-			"manufacturerData": null,
-			"serviceData": null,
-			"services": [],
-			"txPower": null,
-			"connectable": true
-		}`).BuildDevice(helper.Logger)
-
-		assert.Equal(t, "11:22:33:44:55:66", device.DisplayName())
-	})
-}
-
-func TestDevice_IsExpired(t *testing.T) {
-	helper := testutils.NewTestHelper(t)
-	now := time.Now()
-	//fiveMinutesAgo := now.Add(-5 * time.Minute)
-
-	t.Run("device is expired when lastSeen exceeds timeout", func(t *testing.T) {
-		device := testutils.CreateMockAdvertisementFromJSON(`{
-			"name": "Test Device",
-			"address": "AA:BB:CC:DD:EE:FF",
-			"rssi": -50,
-			"manufacturerData": null,
-			"serviceData": null,
-			"services": [],
-			"txPower": null,
-			"connectable": true
-		}`).BuildDevice(helper.Logger)
-
-		// Update the lastSeen time to 5 minutes ago using reflection
-		v := reflect.ValueOf(device).Elem()
-		lastSeenField := v.FieldByName("lastSeen")
-		ptrToLastSeen := unsafe.Pointer(lastSeenField.UnsafeAddr())
-		realLastSeen := (*time.Time)(ptrToLastSeen)
-		*realLastSeen = now.Add(-5 * time.Minute)
-
-		// Device should expire after 3 minutes
-		assert.True(t, device.IsExpired(3*time.Minute))
-	})
-
-	t.Run("device is not expired when lastSeen is within timeout", func(t *testing.T) {
-		device := testutils.CreateMockAdvertisementFromJSON(`{
-			"name": "Test Device",
-			"address": "AA:BB:CC:DD:EE:FF",
-			"rssi": -50,
-			"manufacturerData": null,
-			"serviceData": null,
-			"services": [],
-			"txPower": null,
-			"connectable": true
-		}`).BuildDevice(helper.Logger)
-
-		// Device should not be expired after 10 minutes
-		assert.False(t, device.IsExpired(10*time.Minute))
-	})
-}
+//func TestDevice_IsExpired(t *testing.T) {
+//	helper := testutils.NewTestHelper(t)
+//	now := time.Now()
+//	//fiveMinutesAgo := now.Add(-5 * time.Minute)
+//
+//	t.Run("device is expired when lastSeen exceeds timeout", func(t *testing.T) {
+//		device := testutils.CreateMockAdvertisementFromJSON(`{
+//			"name": "Test Device",
+//			"address": "AA:BB:CC:DD:EE:FF",
+//			"rssi": -50,
+//			"manufacturerData": null,
+//			"serviceData": null,
+//			"services": [],
+//			"txPower": null,
+//			"connectable": true
+//		}`).BuildDevice(helper.Logger)
+//
+//		// Update the lastSeen time to 5 minutes ago using reflection
+//		v := reflect.ValueOf(device).Elem()
+//		lastSeenField := v.FieldByName("lastSeen")
+//		ptrToLastSeen := unsafe.Pointer(lastSeenField.UnsafeAddr())
+//		realLastSeen := (*time.Time)(ptrToLastSeen)
+//		*realLastSeen = now.Add(-5 * time.Minute)
+//
+//		// Device should expire after 3 minutes
+//		assert.True(t, device.IsExpired(3*time.Minute))
+//	})
+//
+//	t.Run("device is not expired when lastSeen is within timeout", func(t *testing.T) {
+//		device := testutils.CreateMockAdvertisementFromJSON(`{
+//			"name": "Test Device",
+//			"address": "AA:BB:CC:DD:EE:FF",
+//			"rssi": -50,
+//			"manufacturerData": null,
+//			"serviceData": null,
+//			"services": [],
+//			"txPower": null,
+//			"connectable": true
+//		}`).BuildDevice(helper.Logger)
+//
+//		// Device should not be expired after 10 minutes
+//		assert.False(t, device.IsExpired(10*time.Minute))
+//	})
+//}
 
 //	func BenchmarkNewDevice(b *testing.B) {
 //		adv := &MockAdvertisement{}
@@ -346,7 +333,7 @@ func TestDevice_ExtractNameFromManufacturerData(t *testing.T) {
 
 			//bleDevice := dev.(*BLEDevice)
 			//result := bleDevice.extractNameFromManufacturerData(tt.manufData)
-			assert.Equal(t, tt.expectedName, dev.DisplayName())
+			assert.Equal(t, tt.expectedName, dev.GetName())
 		})
 	}
 }
@@ -401,7 +388,7 @@ func TestDevice_NameResolutionPrecedence(t *testing.T) {
 
 			logger := logrus.New()
 			dev := device.NewDevice(adv, logger)
-			assert.Equal(t, tt.expectedName, dev.DisplayName(), tt.description)
+			assert.Equal(t, tt.expectedName, dev.GetName(), tt.description)
 		})
 	}
 }

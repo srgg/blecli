@@ -135,7 +135,7 @@ func (s *Scanner) handleAdvertisement(adv blelib.Advertisement) {
 		event.Type = EventUpdated
 	} else {
 		s.logger.WithFields(logrus.Fields{
-			"device":  dev.DisplayName(),
+			"device":  dev.GetName(),
 			"address": dev.GetAddress(),
 			"rssi":    dev.GetRSSI(),
 		}).Info("Discovered new device")

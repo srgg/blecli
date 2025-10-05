@@ -27,6 +27,44 @@ local function ascii_preview(bytes)
     return table.concat(result)
 end
 
+-- Device Information Service (DIS) characteristic mapping
+local DIS_CHARACTERISTICS = {
+    ["2A29"] = "Manufacturer Name",
+    ["2A24"] = "Model Number",
+    ["2A25"] = "Serial Number",
+    ["2A26"] = "Firmware Revision",
+    ["2A27"] = "Hardware Revision",
+    ["2A28"] = "Software Revision",
+    ["2A23"] = "System ID",
+    ["2A50"] = "PnP ID"
+}
+
+-- Extract Device Information Service data
+local function extract_dis_info(services)
+    for _, service in ipairs(services) do
+        -- Check if this is the Device Information Service (UUID 180A)
+        if string.upper(service.uuid) == "180A" then
+            local dis_data = {}
+            for _, char in ipairs(service.characteristics) do
+                local char_uuid_upper = string.upper(char.uuid)
+                local char_name = DIS_CHARACTERISTICS[char_uuid_upper]
+                if char_name and char.value and char.value ~= "" then
+                    -- For string characteristics, use ASCII representation
+                    if char_uuid_upper == "2A29" or char_uuid_upper == "2A24" or char_uuid_upper == "2A25" or
+                       char_uuid_upper == "2A26" or char_uuid_upper == "2A27" or char_uuid_upper == "2A28" then
+                        dis_data[char_name] = ascii_preview(char.value)
+                    else
+                        -- For other characteristics (System ID, PnP ID), keep as hex
+                        dis_data[char_name] = bytes_to_hex(char.value)
+                    end
+                end
+            end
+            return dis_data
+        end
+    end
+    return nil
+end
+
 -- Collect all device and GATT data into a structured table
 local function collect_device_data()
     local data = {}
@@ -103,6 +141,9 @@ local function collect_device_data()
         table.insert(data.services, service_data)
     end
 
+    -- Extract Device Information Service data
+    data.device_info = extract_dis_info(data.services)
+
     return data
 end
 
@@ -157,12 +198,40 @@ local function output_text(data)
         io.write("  Service Data: none\n")
     end
 
+    -- Device Information Service section
+    if data.device_info and next(data.device_info) ~= nil then
+        io.write("  Device Information Service:\n")
+        -- Define display order for DIS fields
+        local dis_order = {
+            "Manufacturer Name",
+            "Model Number",
+            "Serial Number",
+            "Hardware Revision",
+            "Firmware Revision",
+            "Software Revision",
+            "System ID",
+            "PnP ID"
+        }
+        for _, field_name in ipairs(dis_order) do
+            if data.device_info[field_name] then
+                io.write(string.format("    %s: %s\n", field_name, data.device_info[field_name]))
+            end
+        end
+    end
+
     -- GATT Services section
     io.write(string.format("  GATT Services: %d\n", #data.services))
 
     -- List services with characteristics
     for service_index, service in ipairs(data.services) do
-        io.write(string.format("\n[%d] Service %s\n", service_index, service.uuid))
+        -- Show service name if it's DIS
+        local service_name = service.uuid
+        if string.upper(service.uuid) == "180A" then
+            service_name = "Device Information Service (0x180A)"
+        else
+            service_name = string.format("0x%s", service.uuid)
+        end
+        io.write(string.format("\n[%d] Service: %s\n", service_index, service_name))
 
         for char_index, char in ipairs(service.characteristics) do
             -- Format properties as hex flags
@@ -172,8 +241,12 @@ local function output_text(data)
             if char.properties.notify then props = props + 0x10 end
             if char.properties.indicate then props = props + 0x20 end
 
-            io.write(string.format("  [%d.%d] Characteristic %s (props: 0x%02X)\n",
-                service_index, char_index, char.uuid, props))
+            -- Show characteristic name if it's a known DIS characteristic
+            local char_name = DIS_CHARACTERISTICS[string.upper(char.uuid)]
+            local char_display = char_name and string.format("%s (0x%s)", char_name, char.uuid) or string.format("0x%s", char.uuid)
+
+            io.write(string.format("  [%d.%d] Characteristic: %s (props: 0x%02X)\n",
+                service_index, char_index, char_display, props))
 
             -- Show characteristic value if available
             if char.value and char.value ~= "" then

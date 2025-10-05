@@ -15,12 +15,9 @@ type DeviceInfo interface {
 	GetRSSI() int
 	GetTxPower() *int
 	IsConnectable() bool
-	GetLastSeen() time.Time
 	GetAdvertisedServices() []string
 	GetManufacturerData() []byte
 	GetServiceData() map[string][]byte
-	DisplayName() string
-	IsExpired(timeout time.Duration) bool
 }
 
 // Device defines the interface for all device types
@@ -36,7 +33,8 @@ type Device interface {
 
 // Connection represents a BLE connection interface
 type Connection interface {
-	GetServices() map[string]Service
+	GetServices() []Service
+	GetService(uuid string) (Service, error)
 	GetCharacteristic(service, uuid string) (*BLECharacteristic, error)
 	Subscribe(opts []*SubscribeOptions, pattern StreamMode, maxRate time.Duration, callback func(*Record)) error
 }
@@ -44,21 +42,22 @@ type Connection interface {
 // Service represents a GATT service interface
 type Service interface {
 	GetUUID() string
+	KnownName() string
 	GetCharacteristics() []Characteristic
 }
 
 // Characteristic represents a GATT characteristic interface
 type Characteristic interface {
 	GetUUID() string
+	KnownName() string
 	GetProperties() string
 	GetDescriptors() []Descriptor
-	//GetValue() []byte
-	//SetValue([]byte)
 }
 
 // Descriptor represents a GATT descriptor interface
 type Descriptor interface {
 	GetUUID() string
+	KnownName() string
 }
 
 // SubscribeOptions defined BLE Characteristics subscriptions

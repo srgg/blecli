@@ -18,7 +18,6 @@ require (
 
 require (
 	github.com/hedzr/go-ringbuf/v2 v2.2.2
-	github.com/jinzhu/copier v0.4.0
 	github.com/wk8/go-ordered-map/v2 v2.1.8
 	github.com/yudai/gojsondiff v1.0.0
 	gopkg.in/yaml.v3 v3.0.1

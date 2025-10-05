@@ -3,6 +3,7 @@ package device
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,11 +15,16 @@ import (
 
 // BLEDescriptor implements the Descriptor interface
 type BLEDescriptor struct {
-	uuid string
+	uuid      string
+	knownName string
 }
 
 func (d *BLEDescriptor) GetUUID() string {
 	return d.uuid
+}
+
+func (d *BLEDescriptor) KnownName() string {
+	return d.knownName
 }
 
 // BLEAdvertisedService implements the Service interface for advertised services
@@ -29,6 +35,10 @@ type BLEAdvertisedService struct {
 
 func (s *BLEAdvertisedService) GetUUID() string {
 	return s.uuid
+}
+
+func (s *BLEAdvertisedService) KnownName() string {
+	return "" // Advertised services don't have known names until connected
 }
 
 func (s *BLEAdvertisedService) GetCharacteristics() []Characteristic {
@@ -86,6 +96,7 @@ func NewBLEDeviceFromAdvertisement(adv ble.Advertisement, logger *logrus.Logger)
 	for _, uuid := range adv.Services() {
 		dev.advertisedServices = append(dev.advertisedServices, uuid.String())
 	}
+	sort.Strings(dev.advertisedServices)
 
 	// Convert service data
 	for _, svcData := range adv.ServiceData() {
@@ -125,6 +136,9 @@ func (d *BLEDevice) GetID() string {
 func (d *BLEDevice) GetName() string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+	if d.name == "" {
+		return d.address
+	}
 	return d.name
 }
 
@@ -152,15 +166,10 @@ func (d *BLEDevice) IsConnectable() bool {
 	return d.connectable
 }
 
-func (d *BLEDevice) GetLastSeen() time.Time {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.lastSeen
-}
-
 func (d *BLEDevice) GetAdvertisedServices() []string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+
 	return d.advertisedServices
 }
 
@@ -176,20 +185,14 @@ func (d *BLEDevice) GetServiceData() map[string][]byte {
 	return d.serviceData
 }
 
-func (d *BLEDevice) DisplayName() string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	if d.name != "" {
-		return d.name
-	}
-	return d.address
-}
-
-func (d *BLEDevice) IsExpired(timeout time.Duration) bool {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return time.Since(d.lastSeen) > timeout
-}
+//func (d *BLEDevice) DisplayName() string {
+//	d.mu.RLock()
+//	defer d.mu.RUnlock()
+//	if d.name != "" {
+//		return d.name
+//	}
+//	return d.address
+//}
 
 // Connect establishes a BLE connection and populates live characteristics
 func (d *BLEDevice) Connect(ctx context.Context, opts *ConnectOptions) error {
@@ -209,118 +212,41 @@ func (d *BLEDevice) Connect(ctx context.Context, opts *ConnectOptions) error {
 	}
 
 	// Use the pre-created BLEConnection to connect
-	return d.connection.Connect(ctx, d.address, opts)
-}
+	if err := d.connection.Connect(ctx, d.address, opts); err != nil {
+		return err
+	}
 
-//// Connect establishes a BLE connection and populates live characteristics
-//func (d *BLEDevice) Connect(ctx context.Context, opts *ConnectOptions) error {
-//	d.mu.Lock()
-//	defer d.mu.Unlock()
-//
-//	if strings.TrimSpace(d.address) == "" {
-//		return fmt.Errorf("failed connect to device: device address is not set")
-//	}
-//
-//	if d.connection != nil && d.connection.IsConnected() {
-//		return fmt.Errorf("already connected")
-//	}
-//
-//	d.logger.WithField("address", d.address).Info("Connecting to BLE device...")
-//
-//	// Create platform BLE device (darwin for macOS)
-//	dev, err := darwin.NewDevice()
-//	if err != nil {
-//		return fmt.Errorf("failed to create BLE device: %w", err)
-//	}
-//	ble.SetDefaultDevice(dev)
-//
-//	// Timeout context
-//	connCtx, cancel := context.WithTimeout(ctx, opts.ConnectTimeout)
-//	defer cancel()
-//
-//	// Connect to BLE device
-//	client, err := ble.Dial(connCtx, ble.NewAddr(d.address))
-//	if err != nil {
-//		return fmt.Errorf("failed to connect to device: %w", err)
-//	}
-//
-//	// Discover services and characteristics
-//	profile, err := client.DiscoverProfile(true)
-//	if err != nil {
-//		client.CancelConnection()
-//		return fmt.Errorf("failed to discover profile: %w", err)
-//	}
-//
-//	// Populate services and characteristics
-//	for _, bleSvc := range profile.Services {
-//		svcUUID := bleSvc.UUID.String()
-//		svc, ok := c.se[svcUUID]
-//		if !ok {
-//			svc = &BLEService{
-//				UUID:            svcUUID,
-//				Characteristics: make(map[string]*BLECharacteristic),
-//			}
-//
-//			d.bleServices[svcUUID] = bleSvc
-//		}
-//
-//		for _, char := range svc.Characteristics {
-//			uuid := char.UUID.String()
-//			bleChar, ok := d.bleCharacteristics[uuid]
-//			if !ok {
-//				// Create BLECharacteristic
-//				bleChar = &BLECharacteristic{
-//					uuid:        char.UUID.String(),
-//					properties:  blePropsToString(char.Property),
-//					descriptors: []Descriptor{},
-//					BLEChar:     char,
-//				}
-//				d.bleCharacteristics[uuid] = bleChar
-//				bleSvc.Characteristics[uuid] = bleChar
-//			} else {
-//				// Update live handle
-//				bleChar.BLEChar = char
-//				bleSvc.Characteristics[uuid] = bleChar
-//			}
-//		}
-//	}
-//
-//	// Create connection wrapper
-//	conn := &BLEConnection{
-//		client:      client,
-//		logger:      d.logger,
-//		isConnected: true,
-//	}
-//	d.connection = conn
-//
-//	// Subscribe to notify/indicate characteristics
-//	for _, bleChar := range d.bleCharacteristics {
-//		if bleChar.BLEChar == nil {
-//			continue
-//		}
-//		if bleChar.BLEChar.Property&ble.CharNotify != 0 || bleChar.BLEChar.Property&ble.CharIndicate != 0 {
-//			uuid := bleChar.GetUUID()
-//			d.logger.WithField("uuid", uuid).Info("Subscribing to notifications")
-//			err := client.Subscribe(bleChar.BLEChar, false, func(data []byte) {
-//				bleChar.mu.Lock()
-//				bleChar.value = data
-//				bleChar.mu.Unlock()
-//				if d.onData != nil {
-//					d.onData(uuid, data)
-//				}
-//			})
-//			if err != nil {
-//				d.logger.WithFields(logrus.Fields{
-//					"uuid":  uuid,
-//					"error": err,
-//				}).Warn("Failed to subscribe to characteristic")
-//			}
-//		}
-//	}
-//
-//	d.logger.WithField("services", len(d.bleServices)).Info("BLE device connected")
-//	return nil
-//}
+	// Try to resolve device name from GAP Device Name characteristic (0x2A00)
+	// GAP Device Name is more authoritative than advertisement name
+	const (
+		gapServiceUUID = "1800"
+		deviceNameChar = "2a00"
+	)
+
+	// Check if GAP service exists
+	if _, exists := d.connection.services[gapServiceUUID]; exists {
+		// Get the Device Name characteristic
+
+		if char, err := d.connection.GetCharacteristic(gapServiceUUID, deviceNameChar); err == nil && char.BLEChar != nil {
+			// Read the characteristic value
+			if data, err := d.connection.client.ReadCharacteristic(char.BLEChar); err == nil && len(data) > 0 {
+				name := string(data)
+				name = strings.TrimRight(name, "\x00")
+				name = strings.TrimSpace(name)
+
+				if len(name) > 0 && isValidDeviceName(name) {
+					d.name = name
+					d.logger.WithFields(logrus.Fields{
+						"address": d.address,
+						"name":    name,
+					}).Debug("Resolved device name from GAP")
+				}
+			}
+		}
+	}
+
+	return nil
+}
 
 // Disconnect closes connection and clears live handles
 func (d *BLEDevice) Disconnect() error {
@@ -377,11 +303,16 @@ func (d *BLEDevice) Update(adv ble.Advertisement) {
 	}
 
 	// Merge advertised services (ensure UUID entries exist)
+	needsSort := false
 	for _, svc := range adv.Services() {
 		u := svc.String()
 		if !d.hasServiceUUID(u) {
 			d.advertisedServices = append(d.advertisedServices, u)
+			needsSort = true
 		}
+	}
+	if needsSort {
+		sort.Strings(d.advertisedServices)
 	}
 
 	// Update service data

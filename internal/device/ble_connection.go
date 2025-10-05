@@ -3,6 +3,7 @@ package device
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/go-ble/ble"
 	"github.com/go-ble/ble/darwin"
 	"github.com/sirupsen/logrus"
+	"github.com/srg/blim/internal/bledb"
 )
 
 // DeviceFactory creates ble.Device instances (can be overridden in tests)
@@ -93,6 +95,7 @@ func releaseBLEValue(v *BLEValue) {
 
 type BLECharacteristic struct {
 	uuid        string
+	knownName   string
 	properties  string
 	descriptors []Descriptor
 	value       []byte
@@ -105,12 +108,28 @@ type BLECharacteristic struct {
 }
 
 func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection) *BLECharacteristic {
+	uuid := c.UUID.String()
+
+	// Populate and sort descriptors
+	descriptors := make([]Descriptor, 0, len(c.Descriptors))
+	for _, d := range c.Descriptors {
+		descriptors = append(descriptors, &BLEDescriptor{
+			uuid:      d.UUID.String(),
+			knownName: bledb.LookupDescriptor(d.UUID.String()),
+		})
+	}
+	// Sort by UUID for consistent ordering
+	sort.Slice(descriptors, func(i, j int) bool {
+		return descriptors[i].GetUUID() < descriptors[j].GetUUID()
+	})
+
 	return &BLECharacteristic{
-		uuid:        c.UUID.String(),
+		uuid:        uuid,
+		knownName:   bledb.LookupCharacteristic(uuid),
 		BLEChar:     c,
 		properties:  blePropsToString(c.Property),
 		updates:     make(chan *BLEValue, buffer),
-		descriptors: []Descriptor{},
+		descriptors: descriptors,
 		subs:        nil,
 		connection:  conn,
 	}
@@ -144,6 +163,10 @@ func (c *BLECharacteristic) notifySubscribers(v *BLEValue) {
 
 func (c *BLECharacteristic) GetUUID() string {
 	return c.uuid
+}
+
+func (c *BLECharacteristic) KnownName() string {
+	return c.knownName
 }
 
 func (c *BLECharacteristic) GetProperties() string {
@@ -195,6 +218,7 @@ func (c *BLECharacteristic) Read() ([]byte, error) {
 // BLEService represents a GATT service and its characteristics
 type BLEService struct {
 	UUID            string
+	knownName       string
 	Characteristics map[string]*BLECharacteristic
 }
 
@@ -202,11 +226,19 @@ func (s *BLEService) GetUUID() string {
 	return s.UUID
 }
 
+func (s *BLEService) KnownName() string {
+	return s.knownName
+}
+
 func (s *BLEService) GetCharacteristics() []Characteristic {
 	result := make([]Characteristic, 0, len(s.Characteristics))
 	for _, char := range s.Characteristics {
 		result = append(result, char)
 	}
+	// Sort by UUID for consistent ordering
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].GetUUID() < result[j].GetUUID()
+	})
 	return result
 }
 
@@ -286,16 +318,32 @@ func (c *BLEConnection) GetCharacteristic(service, uuid string) (*BLECharacteris
 	return char, nil
 }
 
-func (c *BLEConnection) GetServices() map[string]Service {
+func (c *BLEConnection) GetServices() []Service {
 	c.connMutex.RLock()
 	defer c.connMutex.RUnlock()
 
-	// TODO: Consider improve interfaces to avoid temporary map
-	result := make(map[string]Service, len(c.services))
-	for k, v := range c.services {
-		result[k] = v // automatic interface conversion
+	result := make([]Service, 0, len(c.services))
+	for _, v := range c.services {
+		result = append(result, v)
 	}
+	// Sort by UUID for consistent ordering
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].GetUUID() < result[j].GetUUID()
+	})
 	return result
+}
+
+func (c *BLEConnection) GetService(uuid string) (Service, error) {
+	c.connMutex.RLock()
+	defer c.connMutex.RUnlock()
+
+	// Normalize UUID for lookup
+	normalizedUUID := normalizeUUID(uuid)
+	svc, ok := c.services[normalizedUUID]
+	if !ok {
+		return nil, fmt.Errorf("service %s not found", uuid)
+	}
+	return svc, nil
 }
 
 func (c *BLEConnection) GetDevice() Device {
@@ -385,6 +433,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 		if !ok {
 			svc = &BLEService{
 				UUID:            svcUUID,
+				knownName:       bledb.LookupService(svcUUID),
 				Characteristics: make(map[string]*BLECharacteristic),
 			}
 			c.services[svcUUID] = svc
@@ -407,31 +456,6 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 			}
 		}
 	}
-
-	//// Subscribe to notify/indicate characteristics
-	//for _, bleChar := range d.bleCharacteristics {
-	//	if bleChar.BLEChar == nil {
-	//		continue
-	//	}
-	//	if bleChar.BLEChar.Property&ble.CharNotify != 0 || bleChar.BLEChar.Property&ble.CharIndicate != 0 {
-	//		uuid := bleChar.GetUUID()
-	//		d.logger.WithField("uuid", uuid).Info("Subscribing to notifications")
-	//		err := client.Subscribe(bleChar.BLEChar, false, func(data []byte) {
-	//			bleChar.mu.Lock()
-	//			bleChar.value = data
-	//			bleChar.mu.Unlock()
-	//			if d.onData != nil {
-	//				d.onData(uuid, data)
-	//			}
-	//		})
-	//		if err != nil {
-	//			d.logger.WithFields(logrus.Fields{
-	//				"uuid":  uuid,
-	//				"error": err,
-	//			}).Warn("Failed to subscribe to characteristic")
-	//		}
-	//	}
-	//}
 
 	// Mark as connected and assign client
 	c.client = client

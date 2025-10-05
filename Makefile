@@ -14,7 +14,7 @@ BUILD_FLAGS := -tags luajit
 .PHONY: all
 all: build test
 
-# Build the application with LuaJIT (Go-LuaHit for maximum performance)
+# Build the application with LuaJIT
 .PHONY: build
 build:
 	@echo "Building $(BINARY_NAME) with LuaJIT for maximum performance..."
@@ -27,9 +27,16 @@ clean:
 	rm -f $(BINARY_NAME)
 	rm -rf $(COVERAGE_DIR)
 
+# Generate BLE database
+.PHONY: generate-bledb
+generate-bledb:
+	@echo "Generating BLE database..."
+	go generate ./internal/bledb
+	@echo "BLE database generated."
+
 # Run all tests or a specific test by name
 .PHONY: test
-test: generate-mocks
+test: generate-bledb generate-mocks
 	@if [ -z "$(TEST)" ]; then \
 		echo "Running all tests..."; \
 		go test $(BUILD_FLAGS) -v ./...; \
@@ -183,9 +190,9 @@ clean-mocks:
 	rm -rf pkg/mocks/mock_*.go
 	@echo "Generated mocks cleaned"
 
-# Generate all code (mocks, etc.)
+# Generate all code (BLE database, mocks, etc.)
 .PHONY: generate
-generate: generate-mocks
+generate: generate-bledb generate-mocks
 
 # Clean with mocks
 .PHONY: clean-all
@@ -195,24 +202,25 @@ clean-all: clean clean-mocks
 .PHONY: help
 help:
 	@echo "Available targets:"
-	@echo "  build          - Build the application"
-	@echo "  test           - Run all tests or specific test (TEST=<test_name>)"
-	@echo "  test-race      - Run tests with race detection"
-	@echo "  test-coverage  - Run tests with coverage report"
-	@echo "  coverage       - Show coverage summary"
-	@echo "  bench          - Run benchmarks"
-	@echo "  bench-cpu      - Run benchmarks with CPU profiling"
-	@echo "  bench-mem      - Run benchmarks with memory profiling"
-	@echo "  lint           - Run linter"
-	@echo "  fmt            - Format code"
-	@echo "  security       - Run security checks"
-	@echo "  check          - Run full quality check"
-	@echo "  generate       - Generate code (mocks, etc.)"
-	@echo "  generate-mocks - Generate mocks using mockery"
-	@echo "  clean          - Clean build artifacts"
-	@echo "  clean-mocks    - Clean generated mocks"
-	@echo "  clean-all      - Clean all artifacts including mocks"
-	@echo "  tidy           - Tidy dependencies"
-	@echo "  verify         - Verify dependencies"
-	@echo "  install-tools  - Install development tools"
-	@echo "  help           - Show this help message"
+	@echo "  build            - Build the application"
+	@echo "  test             - Run all tests or specific test (TEST=<test_name>)"
+	@echo "  test-race        - Run tests with race detection"
+	@echo "  test-coverage    - Run tests with coverage report"
+	@echo "  coverage         - Show coverage summary"
+	@echo "  bench            - Run benchmarks"
+	@echo "  bench-cpu        - Run benchmarks with CPU profiling"
+	@echo "  bench-mem        - Run benchmarks with memory profiling"
+	@echo "  lint             - Run linter"
+	@echo "  fmt              - Format code"
+	@echo "  security         - Run security checks"
+	@echo "  check            - Run full quality check"
+	@echo "  generate         - Generate BLE database and mocks"
+	@echo "  generate-bledb   - Generate BLE UUID database"
+	@echo "  generate-mocks   - Generate mocks using mockery"
+	@echo "  clean            - Clean build artifacts"
+	@echo "  clean-mocks      - Clean generated mocks"
+	@echo "  clean-all        - Clean all artifacts, including mocks"
+	@echo "  tidy             - Tidy dependencies"
+	@echo "  verify           - Verify dependencies"
+	@echo "  install-tools    - Install development tools"
+	@echo "  help             - Show this help message"

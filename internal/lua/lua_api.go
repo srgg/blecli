@@ -174,8 +174,8 @@ func (api *BLEAPI2) registerListFunction(L *lua.State) {
 		}
 		services := connection.GetServices()
 		L.NewTable()
-		for uuid, service := range services {
-			L.PushString(uuid)
+		for _, service := range services {
+			L.PushString(service.GetUUID())
 			L.NewTable()
 
 			// Add characteristics array
@@ -236,11 +236,6 @@ func (api *BLEAPI2) registerDeviceInfo(L *lua.State) {
 			L.PushInteger(int64(*txPower))
 			L.SetTable(-3)
 		}
-
-		// Last Seen
-		L.PushString("last_seen")
-		L.PushString(dev.GetLastSeen().Format("2006-01-02T15:04:05Z07:00"))
-		L.SetTable(-3)
 
 		// Advertised Services
 		L.PushString("advertised_services")

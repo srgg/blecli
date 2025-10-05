@@ -219,6 +219,7 @@ test_cases:
       Device info:
         ID: 00:00:00:00:00:01
         Address: 00:00:00:00:00:01
+        Name: 00:00:00:00:00:01
         RSSI: 0
         Connectable: false
         Advertised Services: none
@@ -226,15 +227,15 @@ test_cases:
         Service Data: none
         GATT Services: 3
 
-      [1] Service 1234
-        [1.1] Characteristic 5678 (props: 0x12)
+      [1] Service: 0x1234
+        [1.1] Characteristic: 0x5678 (props: 0x12)
 
-      [2] Service 180d
-        [2.1] Characteristic 2a37 (props: 0x12)
-        [2.2] Characteristic 2a38 (props: 0x12)
+      [2] Service: 0x180d
+        [2.1] Characteristic: 0x2a37 (props: 0x12)
+        [2.2] Characteristic: 0x2a38 (props: 0x12)
 
-      [3] Service 180f
-        [3.1] Characteristic 2a19 (props: 0x12)
+      [3] Service: 0x180f
+        [3.1] Characteristic: 0x2a19 (props: 0x12)
 
 # GOAL: Verify that inspect.lua produce expected JSON output format
 #
@@ -253,7 +254,7 @@ test_cases:
       - device:
           id: "00:00:00:00:00:01"
           address: "00:00:00:00:00:01"
-          name: ""
+          name: "00:00:00:00:00:01"
           rssi: 0
           connectable: false
           advertised_services: []
