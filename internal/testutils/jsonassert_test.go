@@ -2,107 +2,78 @@ package testutils
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/suite"
 )
 
-func TestJSONAsserter_DefaultOptions(t *testing.T) {
-	ja := NewJSONAsserter(t)
-	opts := ja.GetOptions()
-
-	if !opts.IgnoreExtraKeys {
-		t.Error("IgnoreExtraKeys should default to true")
-	}
-	if !opts.NilToEmptyArray {
-		t.Error("NilToEmptyArray should default to true")
-	}
-	if !opts.AllowPresencePlaceholder {
-		t.Error("AllowPresencePlaceholder should default to true")
-	}
-	if opts.CompareOnlyExpectedKeys {
-		t.Error("CompareOnlyExpectedKeys should default to false")
-	}
-	if len(opts.IgnoredFields) != 0 {
-		t.Error("IgnoredFields should default to empty slice")
-	}
+// JSONAsserterTestSuite provides comprehensive tests for JSONAsserter functionality
+type JSONAsserterTestSuite struct {
+	suite.Suite
 }
 
-func TestJSONAsserter_FunctionalOptions(t *testing.T) {
-	t.Run("WithAllowPresencePlaceholder false", func(t *testing.T) {
-		ja := NewJSONAsserter(t).WithOptions(
+func (s *JSONAsserterTestSuite) TestDefaultOptions() {
+	// GOAL: Verify default options are set correctly
+	//
+	// TEST SCENARIO: Create new JSONAsserter → default options applied → values match expected defaults
+
+	ja := NewJSONAsserter(s.T())
+	opts := ja.GetOptions()
+
+	s.True(opts.IgnoreExtraKeys, "IgnoreExtraKeys should default to true")
+	s.True(opts.NilToEmptyArray, "NilToEmptyArray should default to true")
+	s.True(opts.AllowPresencePlaceholder, "AllowPresencePlaceholder should default to true")
+	s.False(opts.CompareOnlyExpectedKeys, "CompareOnlyExpectedKeys should default to false")
+	s.Empty(opts.IgnoredFields, "IgnoredFields should default to empty slice")
+}
+
+func (s *JSONAsserterTestSuite) TestFunctionalOptions() {
+	s.Run("WithAllowPresencePlaceholder false", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithAllowPresencePlaceholder(false),
 		)
 		opts := ja.GetOptions()
 
-		if opts.AllowPresencePlaceholder {
-			t.Error("AllowPresencePlaceholder should be false when explicitly set")
-		}
-		// Other options should remain default
-		if !opts.IgnoreExtraKeys {
-			t.Error("IgnoreExtraKeys should remain true from defaults")
-		}
-		if !opts.NilToEmptyArray {
-			t.Error("NilToEmptyArray should remain true from defaults")
-		}
+		s.False(opts.AllowPresencePlaceholder, "AllowPresencePlaceholder should be false when explicitly set")
+		s.True(opts.IgnoreExtraKeys, "IgnoreExtraKeys should remain true from defaults")
+		s.True(opts.NilToEmptyArray, "NilToEmptyArray should remain true from defaults")
 	})
 
-	t.Run("WithIgnoreExtraKeys false", func(t *testing.T) {
-		ja := NewJSONAsserter(t).WithOptions(
+	s.Run("WithIgnoreExtraKeys false", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreExtraKeys(false),
 		)
 		opts := ja.GetOptions()
 
-		if opts.IgnoreExtraKeys {
-			t.Error("IgnoreExtraKeys should be false when explicitly set")
-		}
-		// Other options should remain default
-		if !opts.AllowPresencePlaceholder {
-			t.Error("AllowPresencePlaceholder should remain true from defaults")
-		}
-		if !opts.NilToEmptyArray {
-			t.Error("NilToEmptyArray should remain true from defaults")
-		}
+		s.False(opts.IgnoreExtraKeys, "IgnoreExtraKeys should be false when explicitly set")
+		s.True(opts.AllowPresencePlaceholder, "AllowPresencePlaceholder should remain true from defaults")
+		s.True(opts.NilToEmptyArray, "NilToEmptyArray should remain true from defaults")
 	})
 
-	t.Run("WithNilToEmptyArray false", func(t *testing.T) {
-		ja := NewJSONAsserter(t).WithOptions(
+	s.Run("WithNilToEmptyArray false", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithNilToEmptyArray(false),
 		)
 		opts := ja.GetOptions()
 
-		if opts.NilToEmptyArray {
-			t.Error("NilToEmptyArray should be false when explicitly set")
-		}
-		// Other options should remain default
-		if !opts.IgnoreExtraKeys {
-			t.Error("IgnoreExtraKeys should remain true from defaults")
-		}
-		if !opts.AllowPresencePlaceholder {
-			t.Error("AllowPresencePlaceholder should remain true from defaults")
-		}
+		s.False(opts.NilToEmptyArray, "NilToEmptyArray should be false when explicitly set")
+		s.True(opts.IgnoreExtraKeys, "IgnoreExtraKeys should remain true from defaults")
+		s.True(opts.AllowPresencePlaceholder, "AllowPresencePlaceholder should remain true from defaults")
 	})
 
-	t.Run("WithCompareOnlyExpectedKeys true", func(t *testing.T) {
-		ja := NewJSONAsserter(t).WithOptions(
+	s.Run("WithCompareOnlyExpectedKeys true", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithCompareOnlyExpectedKeys(true),
 		)
 		opts := ja.GetOptions()
 
-		if !opts.CompareOnlyExpectedKeys {
-			t.Error("CompareOnlyExpectedKeys should be true when explicitly set")
-		}
-		// Other options should remain default
-		if !opts.IgnoreExtraKeys {
-			t.Error("IgnoreExtraKeys should remain true from defaults")
-		}
-		if !opts.AllowPresencePlaceholder {
-			t.Error("AllowPresencePlaceholder should remain true from defaults")
-		}
-		if !opts.NilToEmptyArray {
-			t.Error("NilToEmptyArray should remain true from defaults")
-		}
+		s.True(opts.CompareOnlyExpectedKeys, "CompareOnlyExpectedKeys should be true when explicitly set")
+		s.True(opts.IgnoreExtraKeys, "IgnoreExtraKeys should remain true from defaults")
+		s.True(opts.AllowPresencePlaceholder, "AllowPresencePlaceholder should remain true from defaults")
+		s.True(opts.NilToEmptyArray, "NilToEmptyArray should remain true from defaults")
 	})
 
-	t.Run("Multiple options", func(t *testing.T) {
-		ja := NewJSONAsserter(t).WithOptions(
+	s.Run("Multiple options", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithAllowPresencePlaceholder(false),
 			WithIgnoreExtraKeys(false),
 			WithNilToEmptyArray(true), // explicitly set to true
@@ -110,80 +81,60 @@ func TestJSONAsserter_FunctionalOptions(t *testing.T) {
 		)
 		opts := ja.GetOptions()
 
-		if opts.AllowPresencePlaceholder {
-			t.Error("AllowPresencePlaceholder should be false")
-		}
-		if opts.IgnoreExtraKeys {
-			t.Error("IgnoreExtraKeys should be false")
-		}
-		if !opts.NilToEmptyArray {
-			t.Error("NilToEmptyArray should be true")
-		}
-		if !opts.CompareOnlyExpectedKeys {
-			t.Error("CompareOnlyExpectedKeys should be true")
-		}
+		s.False(opts.AllowPresencePlaceholder, "AllowPresencePlaceholder should be false")
+		s.False(opts.IgnoreExtraKeys, "IgnoreExtraKeys should be false")
+		s.True(opts.NilToEmptyArray, "NilToEmptyArray should be true")
+		s.True(opts.CompareOnlyExpectedKeys, "CompareOnlyExpectedKeys should be true")
 	})
 }
 
-func TestJSONAsserter_LegacyStructOptions(t *testing.T) {
-	ja := NewJSONAsserter(t).WithOptionsStruct(JSONAssertOptions{
+func (s *JSONAsserterTestSuite) TestLegacyStructOptions() {
+	// GOAL: Verify legacy struct-based options configuration works
+	//
+	// TEST SCENARIO: Configure options via struct → options applied correctly → values match expected
+
+	ja := NewJSONAsserter(s.T()).WithOptionsStruct(JSONAssertOptions{
 		AllowPresencePlaceholder: true,
 		NilToEmptyArray:          true,
 		IgnoreExtraKeys:          false, // override default
 	})
 	opts := ja.GetOptions()
 
-	if !opts.AllowPresencePlaceholder {
-		t.Error("AllowPresencePlaceholder should be true")
-	}
-	if !opts.NilToEmptyArray {
-		t.Error("NilToEmptyArray should be true")
-	}
-	if opts.IgnoreExtraKeys {
-		t.Error("IgnoreExtraKeys should be false when explicitly set")
-	}
+	s.True(opts.AllowPresencePlaceholder, "AllowPresencePlaceholder should be true")
+	s.True(opts.NilToEmptyArray, "NilToEmptyArray should be true")
+	s.False(opts.IgnoreExtraKeys, "IgnoreExtraKeys should be false when explicitly set")
 }
 
-func TestJSONAsserter_PresencePlaceholder(t *testing.T) {
-	t.Run("allows presence placeholder when enabled", func(t *testing.T) {
-		// Create a test that won't fail
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+func (s *JSONAsserterTestSuite) TestPresencePlaceholder() {
+	s.Run("allows presence placeholder when enabled", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithAllowPresencePlaceholder(true),
 		)
 
 		actualJSON := `{"id": "123", "timestamp": 1758348286}`
 		expectedJSON := `{"id": "123", "timestamp": "<<PRESENCE>>"}`
 
-		// This should not produce a diff since placeholder is allowed
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with presence placeholder enabled, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with presence placeholder enabled")
 	})
 
-	t.Run("rejects presence placeholder when disabled", func(t *testing.T) {
-		// Create a test that should fail
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("rejects presence placeholder when disabled", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithAllowPresencePlaceholder(false),
 		)
 
 		actualJSON := `{"id": "123", "timestamp": 1758348286}`
 		expectedJSON := `{"id": "123", "timestamp": "<<PRESENCE>>"}`
 
-		// This should produce a diff since placeholder is not allowed
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff == "" {
-			t.Error("Expected diff with presence placeholder disabled, got no diff")
-		}
-		if !containsString(diff, "<<PRESENCE>>") {
-			t.Errorf("Expected diff to contain <<PRESENCE>>, got: %s", diff)
-		}
+		s.NotEmpty(diff, "Expected diff with presence placeholder disabled")
+		s.Contains(diff, "<<PRESENCE>>", "Expected diff to contain <<PRESENCE>>")
 	})
 }
 
-func TestJSONAsserter_IgnoreExtraKeys(t *testing.T) {
-	t.Run("ignores extra keys when enabled", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+func (s *JSONAsserterTestSuite) TestIgnoreExtraKeys() {
+	s.Run("ignores extra keys when enabled", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreExtraKeys(true),
 		)
 
@@ -191,13 +142,11 @@ func TestJSONAsserter_IgnoreExtraKeys(t *testing.T) {
 		expectedJSON := `{"id": "123", "name": "test"}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with IgnoreExtraKeys enabled, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with IgnoreExtraKeys enabled")
 	})
 
-	t.Run("detects extra keys when disabled", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("detects extra keys when disabled", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreExtraKeys(false),
 		)
 
@@ -205,15 +154,13 @@ func TestJSONAsserter_IgnoreExtraKeys(t *testing.T) {
 		expectedJSON := `{"id": "123", "name": "test"}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff == "" {
-			t.Error("Expected diff with IgnoreExtraKeys disabled, got no diff")
-		}
+		s.NotEmpty(diff, "Expected diff with IgnoreExtraKeys disabled")
 	})
 }
 
-func TestJSONAsserter_ComplexScenarios(t *testing.T) {
-	t.Run("complex object with all features", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+func (s *JSONAsserterTestSuite) TestComplexScenarios() {
+	s.Run("complex object with all features", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithAllowPresencePlaceholder(true),
 			WithIgnoreExtraKeys(true),
 			WithNilToEmptyArray(true),
@@ -235,13 +182,11 @@ func TestJSONAsserter_ComplexScenarios(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with all features enabled, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with all features enabled")
 	})
 
-	t.Run("strict comparison with all features disabled", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("strict comparison with all features disabled", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithAllowPresencePlaceholder(false),
 			WithIgnoreExtraKeys(false),
 			WithNilToEmptyArray(false),
@@ -263,63 +208,34 @@ func TestJSONAsserter_ComplexScenarios(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff == "" {
-			t.Error("Expected diff with all features disabled, got no diff")
-		}
-		// Should detect presence placeholder, extra key, and null vs array difference
-		if !containsString(diff, "<<PRESENCE>>") {
-			t.Error("Expected diff to contain presence placeholder mismatch")
-		}
+		s.NotEmpty(diff, "Expected diff with all features disabled")
+		s.Contains(diff, "<<PRESENCE>>", "Expected diff to contain presence placeholder mismatch")
 	})
 }
 
-func TestJSONAsserter_InvalidJSON(t *testing.T) {
-	ja := NewJSONAsserter(&testing.T{})
+func (s *JSONAsserterTestSuite) TestInvalidJSON() {
+	ja := NewJSONAsserter(s.T())
 
-	t.Run("invalid expected JSON", func(t *testing.T) {
+	s.Run("invalid expected JSON", func() {
 		actualJSON := `{"valid": "json"}`
 		expectedJSON := `{"invalid": json}` // missing quotes
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if !containsString(diff, "invalid expected JSON") {
-			t.Errorf("Expected error about invalid expected JSON, got: %s", diff)
-		}
+		s.Contains(diff, "invalid expected JSON", "Expected error about invalid expected JSON")
 	})
 
-	t.Run("invalid actual JSON", func(t *testing.T) {
+	s.Run("invalid actual JSON", func() {
 		actualJSON := `{"invalid": json}` // missing quotes
 		expectedJSON := `{"valid": "json"}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if !containsString(diff, "invalid actual JSON") {
-			t.Errorf("Expected error about invalid actual JSON, got: %s", diff)
-		}
+		s.Contains(diff, "invalid actual JSON", "Expected error about invalid actual JSON")
 	})
 }
 
-// Helper function to check if a string contains a substring
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) &&
-		(s == substr ||
-			(len(s) > len(substr) &&
-				(s[:len(substr)] == substr ||
-					s[len(s)-len(substr):] == substr ||
-					indexOfString(s, substr) >= 0)))
-}
-
-// Simple string search function
-func indexOfString(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}
-
-func TestJSONAsserter_CompareOnlyExpectedKeys(t *testing.T) {
-	t.Run("compares only expected keys when enabled", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+func (s *JSONAsserterTestSuite) TestCompareOnlyExpectedKeys() {
+	s.Run("compares only expected keys when enabled", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithCompareOnlyExpectedKeys(true),
 			WithIgnoreExtraKeys(false), // disable to ensure CompareOnlyExpectedKeys takes precedence
 		)
@@ -328,13 +244,11 @@ func TestJSONAsserter_CompareOnlyExpectedKeys(t *testing.T) {
 		expectedJSON := `{"id": "123", "name": "test"}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with CompareOnlyExpectedKeys enabled, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with CompareOnlyExpectedKeys enabled")
 	})
 
-	t.Run("detects differences in expected keys when enabled", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("detects differences in expected keys when enabled", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithCompareOnlyExpectedKeys(true),
 		)
 
@@ -342,16 +256,12 @@ func TestJSONAsserter_CompareOnlyExpectedKeys(t *testing.T) {
 		expectedJSON := `{"id": "123", "name": "test"}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff == "" {
-			t.Error("Expected diff for mismatched expected key values, got no diff")
-		}
-		if !containsString(diff, "name") {
-			t.Errorf("Expected diff to mention 'name' field, got: %s", diff)
-		}
+		s.NotEmpty(diff, "Expected diff for mismatched expected key values")
+		s.Contains(diff, "name", "Expected diff to mention 'name' field")
 	})
 
-	t.Run("handles nested objects with CompareOnlyExpectedKeys", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("handles nested objects with CompareOnlyExpectedKeys", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithCompareOnlyExpectedKeys(true),
 		)
 
@@ -371,13 +281,11 @@ func TestJSONAsserter_CompareOnlyExpectedKeys(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with nested CompareOnlyExpectedKeys, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with nested CompareOnlyExpectedKeys")
 	})
 
-	t.Run("works with arrays and CompareOnlyExpectedKeys", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("works with arrays and CompareOnlyExpectedKeys", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithCompareOnlyExpectedKeys(true),
 		)
 
@@ -396,13 +304,11 @@ func TestJSONAsserter_CompareOnlyExpectedKeys(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with array CompareOnlyExpectedKeys, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with array CompareOnlyExpectedKeys")
 	})
 
-	t.Run("combines with other options", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("combines with other options", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithCompareOnlyExpectedKeys(true),
 			WithAllowPresencePlaceholder(true),
 			WithNilToEmptyArray(true),
@@ -421,13 +327,11 @@ func TestJSONAsserter_CompareOnlyExpectedKeys(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with combined options, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with combined options")
 	})
 
-	t.Run("disabled by default (standard behavior)", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("disabled by default (standard behavior)", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreExtraKeys(false), // ensure extra keys cause failure
 		)
 
@@ -435,40 +339,33 @@ func TestJSONAsserter_CompareOnlyExpectedKeys(t *testing.T) {
 		expectedJSON := `{"id": "123", "name": "test"}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff == "" {
-			t.Error("Expected diff with CompareOnlyExpectedKeys disabled (default), got no diff")
-		}
+		s.NotEmpty(diff, "Expected diff with CompareOnlyExpectedKeys disabled (default)")
 	})
 }
 
-// Test case for NilToEmptyArray behavior
-func TestJSONAsserter_NilToEmptyArrayBehavior(t *testing.T) {
-	t.Run("If the expected value is null, the actual value remains null, regardless of NilToEmptyArray", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}) // default options with NilToEmptyArray=true
+func (s *JSONAsserterTestSuite) TestNilToEmptyArrayBehavior() {
+	s.Run("If the expected value is null, the actual value remains null, regardless of NilToEmptyArray", func() {
+		ja := NewJSONAsserter(s.T()) // default options with NilToEmptyArray=true
 
 		actualJSON := `{"null_value": null}`
 		expectedJSON := `{"null_value": null}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("null should equal null, got diff: %s", diff)
-		}
+		s.Empty(diff, "null should equal null")
 	})
 
-	t.Run("When NilToEmptyArray is enabled, a null actual value will be normalized to an empty array if the expected value is an empty array", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}) // default options with NilToEmptyArray=true
+	s.Run("When NilToEmptyArray is enabled, a null actual value will be normalized to an empty array if the expected value is an empty array", func() {
+		ja := NewJSONAsserter(s.T()) // default options with NilToEmptyArray=true
 
 		actualJSON := `{"null_value": null}`
 		expectedJSON := `{"null_value": []}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("null should be normalized to [] when NilToEmptyArray=true, got diff: %s", diff)
-		}
+		s.Empty(diff, "null should be normalized to [] when NilToEmptyArray=true")
 	})
 
-	t.Run("When NilToEmptyArray is disabled, a null actual value should remain distinct from an empty array expected value", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("When NilToEmptyArray is disabled, a null actual value should remain distinct from an empty array expected value", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithNilToEmptyArray(false),
 		)
 
@@ -476,32 +373,26 @@ func TestJSONAsserter_NilToEmptyArrayBehavior(t *testing.T) {
 		expectedJSON := `{"null_value": []}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff == "" {
-			t.Error("null should NOT equal [] when NilToEmptyArray=false")
-		}
+		s.NotEmpty(diff, "null should NOT equal [] when NilToEmptyArray=false")
 	})
 }
 
-func TestJSONAsserter_IgnoredFields(t *testing.T) {
-	t.Run("WithIgnoredFields sets fields correctly", func(t *testing.T) {
-		ja := NewJSONAsserter(t).WithOptions(
+func (s *JSONAsserterTestSuite) TestIgnoredFields() {
+	s.Run("WithIgnoredFields sets fields correctly", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoredFields("timestamp", "debug_info"),
 		)
 		opts := ja.GetOptions()
 
 		expectedFields := []string{"timestamp", "debug_info"}
-		if len(opts.IgnoredFields) != len(expectedFields) {
-			t.Errorf("Expected %d ignored fields, got %d", len(expectedFields), len(opts.IgnoredFields))
-		}
+		s.Equal(len(expectedFields), len(opts.IgnoredFields), "Expected correct number of ignored fields")
 		for i, field := range expectedFields {
-			if i >= len(opts.IgnoredFields) || opts.IgnoredFields[i] != field {
-				t.Errorf("Expected ignored field %s at index %d, got %v", field, i, opts.IgnoredFields)
-			}
+			s.Equal(field, opts.IgnoredFields[i], "Expected ignored field %s at index %d", field, i)
 		}
 	})
 
-	t.Run("ignores specified fields at top level", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("ignores specified fields at top level", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoredFields("timestamp", "debug_info"),
 		)
 
@@ -519,13 +410,11 @@ func TestJSONAsserter_IgnoredFields(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with ignored fields, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with ignored fields")
 	})
 
-	t.Run("still detects differences in non-ignored fields", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("still detects differences in non-ignored fields", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoredFields("timestamp"),
 		)
 
@@ -541,16 +430,12 @@ func TestJSONAsserter_IgnoredFields(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff == "" {
-			t.Error("Expected diff for non-ignored field differences, got no diff")
-		}
-		if !containsString(diff, "name") {
-			t.Errorf("Expected diff to mention 'name' field, got: %s", diff)
-		}
+		s.NotEmpty(diff, "Expected diff for non-ignored field differences")
+		s.Contains(diff, "name", "Expected diff to mention 'name' field")
 	})
 
-	t.Run("ignores fields in nested objects", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("ignores fields in nested objects", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoredFields("timestamp", "debug_info"),
 		)
 
@@ -576,13 +461,11 @@ func TestJSONAsserter_IgnoredFields(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with ignored nested fields, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with ignored nested fields")
 	})
 
-	t.Run("ignores fields in arrays of objects", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("ignores fields in arrays of objects", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoredFields("timestamp", "debug_info"),
 		)
 
@@ -620,13 +503,11 @@ func TestJSONAsserter_IgnoredFields(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with ignored array fields, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with ignored array fields")
 	})
 
-	t.Run("combines with other options", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("combines with other options", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoredFields("timestamp"),
 			WithAllowPresencePlaceholder(true),
 			WithNilToEmptyArray(true),
@@ -650,13 +531,11 @@ func TestJSONAsserter_IgnoredFields(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with combined options and ignored fields, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with combined options and ignored fields")
 	})
 
-	t.Run("works when only some fields need to be ignored", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("works when only some fields need to be ignored", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoredFields("created_at"),
 		)
 
@@ -674,13 +553,11 @@ func TestJSONAsserter_IgnoredFields(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with created_at ignored, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with created_at ignored")
 	})
 
-	t.Run("empty ignored fields list works normally", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("empty ignored fields list works normally", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoredFields(), // empty list
 		)
 
@@ -688,13 +565,11 @@ func TestJSONAsserter_IgnoredFields(t *testing.T) {
 		expectedJSON := `{"id": "123", "name": "test"}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with empty ignored fields, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with empty ignored fields")
 	})
 
-	t.Run("detects diff when ignored fields are empty and JSONs differ", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("detects diff when ignored fields are empty and JSONs differ", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoredFields(), // empty list
 		)
 
@@ -702,15 +577,13 @@ func TestJSONAsserter_IgnoredFields(t *testing.T) {
 		expectedJSON := `{"id": "123", "name": "test"}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff == "" {
-			t.Error("Expected diff with empty ignored fields and different values, got no diff")
-		}
+		s.NotEmpty(diff, "Expected diff with empty ignored fields and different values")
 	})
 }
 
-func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
-	t.Run("arrays with same elements in different order match when enabled", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+func (s *JSONAsserterTestSuite) TestIgnoreArrayOrder() {
+	s.Run("arrays with same elements in different order match when enabled", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreArrayOrder(true),
 		)
 
@@ -718,13 +591,11 @@ func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
 		expectedJSON := `{"items": [1, 2, 3]}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with IgnoreArrayOrder enabled, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with IgnoreArrayOrder enabled")
 	})
 
-	t.Run("arrays with same elements in different order fail when disabled", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("arrays with same elements in different order fail when disabled", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreArrayOrder(false),
 		)
 
@@ -732,13 +603,11 @@ func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
 		expectedJSON := `{"items": [1, 2, 3]}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff == "" {
-			t.Error("Expected diff with IgnoreArrayOrder disabled, got no diff")
-		}
+		s.NotEmpty(diff, "Expected diff with IgnoreArrayOrder disabled")
 	})
 
-	t.Run("arrays with different elements fail regardless of option", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("arrays with different elements fail regardless of option", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreArrayOrder(true),
 		)
 
@@ -746,13 +615,11 @@ func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
 		expectedJSON := `{"items": [1, 2, 4]}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff == "" {
-			t.Error("Expected diff for different array elements even with IgnoreArrayOrder enabled, got no diff")
-		}
+		s.NotEmpty(diff, "Expected diff for different array elements even with IgnoreArrayOrder enabled")
 	})
 
-	t.Run("nested arrays are sorted correctly", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("nested arrays are sorted correctly", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreArrayOrder(true),
 		)
 
@@ -760,13 +627,11 @@ func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
 		expectedJSON := `{"data": [{"values": [1, 2, 3]}, {"values": [4, 5, 6]}]}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with nested arrays sorted, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with nested arrays sorted")
 	})
 
-	t.Run("objects in arrays sorted by JSON representation", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("objects in arrays sorted by JSON representation", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreArrayOrder(true),
 		)
 
@@ -774,13 +639,11 @@ func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
 		expectedJSON := `{"devices": [{"id": "1", "name": "a"}, {"id": "2", "name": "b"}]}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with object arrays sorted, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with object arrays sorted")
 	})
 
-	t.Run("mixed nested structures with arrays and objects", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("mixed nested structures with arrays and objects", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreArrayOrder(true),
 		)
 
@@ -798,13 +661,11 @@ func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with mixed nested structures, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with mixed nested structures")
 	})
 
-	t.Run("empty arrays match regardless of order option", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("empty arrays match regardless of order option", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreArrayOrder(true),
 		)
 
@@ -812,13 +673,11 @@ func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
 		expectedJSON := `{"items": []}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff for empty arrays, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff for empty arrays")
 	})
 
-	t.Run("single element arrays match regardless of order", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("single element arrays match regardless of order", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreArrayOrder(true),
 		)
 
@@ -826,13 +685,11 @@ func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
 		expectedJSON := `{"items": [1]}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff for single element arrays, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff for single element arrays")
 	})
 
-	t.Run("combines with IgnoredFields option", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("combines with IgnoredFields option", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreArrayOrder(true),
 			WithIgnoredFields("timestamp"),
 		)
@@ -851,13 +708,11 @@ func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff with IgnoreArrayOrder + IgnoredFields, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff with IgnoreArrayOrder + IgnoredFields")
 	})
 
-	t.Run("BLE notification use case - multiple characteristics", func(t *testing.T) {
-		ja := NewJSONAsserter(&testing.T{}).WithOptions(
+	s.Run("BLE notification use case - multiple characteristics", func() {
+		ja := NewJSONAsserter(s.T()).WithOptions(
 			WithIgnoreArrayOrder(true),
 		)
 
@@ -878,8 +733,234 @@ func TestJSONAsserter_IgnoreArrayOrder(t *testing.T) {
 		}`
 
 		diff := ja.diff(actualJSON, expectedJSON)
-		if diff != "" {
-			t.Errorf("Expected no diff for BLE notification case, got: %s", diff)
-		}
+		s.Empty(diff, "Expected no diff for BLE notification case")
 	})
+}
+
+func (s *JSONAsserterTestSuite) TestRootLevelArrayComparison() {
+	// GOAL: Verify JSONAsserter automatically wraps root-level arrays for comparison
+	//
+	// TEST SCENARIO: Compare two identical root-level arrays → no diff returned → assertion passes
+
+	ja := NewJSONAsserter(s.T())
+
+	actualJSON := `[{"id": "1", "name": "test"}, {"id": "2", "name": "test2"}]`
+	expectedJSON := `[{"id": "1", "name": "test"}, {"id": "2", "name": "test2"}]`
+
+	diff := ja.diff(actualJSON, expectedJSON)
+	s.Empty(diff, "Expected no diff for identical root-level arrays")
+}
+
+func (s *JSONAsserterTestSuite) TestRootLevelArrayDifference() {
+	// GOAL: Verify JSONAsserter detects differences in root-level arrays
+	//
+	// TEST SCENARIO: Compare two different root-level arrays → diff returned → assertion fails
+
+	ja := NewJSONAsserter(s.T())
+
+	actualJSON := `[{"id": "1", "name": "actual"}, {"id": "2", "name": "test2"}]`
+	expectedJSON := `[{"id": "1", "name": "expected"}, {"id": "2", "name": "test2"}]`
+
+	diff := ja.diff(actualJSON, expectedJSON)
+	s.NotEmpty(diff, "Expected diff for different root-level arrays")
+	s.Contains(diff, "name", "Expected diff to contain 'name' field difference")
+}
+
+func (s *JSONAsserterTestSuite) TestRootLevelArrayWithIgnoreArrayOrder() {
+	// GOAL: Verify IgnoreArrayOrder option works with root-level arrays
+	//
+	// TEST SCENARIO: Compare root-level arrays with same elements in different order with IgnoreArrayOrder=true → no diff → assertion passes
+
+	ja := NewJSONAsserter(s.T()).WithOptions(
+		WithIgnoreArrayOrder(true),
+	)
+
+	actualJSON := `[{"id": "2", "name": "b"}, {"id": "1", "name": "a"}]`
+	expectedJSON := `[{"id": "1", "name": "a"}, {"id": "2", "name": "b"}]`
+
+	diff := ja.diff(actualJSON, expectedJSON)
+	s.Empty(diff, "Expected no diff for root-level arrays with IgnoreArrayOrder")
+}
+
+func (s *JSONAsserterTestSuite) TestRootLevelArrayWithIgnoredFields() {
+	// GOAL: Verify IgnoredFields option works with root-level arrays
+	//
+	// TEST SCENARIO: Compare root-level arrays with different ignored field values → no diff → assertion passes
+
+	ja := NewJSONAsserter(s.T()).WithOptions(
+		WithIgnoredFields("timestamp"),
+	)
+
+	actualJSON := `[{"id": "1", "timestamp": 1000}, {"id": "2", "timestamp": 2000}]`
+	expectedJSON := `[{"id": "1", "timestamp": 9999}, {"id": "2", "timestamp": 8888}]`
+
+	diff := ja.diff(actualJSON, expectedJSON)
+	s.Empty(diff, "Expected no diff for root-level arrays with IgnoredFields")
+}
+
+func (s *JSONAsserterTestSuite) TestRootLevelArrayVsObject() {
+	// GOAL: Verify JSONAsserter correctly fails when comparing root-level array with root-level object
+	//
+	// TEST SCENARIO: Compare root-level array with root-level object → diff returned → assertion fails
+
+	ja := NewJSONAsserter(s.T())
+
+	actualJSON := `[{"id": "1"}]`
+	expectedJSON := `{"id": "1"}`
+
+	diff := ja.diff(actualJSON, expectedJSON)
+	s.NotEmpty(diff, "Expected diff when comparing root-level array with object")
+}
+
+func (s *JSONAsserterTestSuite) TestEmptyRootLevelArrays() {
+	// GOAL: Verify JSONAsserter handles empty root-level arrays correctly
+	//
+	// TEST SCENARIO: Compare two empty root-level arrays → no diff → assertion passes
+
+	ja := NewJSONAsserter(s.T())
+
+	actualJSON := `[]`
+	expectedJSON := `[]`
+
+	diff := ja.diff(actualJSON, expectedJSON)
+	s.Empty(diff, "Expected no diff for empty root-level arrays")
+}
+
+func (s *JSONAsserterTestSuite) TestRootLevelArrayWithMixedOptions() {
+	// GOAL: Verify multiple options work together with root-level arrays
+	//
+	// TEST SCENARIO: Compare root-level arrays with IgnoreArrayOrder + IgnoredFields → no diff → assertion passes
+
+	ja := NewJSONAsserter(s.T()).WithOptions(
+		WithIgnoreArrayOrder(true),
+		WithIgnoredFields("timestamp", "debug"),
+	)
+
+	actualJSON := `[
+		{"id": "2", "timestamp": 2000, "debug": "info2"},
+		{"id": "1", "timestamp": 1000, "debug": "info1"}
+	]`
+	expectedJSON := `[
+		{"id": "1", "timestamp": 9999, "debug": "different1"},
+		{"id": "2", "timestamp": 8888, "debug": "different2"}
+	]`
+
+	diff := ja.diff(actualJSON, expectedJSON)
+	s.Empty(diff, "Expected no diff for root-level arrays with mixed options")
+}
+
+func (s *JSONAsserterTestSuite) TestNestedArraysStillWork() {
+	// GOAL: Verify nested arrays within objects continue to work correctly (regression test)
+	//
+	// TEST SCENARIO: Compare objects containing nested arrays → no diff → assertion passes
+
+	ja := NewJSONAsserter(s.T())
+
+	actualJSON := `{"items": [1, 2, 3], "data": {"values": [4, 5, 6]}}`
+	expectedJSON := `{"items": [1, 2, 3], "data": {"values": [4, 5, 6]}}`
+
+	diff := ja.diff(actualJSON, expectedJSON)
+	s.Empty(diff, "Expected no diff for nested arrays within objects")
+}
+
+func (s *JSONAsserterTestSuite) TestIgnoredFieldsRemovedBeforeSorting() {
+	// GOAL: Verify ignored fields are removed BEFORE sorting arrays
+	//
+	// TEST SCENARIO: Compare arrays with identical data but different ignored field values → no diff → assertion passes
+	//
+	// This test ensures the critical ordering: removeIgnoredFields() BEFORE sortArrays().
+	// If ignored fields are present during sorting, they affect the sort order even though
+	// they're ignored during comparison, breaking IgnoreArrayOrder functionality.
+	//
+	// In the tests: Two BLE notifications with same data but different call_counts would sort
+	// in opposite order if call_count is included in the sort key.
+
+	ja := NewJSONAsserter(s.T()).WithOptions(
+		WithIgnoreArrayOrder(true),
+		WithIgnoredFields("call_count"),
+	)
+
+	// Arrays with same data but different call_count values.
+	// The call_count values would cause different sort orders if included in sorting:
+	// - actual: {"call_count":1,"char":"B"} < {"call_count":2,"char":"A"} (sorts as B,A)
+	// - expected: {"call_count":1,"char":"A"} < {"call_count":2,"char":"B"} (sorts as A,B)
+	actualJSON := `{
+		"notifications": [
+			{"char": "B", "call_count": 1},
+			{"char": "A", "call_count": 2}
+		]
+	}`
+	expectedJSON := `{
+		"notifications": [
+			{"char": "A", "call_count": 1},
+			{"char": "B", "call_count": 2}
+		]
+	}`
+
+	// CORRECT behavior (remove ignored fields BEFORE sorting):
+	// 1. Remove call_count: actual=[{"char":"B"},{"char":"A"}], expected=[{"char":"A"},{"char":"B"}]
+	// 2. Sort both: actual=[{"char":"A"},{"char":"B"}], expected=[{"char":"A"},{"char":"B"}]
+	// 3. Compare: MATCH ✅
+	//
+	// INCORRECT behavior (sort BEFORE removing ignored fields):
+	// 1. Sort with call_count: actual=[{"char":"B","call_count":1},{"char":"A","call_count":2}]
+	//                          expected=[{"char":"A","call_count":1},{"char":"B","call_count":2}]
+	// 2. Remove call_count: actual=[{"char":"B"},{"char":"A"}], expected=[{"char":"A"},{"char":"B"}]
+	// 3. Compare: FAIL ❌ - arrays in different orders!
+
+	diff := ja.diff(actualJSON, expectedJSON)
+	s.Empty(diff, "Expected no diff when ignored fields removed before sorting.\n"+
+		"This indicates ignored fields were NOT removed before sorting, breaking IgnoreArrayOrder")
+}
+
+func (s *JSONAsserterTestSuite) TestRootLevelPrimitiveArrays() {
+	// GOAL: Verify root-level arrays of primitives are compared correctly
+	//
+	// TEST SCENARIO: Compare root-level arrays of primitive values → no diff → assertion passes
+
+	ja := NewJSONAsserter(s.T())
+
+	actualJSON := `[1, 2, 3, "test", true]`
+	expectedJSON := `[1, 2, 3, "test", true]`
+
+	diff := ja.diff(actualJSON, expectedJSON)
+	s.Empty(diff, "Expected no diff for root-level primitive arrays")
+}
+
+func (s *JSONAsserterTestSuite) TestRootLevelPrimitiveArrayDifference() {
+	// GOAL: Verify differences in root-level primitive arrays are detected
+	//
+	// TEST SCENARIO: Compare root-level primitive arrays with different values → diff returned → assertion fails
+
+	ja := NewJSONAsserter(s.T())
+
+	actualJSON := `[1, 2, 3]`
+	expectedJSON := `[1, 2, 4]`
+
+	diff := ja.diff(actualJSON, expectedJSON)
+	s.NotEmpty(diff, "Expected diff for different root-level primitive arrays")
+}
+
+// Helper function to check if a string contains a substring
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) &&
+		(s == substr ||
+			(len(s) > len(substr) &&
+				(s[:len(substr)] == substr ||
+					s[len(s)-len(substr):] == substr ||
+					indexOfString(s, substr) >= 0)))
+}
+
+// Simple string search function
+func indexOfString(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestJSONAsserterSuite(t *testing.T) {
+	suite.Run(t, new(JSONAsserterTestSuite))
 }

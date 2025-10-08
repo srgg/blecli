@@ -193,6 +193,68 @@ func (suite *LuaEngineTestSuite) TestCaptureIOWriteVariants() {
 	}
 }
 
+// TestCaptureIOStderrWriteVariants tests io.stderr:write() capture with various argument types
+func (suite *LuaEngineTestSuite) TestCaptureIOStderrWriteVariants() {
+	// GOAL: Verify that io.stderr:write() captures stderr output correctly with various argument types
+	//
+	// TEST SCENARIO: Call io.stderr:write() with different arguments → output captured to stderr → verify content
+
+	cases := []struct {
+		name           string
+		script         string
+		expectedStderr string
+	}{
+		// Basic io.stderr:write tests - NO automatic newline
+		{"one string", `io.stderr:write("error message")`, "error message"},
+		{"two strings", `io.stderr:write("error: ", "failed")`, "error: failed"},
+		{"number", `io.stderr:write(500)`, "500"},
+		{"boolean true", `io.stderr:write(true)`, "true"},
+		{"boolean false", `io.stderr:write(false)`, "false"},
+		{"nil value", `io.stderr:write(nil)`, "nil"},
+
+		// Mixed types - concatenated without separator
+		{"string + number", `io.stderr:write("code: ", 404)`, "code: 404"},
+		{"boolean + string", `io.stderr:write(false, " result")`, "false result"},
+
+		// Manual newlines
+		{"with newline", `io.stderr:write("error\n")`, "error\n"},
+		{"multiple lines", `io.stderr:write("err1\nerr2\n")`, "err1\nerr2\n"},
+
+		// Empty string and spaces
+		{"empty string", `io.stderr:write("")`, ""},
+		{"whitespace string", `io.stderr:write("   ")`, "   "},
+
+		// Multiple io.stderr:write calls
+		{"multiple calls", `io.stderr:write("a"); io.stderr:write("b")`, "ab"},
+		{"multiple calls with newlines", `io.stderr:write("a\n"); io.stderr:write("b\n")`, "a\nb\n"},
+	}
+
+	for _, c := range cases {
+		suite.Run(c.name, func() {
+			err := suite.ExecuteScript(c.script)
+			suite.NoError(err, "Lua code should execute")
+
+			time.Sleep(10 * time.Millisecond)
+
+			// Consume records and separate stdout/stderr
+			var stderrContent strings.Builder
+			consumer := func(record *LuaOutputRecord) (string, error) {
+				if record == nil {
+					return stderrContent.String(), nil
+				}
+				if record.Source == "stderr" {
+					stderrContent.WriteString(record.Content)
+				}
+				return "", nil
+			}
+
+			got, err := ConsumeRecords(suite.luaOutputCapture, consumer)
+			suite.NoError(err, "should be able to consume records")
+			suite.Equal(c.expectedStderr, got, "stderr content should match")
+		})
+	}
+}
+
 // TestCaptureMixedPrintAndIOWrite tests that print() and io.write() can be mixed
 func (suite *LuaEngineTestSuite) TestCaptureMixedPrintAndIOWrite() {
 	script := `

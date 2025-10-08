@@ -1,8 +1,3 @@
--- Bridge Monitor: Subscribe to all characteristics and dump values
-
--- Load shared utilities
-local bleutils = require("bleutils")
-
 -- Discover all services and characteristics
 local services_table = ble.list()
 
@@ -47,26 +42,19 @@ for _, service_uuid in ipairs(services_table) do
     end
 end
 
--- Verify at least one notifiable characteristic exists
-if total_chars == 0 then
-    error("No notifiable characteristics found - cannot start bridge")
+print("")
+print("=== BLE-PTY Bridge is Active ===")
+print(string.format("Device: %s", ble.device.address))
+
+-- Print only services with notifiable characteristics
+for _, svc in ipairs(services) do
+    print(string.format("Service: %s", svc.service))
+    print(string.format("Characteristics: %d", #svc.chars))
+    for i, char_uuid in ipairs(svc.chars) do
+        print(string.format("  - %s", char_uuid))
+    end
+    print("")
 end
 
--- Subscribe FIRST (before printing header) - this validates the subscription
-ble.subscribe{
-    services = services,
-    Mode = "EveryUpdate",
-    MaxRate = 0,
-    Callback = function(record)
-        -- Print compact notification for each characteristic
-        for uuid, data in pairs(record.Values) do
-            local hex = bleutils.to_hex(data)
-            local ascii = bleutils.to_ascii(data)
-            local short = bleutils.short_uuid(uuid)
-
-            -- Compact format: [seq] UUID: hex | ascii (len bytes)
-            print(string.format("[%d] %s: %s | %s (%db)",
-                record.Seq, short, hex, ascii, #data))
-        end
-    end
-}
+print("Bridge is running. Press Ctrl+C to stop the bridge.")
+print("")

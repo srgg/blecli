@@ -17,7 +17,7 @@ type TestHelper struct {
 // NewTestHelper creates a test helper with a suppressed logger.
 func NewTestHelper(t *testing.T) *TestHelper {
 	logger := logrus.New()
-	logger.SetLevel(logrus.PanicLevel) // suppress logs during tests
+	logger.SetLevel(logrus.DebugLevel) // enable debug logs to track execution flow
 	return &TestHelper{
 		T:      t,
 		Logger: logger,
@@ -40,71 +40,71 @@ func CreateMockPeripheralDeviceFromJSON(jsonStrFmt string, args ...interface{}) 
 	return NewPeripheralDeviceBuilder().FromJSON(jsonStrFmt, args...)
 }
 
-// CreateComprehensiveMockDevice creates a mock device with all services needed for comprehensive testing
-func CreateComprehensiveMockDevice() *PeripheralDeviceBuilder {
-	return CreateMockPeripheralDeviceFromJSON(`{
-		"services": [
-			{
-				"uuid": "1234",
-				"characteristics": [
-					{
-						"uuid": "5678",
-						"properties": "read,notify",
-						"value": [0]
-					}
-				]
-			},
-			{
-				"uuid": "180D",
-				"characteristics": [
-					{ "uuid": "2A37", "properties": "read,notify", "value": [0] },
-					{ "uuid": "2A38", "properties": "read,notify", "value": [0] }
-				]
-			},
-			{
-				"uuid": "180F",
-				"characteristics": [
-					{ "uuid": "2A19", "properties": "read,notify", "value": [0] }
-				]
-			},
-			{
-				"uuid": "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
-				"characteristics": [
-					{
-						"uuid": "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
-						"properties": "read,notify",
-						"value": [0]
-					},
-					{
-						"uuid": "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
-						"properties": "read,notify",
-						"value": [0]
-					}
-				]
-			},
-			{
-				"uuid": "0000180d-0000-1000-8000-00805f9b34fb",
-				"characteristics": [
-					{
-						"uuid": "00002a37-0000-1000-8000-00805f9b34fb",
-						"properties": "read,notify",
-						"value": [0]
-					}
-				]
-			},
-			{
-				"uuid": "1000180d-0000-1000-8000-00805f9b34fb",
-				"characteristics": [
-					{
-						"uuid": "10002a37-0000-1000-8000-00805f9b34fb",
-						"properties": "read,notify",
-						"value": [0]
-					}
-				]
-			}
-		]
-	}`)
-}
+//// CreateComprehensiveMockDevice creates a mock device with all services needed for comprehensive testing
+//func CreateComprehensiveMockDevice() *PeripheralDeviceBuilder {
+//	return CreateMockPeripheralDeviceFromJSON(`{
+//		"services": [
+//			{
+//				"uuid": "1234",
+//				"characteristics": [
+//					{
+//						"uuid": "5678",
+//						"properties": "read,notify",
+//						"value": [0]
+//					}
+//				]
+//			},
+//			{
+//				"uuid": "180D",
+//				"characteristics": [
+//					{ "uuid": "2A37", "properties": "read,notify", "value": [0] },
+//					{ "uuid": "2A38", "properties": "read,notify", "value": [0] }
+//				]
+//			},
+//			{
+//				"uuid": "180F",
+//				"characteristics": [
+//					{ "uuid": "2A19", "properties": "read,notify", "value": [0] }
+//				]
+//			},
+//			{
+//				"uuid": "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+//				"characteristics": [
+//					{
+//						"uuid": "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
+//						"properties": "read,notify",
+//						"value": [0]
+//					},
+//					{
+//						"uuid": "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+//						"properties": "read,notify",
+//						"value": [0]
+//					}
+//				]
+//			},
+//			{
+//				"uuid": "0000180d-0000-1000-8000-00805f9b34fb",
+//				"characteristics": [
+//					{
+//						"uuid": "00002a37-0000-1000-8000-00805f9b34fb",
+//						"properties": "read,notify",
+//						"value": [0]
+//					}
+//				]
+//			},
+//			{
+//				"uuid": "1000180d-0000-1000-8000-00805f9b34fb",
+//				"characteristics": [
+//					{
+//						"uuid": "10002a37-0000-1000-8000-00805f9b34fb",
+//						"properties": "read,notify",
+//						"value": [0]
+//					}
+//				]
+//			}
+//		]
+//	}`)
+//}
 
 func LoadScript(relPath string) (string, error) {
 	wd, err := os.Getwd()

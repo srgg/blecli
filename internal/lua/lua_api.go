@@ -1,8 +1,11 @@
 package lua
 
+import "C"
+
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -10,12 +13,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
 )
-
-// LuaApiFactory creates a Lua API instance (can be overridden in tests)
-var LuaApiFactory = func(address string, logger *logrus.Logger) (*BLEAPI2, error) {
-	dev := device.NewDeviceWithAddress(address, logger)
-	return NewBLEAPI2(dev, logger), nil
-}
 
 // LuaSubscriptionTable Lua subscription configuration
 type LuaSubscriptionTable struct {
@@ -164,6 +161,31 @@ func (api *BLEAPI2) registerSubscribeFunction(L *lua.State) {
 }
 
 // registerListFunction registers the ble.list() function
+//
+// Returns a dual-purpose Lua table with both array and hash parts:
+//
+// In Lua, a table can have both an array part and a hash part at the same time:
+//
+// Array part (numeric indices):
+//   - Keys: [1], [2], [3], etc.
+//   - Accessed with ipairs() for ordered iteration
+//   - Preserves insertion order
+//
+// Hash part (string/any keys):
+//   - Keys: ["uuid"], ["name"], etc.
+//   - Accessed with pairs() (order not guaranteed) or direct lookup table["uuid"]
+//
+// Example:
+//
+//	local t = {}
+//	t[1] = "service1"           -- array part
+//	t[2] = "service2"           -- array part
+//	t["service1"] = {data=123}  -- hash part
+//	t["service2"] = {data=456}  -- hash part
+//
+// For ble.list(), this allows:
+//  1. Ordered iteration: for i, uuid in ipairs(services) do ... end
+//  2. UUID-based lookup: services[uuid] to get service info
 func (api *BLEAPI2) registerListFunction(L *lua.State) {
 	api.SafePushGoFunction(L, "list", func(L *lua.State) int {
 		// Get connection when function is called, not when registered
@@ -174,8 +196,13 @@ func (api *BLEAPI2) registerListFunction(L *lua.State) {
 		}
 		services := connection.GetServices()
 		L.NewTable()
+
+		// Add both indexed array (for ordered iteration) and keyed access (for lookup)
+		arrayIndex := 1
 		for _, service := range services {
-			L.PushString(service.GetUUID())
+			uuid := service.GetUUID()
+
+			// Create service info table
 			L.NewTable()
 
 			// Add characteristics array
@@ -190,7 +217,21 @@ func (api *BLEAPI2) registerListFunction(L *lua.State) {
 			}
 			L.SetTable(-3)
 
-			L.SetTable(-3)
+			// Stack: [main_table, service_info]
+			// Store service info with UUID key (for lookup: table["uuid"])
+			L.PushString(uuid) // Stack: [main_table, service_info, uuid]
+			L.PushValue(-2)    // Stack: [main_table, service_info, uuid, service_info]
+			L.SetTable(-4)     // main_table[uuid] = service_info; Stack: [main_table, service_info]
+
+			// Store UUID in array part (for iteration: ipairs(table))
+			L.PushInteger(int64(arrayIndex)) // Stack: [main_table, service_info, arrayIndex]
+			L.PushString(uuid)               // Stack: [main_table, service_info, arrayIndex, uuid]
+			L.SetTable(-4)                   // main_table[arrayIndex] = uuid; Stack: [main_table, service_info]
+
+			// Pop the service info table
+			L.Pop(1)
+
+			arrayIndex++
 		}
 		return 1
 	})
@@ -424,16 +465,49 @@ func (api *BLEAPI2) executeSubscription(config *LuaSubscriptionTable) error {
 }
 
 // callLuaCallback calls the Lua callback function with the record data
-func (api *BLEAPI2) callLuaCallback(callbackRef int, record *device.Record) {
+func (api *BLEAPI2) callLuaCallback(callbackRef int, record *device.Record) error {
 	if callbackRef == lua.LUA_NOREF {
-		return
+		return nil
 	}
 
+	// Outer panic handler: catches ALL panics (including LuaError from StackTrace crashes)
+	// This ensures one callback's error doesn't crash other subscriptions
+	defer func() {
+		if r := recover(); r != nil {
+			// Log ALL panics (LuaError or otherwise) and recover gracefully
+			stack := string(debug.Stack())
+			api.logger.Errorf("Lua callback panic (recovered): %v\nStack:\n%s", r, stack)
+
+			// Send error to stderr for user visibility
+			api.LuaEngine.outputChan.ForceSend(LuaOutputRecord{
+				Content:   fmt.Sprintf("Callback error: %v", r),
+				Timestamp: time.Now(),
+				Source:    "stderr",
+			})
+
+			// Clean up Lua state after panic
+			api.LuaEngine.DoWithState(func(L *lua.State) interface{} {
+				L.SetTop(0) // Reset stack to clean state
+				return nil
+			})
+
+			// DO NOT re-panic - allow other subscriptions to continue
+		}
+	}()
+
 	api.LuaEngine.DoWithState(func(L *lua.State) interface{} {
+		// Inner panic handler: catches panics from L.Call() (including StackTrace crashes)
+		defer func() {
+			if r := recover(); r != nil {
+				// Re-panic to outer handler for cleanup
+				panic(r)
+			}
+		}()
+
 		// Push the callback function onto the stack using reference
 		L.RawGeti(lua.LUA_REGISTRYINDEX, callbackRef)
 
-		// Create record table
+		// Create a record table
 		L.NewTable()
 
 		// Set TsUs
@@ -487,20 +561,28 @@ func (api *BLEAPI2) callLuaCallback(callbackRef int, record *device.Record) {
 		}
 
 		// Call the function with 1 argument (the record table)
+		// This can panic if StackTrace() crashes while building LuaError
 		if err := L.Call(1, 0); err != nil {
 			// Log the error for debugging
 			api.logger.Errorf("Lua callback execution failed: %v", err)
 
-			// Send error to output channel for user visibility
+			// Send error to an output channel for user visibility
 			api.LuaEngine.outputChan.ForceSend(LuaOutputRecord{
 				Content:   fmt.Sprintf("Callback error: %v", err),
 				Timestamp: time.Now(),
 				Source:    "stderr",
 			})
+
+			// CRITICAL: Reset Lua stack after error to prevent corruption
+			// When L.Call() fails, the stack may be left in an inconsistent state
+			// Resetting ensures the next callback starts with a clean stack
+			L.SetTop(0)
 		}
 
 		return nil
 	})
+
+	return nil
 }
 
 // registerCharacteristicFunction registers the ble.characteristic() function
@@ -608,5 +690,11 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 
 // Close cleans up the API resources
 func (api *BLEAPI2) Close() {
+	if api.logger != nil {
+		api.logger.WithField("lua_api_ptr", fmt.Sprintf("%p", api)).Debug("Closing BLEAPI2...")
+	}
 	api.LuaEngine.Close()
+	if api.logger != nil {
+		api.logger.WithField("lua_api_ptr", fmt.Sprintf("%p", api)).Debug("BLEAPI2 closed")
+	}
 }

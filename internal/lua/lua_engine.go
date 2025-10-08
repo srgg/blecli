@@ -19,6 +19,9 @@ import (
 //go:embed lua-libs/json.lua
 var jsonLua string // json.lua is embedded into this string
 
+//go:embed lua-libs/bleutils.lua
+var bleutilsLua string // bleutils.lua is embedded into this string
+
 // LuaOutputRecord represents a single output record from Lua script execution
 type LuaOutputRecord struct {
 	Content   string    `json:"content"`
@@ -233,7 +236,7 @@ func (e *LuaEngine) registerPrintCaptureInternal() {
 	})
 }
 
-// registerIOWriteCaptureInternal overrides io.write to capture output to the output channel
+// registerIOWriteCaptureInternal overrides io.write and io.stderr:write to capture output to the output channel
 func (e *LuaEngine) registerIOWriteCaptureInternal() {
 	e.doWithStateInternal(func(L *lua.State) interface{} {
 		// Override io.write to capture output
@@ -279,6 +282,58 @@ func (e *LuaEngine) registerIOWriteCaptureInternal() {
 				return 0
 			}))
 			L.SetTable(-3)
+
+			// Create io.stderr table with write method for stderr capture
+			// Stack: io table at -1
+			L.PushString("stderr") // Stack: io, "stderr"
+			L.NewTable()           // Stack: io, "stderr", stderr_table
+			L.PushString("write")  // Stack: io, "stderr", stderr_table, "write"
+			L.PushGoFunction(e.SafeWrapGoFunction("io.stderr:write()", func(L *lua.State) int {
+				top := L.GetTop()
+				var output strings.Builder
+
+				// When called as io.stderr:write(), first arg is the table (self), skip it
+				startIdx := 1
+				if top > 0 && L.IsTable(1) {
+					startIdx = 2
+				}
+
+				for i := startIdx; i <= top; i++ {
+					if L.IsString(i) {
+						output.WriteString(L.ToString(i))
+					} else if L.IsNumber(i) {
+						output.WriteString(fmt.Sprintf("%v", L.ToNumber(i)))
+					} else if L.IsBoolean(i) {
+						if L.ToBoolean(i) {
+							output.WriteString("true")
+						} else {
+							output.WriteString("false")
+						}
+					} else if L.IsNil(i) {
+						output.WriteString("nil")
+					} else {
+						// For other types, use tostring
+						L.GetGlobal("tostring")
+						L.PushValue(i)
+						L.Call(1, 1)
+						output.WriteString(L.ToString(-1))
+						L.Pop(1)
+					}
+				}
+
+				// Send to RingChannel as stderr
+				if output.Len() > 0 {
+					e.outputChan.ForceSend(LuaOutputRecord{
+						Content:   output.String(),
+						Timestamp: time.Now(),
+						Source:    "stderr",
+					})
+				}
+
+				return 0
+			}))
+			L.SetTable(-3) // Stack: io, "stderr", stderr_table (with write method set)
+			L.SetTable(-3) // Stack: io (with stderr table set)
 		}
 		L.Pop(1) // Pop io table
 
@@ -308,6 +363,28 @@ func (e *LuaEngine) preloadJSONLibInternal() {
 		L.Pop(2)               // Pop package and loaded
 		return nil
 	})
+}
+
+func (e *LuaEngine) preloadBleUtilsLibInternal() {
+	e.doWithStateInternal(func(L *lua.State) interface{} {
+		// Load and execute the JSON Lua module directly
+		if err := L.LoadString(bleutilsLua); err != 0 {
+			e.logger.Error("Failed to load embedded bleutils.lua")
+			return nil
+		}
+
+		// Execute the chunk to get a library table
+		L.Call(0, 1) // runs chunk -> pushes module table
+
+		// Put it directly into the package.loaded["json"] like RegisterLibrary does
+		L.GetField(lua.LUA_GLOBALSINDEX, "package")
+		L.GetField(-1, "loaded")
+		L.PushValue(-3)            // Push the JSON module table
+		L.SetField(-2, "bleutils") // package.loaded["bleutils"] = module
+		L.Pop(2)                   // Pop package and loaded
+		return nil
+	})
+
 }
 
 // OutputChannel returns the output channel
@@ -348,32 +425,14 @@ func (e *LuaEngine) parseLuaError(errType, source string) *LuaError {
 	}
 }
 
-//// Thread-safe execution
-//func (e *LuaEngine) safeExecuteScript(script string) error {
-//	var execErr error
-//	e.DoWithState(func(L *lua.State) interface{} {
-//		if err := L.DoString(script); err != nil {
-//			luaErr := e.parseLuaError("syntax", "")
-//			e.outputChan.ForceSend(LuaOutputRecord{
-//				Content:   fmt.Sprintf("Lua syntax error: %s", luaErr.Message),
-//				Timestamp: time.Now(),
-//				Source:    "stderr",
-//			})
-//			execErr = fmt.Errorf("lua execution failed: %w", err)
-//		}
-//		return nil
-//	})
-//	return execErr
-//}
-
-// safeExecuteScript3 executes a Lua script in the persistent state with context cancellation support.
+// safeExecuteScript executes a Lua script in the persistent state with context cancellation support.
 //
 // Cancellation mechanism:
 //   - Runs script execution in a goroutine to avoid blocking
 //   - Sets a Lua hook that checks ctx.Done() every 200 instructions
 //   - If context is cancelled, raises a Lua error to stop execution
 //   - Returns context.Canceled on cancellation, or the actual error otherwise.
-func (e *LuaEngine) safeExecuteScript3(ctx context.Context, script string) error {
+func (e *LuaEngine) safeExecuteScript(ctx context.Context, script string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -437,132 +496,6 @@ func (e *LuaEngine) safeExecuteScript3(ctx context.Context, script string) error
 	}
 }
 
-//type RegisterCallbackFunc func(L *lua.State)
-//
-//func (e *LuaEngine) safeExecuteScript2(ctx context.Context, script string, callbackFunc RegisterCallbackFunc) error {
-//	if err := ctx.Err(); err != nil {
-//		return err
-//	}
-//
-//	done := make(chan error, 1)
-//
-//	go func() {
-//		L := lua.NewState()
-//		defer L.Close()
-//		L.OpenLibs()
-//		blockLuaFunctions(L)
-//
-//		// workaround to reuse registration functions as it is
-//		e.stateMutex.Lock()
-//		old := e.state
-//		e.state = L
-//		e.registerPrintCaptureInternal()
-//		e.registerIOWriteCaptureInternal()
-//		e.preloadJSONLibInternal()
-//
-//		if callbackFunc != nil {
-//			callbackFunc(L)
-//		}
-//
-//		e.state = old
-//		defer e.stateMutex.Unlock()
-//
-//		// Hook for cooperative cancellation
-//		L.SetHook(func(L *lua.State) {
-//			select {
-//			case <-ctx.Done():
-//				L.RaiseError("script execution cancelled")
-//			default:
-//			}
-//		}, 200)
-//
-//		done <- L.DoString(script)
-//	}()
-//
-//	select {
-//	case err := <-done:
-//		if err != nil {
-//			// Cancellation case
-//			if ctx.Err() != nil || strings.Contains(err.Error(), "cancelled") {
-//				e.outputChan.ForceSend(LuaOutputRecord{
-//					Content:   "Lua execution cancelled",
-//					Timestamp: time.Now(),
-//					Source:    "stderr",
-//				})
-//				return context.Canceled
-//			}
-//
-//			// Other Lua errors (syntax/runtime)
-//			luaErr := e.parseLuaError("runtime", err.Error())
-//			e.outputChan.ForceSend(LuaOutputRecord{
-//				Content:   fmt.Sprintf("Lua error: %s", luaErr.Message),
-//				Timestamp: time.Now(),
-//				Source:    "stderr",
-//			})
-//			return fmt.Errorf("lua execution failed: %w", err)
-//		}
-//		return nil
-//
-//	case <-ctx.Done():
-//		// Canceled: hook will terminate a script soon, we return early
-//		return context.Canceled
-//	}
-//}
-
-//// safeExecuteScript2 runs a Lua script with a PRIVATE state for this execution only
-//func (e *LuaEngine) safeExecuteScript2(ctx context.Context, script string) error {
-//	// Check if context is already cancelled
-//	if err := ctx.Err(); err != nil {
-//		return err
-//	}
-//
-//	// Channel to monitor script completion
-//	done := make(chan error, 1)
-//
-//	// Run script in goroutine
-//	go func() {
-//		L := lua.NewState()
-//		defer L.Close()
-//		L.OpenLibs()
-//
-//		blockLuaFunctions(L)
-//		// Optional: register IO capture
-//		done <- L.DoString(script)
-//	}()
-//
-//	// Wait for completion or cancellation
-//	select {
-//	case err := <-done:
-//		if err != nil {
-//			if ctx.Err() != nil {
-//				return context.Canceled
-//			}
-//			return fmt.Errorf("lua execution failed: %w", err)
-//		}
-//		return nil
-//
-//	case <-ctx.Done():
-//		// Context canceled — **do not close Lua state**
-//		// Just return cancellation; goroutine will finish naturally
-//		return context.Canceled
-//	}
-//}
-
-//// ExecuteScript2 runs a Lua script with private state and context cancellation support
-//func (e *LuaEngine) ExecuteScript2(ctx context.Context, script string, callbackFunc RegisterCallbackFunc) error {
-//	if script != "" {
-//		e.LoadScript(script, "ad-hoc script")
-//	}
-//	if e.scriptCode == "" {
-//		return &LuaError{Type: "api", Message: "no script loaded"}
-//	}
-//
-//	//if script == "" {
-//	//	return &LuaError{Type: "api", Message: "empty script"}
-//	//}
-//	return e.safeExecuteScript2(ctx, e.scriptCode, callbackFunc)
-//}
-
 // LoadScriptFile loads a Lua script from a file
 func (e *LuaEngine) LoadScriptFile(filename string) error {
 	content, err := ioutil.ReadFile(filename)
@@ -607,7 +540,7 @@ func (e *LuaEngine) ExecuteScript(ctx context.Context, script string) error {
 	if e.scriptCode == "" {
 		return &LuaError{Type: "api", Message: "no script loaded"}
 	}
-	return e.safeExecuteScript3(ctx, e.scriptCode)
+	return e.safeExecuteScript(ctx, e.scriptCode)
 }
 
 func (e *LuaEngine) resetInternal() {
@@ -621,6 +554,7 @@ func (e *LuaEngine) resetInternal() {
 	e.registerPrintCaptureInternal()
 	e.registerIOWriteCaptureInternal()
 	e.preloadJSONLibInternal()
+	e.preloadBleUtilsLibInternal()
 	e.registerBlockedLuaFunctions()
 }
 

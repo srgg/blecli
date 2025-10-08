@@ -133,6 +133,11 @@ func (s *MockBLEPeripheralSuite) SetupTest() {
 // TearDownTest resets the peripheral builder after each test.
 // Called after each individual test method.
 func (s *MockBLEPeripheralSuite) TearDownTest() {
+	// Restore device factory to prevent nil pointer panics in subsequent tests
+	if s.OriginalDeviceFactory != nil {
+		device.DeviceFactory = s.OriginalDeviceFactory
+	}
+
 	// Reset peripheral builder to clean state
 	s.PeripheralBuilder = nil
 	s.AdvertisementsBuilder = nil

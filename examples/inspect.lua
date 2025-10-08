@@ -86,29 +86,18 @@ local function collect_device_data()
     data.services = {}
     local services = ble.list()
 
-    -- Sort service UUIDs for consistent output
-    local service_uuids = {}
-    for uuid in pairs(services) do
-        table.insert(service_uuids, uuid)
-    end
-    table.sort(service_uuids)
-
-    for _, service_uuid in ipairs(service_uuids) do
-        local service_info = services[service_uuid]
+    -- Note: services table has both array part (for ordered iteration) and hash part (for UUID lookup)
+    -- We use ipairs() to iterate in sorted order: services[1], services[2], etc.
+    for _, service_uuid in ipairs(services) do
+        local service_info = services[service_uuid]  -- Lookup service info by UUID
         local service_data = {
             uuid = service_uuid,
             characteristics = {}
         }
 
         if service_info.characteristics then
-            -- Sort characteristic UUIDs for consistent output
-            local char_uuids = {}
+            -- Characteristics are already sorted by the BLE API
             for _, char_uuid in ipairs(service_info.characteristics) do
-                table.insert(char_uuids, char_uuid)
-            end
-            table.sort(char_uuids)
-
-            for _, char_uuid in ipairs(char_uuids) do
                 local char_info = ble.characteristic(service_uuid, char_uuid) or {}
 
                 -- Build properties object

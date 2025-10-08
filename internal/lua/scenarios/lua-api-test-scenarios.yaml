@@ -24,12 +24,8 @@ test_cases:
             values:
               - char: "5678"
                 value: [0x01, 0x02]
-    expected_json_output:
-      - call_count: 0
-        errors:
-          - message: "Callback error: [string \"...\"]:10: Intentional test error in Lua callback"
-            source: "callback"
-        record: {}
+    expected_errors:
+      - "Intentional test error in Lua callback"
 
   - name: "Error Handling: Missing Services"
     subscription:

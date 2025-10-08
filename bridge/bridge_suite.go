@@ -2,7 +2,7 @@ package bridge
 
 import (
 	"context"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/srg/blim/internal/device"
@@ -13,33 +13,33 @@ import (
 //
 // Design: Embeds internal.LuaApiSuite to reuse all test infrastructure (YAML parsing,
 // BLE simulation, peripheral mocks, step execution) while adding Bridge-specific features:
-//   - PTY output validation (via embedded LuaApiSuite output collector)
-//   - Error handler capture for stderr validation
-//   - Bridge lifecycle management
+//   - Integrates Bridge's LuaAPI into parent suite lifecycle for automatic output validation
+//   - Bridge lifecycle management (activeBridge tracking for cleanup)
 //
-// Only overrides SetupTest() to add custom error handler setup.
-// All other methods (CreateSubscriptionJsonScript, NewPeripheralDataSimulator, etc.) are inherited.
+// All validation logic (stdout, stderr) is inherited from parent suite.
 type BridgeSuite struct {
 	lua.LuaApiSuite
-	capturedErrors     []string                // Errors captured by customErrorHandler
-	customErrorHandler func(time.Time, string) // Pluggable error handler for validation
+	activeBridge *bridgeHandle // Track active bridge for cleanup
 }
 
-// SetupTest overrides LuaApiSuite.SetupTest to add Bridge-specific error capture.
-//
-// Override rationale: Bridge needs custom error handler validation (stderr testing),
-// which requires capturing errors via error handler callback before calling parent setup.
-// All other test infrastructure (peripheral mocks, BLE simulation) is inherited from parent.
+// SetupTest initializes the test environment
 func (suite *BridgeSuite) SetupTest() {
-	// Setup error capture before parent initialization
-	suite.capturedErrors = []string{}
-	suite.customErrorHandler = func(ts time.Time, msg string) {
-		suite.T().Logf("DEBUG: Error handler called with: %q", msg)
-		suite.capturedErrors = append(suite.capturedErrors, msg)
+	suite.LuaApiSuite.SetupTest()
+}
+
+// TearDownTest ensures bridge is stopped before parent teardown to prevent race conditions.
+// This prevents the Lua state from being closed while BLE callbacks are still active.
+func (suite *BridgeSuite) TearDownTest() {
+	// Stop active bridge (if any) to cancel context and cleanup subscriptions
+	if suite.activeBridge != nil {
+		if err := suite.activeBridge.Stop(); err != nil {
+			suite.T().Errorf("Bridge stop failed: %v", err)
+		}
+		suite.activeBridge = nil
 	}
 
-	// Call parent SetupTest to configure a mock device factory
-	suite.LuaApiSuite.SetupTest()
+	// Call parent teardown to close Lua state and other resources
+	suite.LuaApiSuite.TearDownTest()
 }
 
 // RunBridgeTestCasesFromYAML parses YAML and executes Bridge test cases
@@ -47,38 +47,80 @@ func (suite *BridgeSuite) RunBridgeTestCasesFromYAML(yamlContent string) {
 	suite.RunTestCasesFromYAML(yamlContent)
 }
 
-// ValidateExpectations overrides parent to add Bridge-specific validation
-func (suite *BridgeSuite) ValidateExpectations(testCase lua.TestCase) {
-	// Call parent for standard validation (ExpectedOutput)
-	suite.LuaApiSuite.ValidateExpectations(testCase)
+// ExecuteScriptWithCallbacks overrides parent's template method to use Bridge's LuaAPI.
+// Manages full bridge lifecycle: start bridge, execute callbacks, stop bridge.
+func (suite *BridgeSuite) ExecuteScriptWithCallbacks(
+	script string,
+	before func(luaApi *lua.BLEAPI2),
+	after func(luaApi *lua.BLEAPI2),
+) error {
+	bridgeCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Validate Bridge-specific ExpectedStdout
-	if testCase.ExpectedStdout != "" {
-		stdout, err := suite.GetLuaStdout()
-		suite.Require().NoError(err, "Failed to get Lua stdout")
-		suite.Require().Contains(stdout, testCase.ExpectedStdout,
-			"PTY stdout should contain expected output")
-	}
+	// Get address from parent's device
+	address := suite.LuaApi.GetDevice().GetAddress()
 
-	// Validate Bridge-specific ExpectedErrors
-	if len(testCase.ExpectedErrors) > 0 {
-		suite.Require().NotEmpty(suite.capturedErrors,
-			"Expected errors but none were captured")
-
-		// Check that all expected error substrings are found in captured errors
-		for _, expectedErr := range testCase.ExpectedErrors {
-			found := false
-			for _, capturedErr := range suite.capturedErrors {
-				if strings.Contains(capturedErr, expectedErr) {
-					found = true
-					break
-				}
+	// Build subscribe options from peripheral configuration
+	var subscribeOptions []device.SubscribeOptions
+	if suite.PeripheralBuilder != nil {
+		for _, svc := range suite.PeripheralBuilder.GetServices() {
+			var characteristics []string
+			for _, char := range svc.Characteristics {
+				characteristics = append(characteristics, char.UUID)
 			}
-			suite.Require().True(found,
-				"Expected error substring %q not found in captured errors: %v",
-				expectedErr, suite.capturedErrors)
+			subscribeOptions = append(subscribeOptions, device.SubscribeOptions{
+				Service:         svc.UUID,
+				Characteristics: characteristics,
+			})
 		}
 	}
+
+	var scriptErr error
+
+	bridgeCallback := func(b Bridge) (error, error) {
+		bridgeLuaApi := b.GetLuaAPI()
+
+		// Setup: output collector, connection
+		before(bridgeLuaApi)
+
+		// Execute script
+		err := lua.ExecuteDeviceScriptWithOutput(
+			bridgeCtx,
+			nil,
+			bridgeLuaApi,
+			suite.Logger,
+			script,
+			nil, // no args
+			nil, // stdout - collector handles
+			nil, // stderr - collector handles
+			50*time.Millisecond,
+		)
+		scriptErr = err
+
+		// Execute test steps and validate (blocks until complete)
+		after(bridgeLuaApi)
+
+		return nil, nil
+	}
+
+	// Run bridge synchronously - blocks until bridgeCallback returns
+	_, bridgeErr := RunDeviceBridge(
+		bridgeCtx,
+		&BridgeOptions{
+			Address:        address,
+			ConnectTimeout: 5 * time.Second,
+			Services:       subscribeOptions,
+			Logger:         suite.Logger,
+		},
+		nil,
+		bridgeCallback,
+	)
+
+	// Return script error if present, otherwise bridge error
+	if scriptErr != nil {
+		return scriptErr
+	}
+	return bridgeErr
 }
 
 // bridgeHandle wraps RunDeviceBridge for test lifecycle management
@@ -90,15 +132,22 @@ type bridgeHandle struct {
 
 func (h *bridgeHandle) Stop() error {
 	h.cancel()
-	return <-h.errCh
+
+	select {
+	case err, ok := <-h.errCh:
+		if !ok {
+			return nil
+		}
+		return err
+	case <-time.After(5 * time.Second):
+		// defensive: something's stuck; return an error instead of blocking forever
+		return fmt.Errorf("bridge stop timeout (blocked waiting for run goroutine)")
+	}
 }
 
 // createAndStartBridge creates and starts a bridge using RunDeviceBridge with the given script.
 // Uses the same BLE device instance as the test suite for proper mocking.
 func (suite *BridgeSuite) createAndStartBridge(script string, ctx context.Context) (*bridgeHandle, error) {
-	// Reset captured errors for each test
-	suite.capturedErrors = []string{}
-
 	// Create context if not provided
 	bridgeCtx := ctx
 	var cancel context.CancelFunc
@@ -123,60 +172,71 @@ func (suite *BridgeSuite) createAndStartBridge(script string, ctx context.Contex
 		}
 	}
 
-	// Custom error writer that captures errors for validation
-	errorWriter := &errorCaptureWriter{suite: suite}
-
 	// Bridge callback - executes Lua script using ExecuteDeviceScriptWithOutput
 	bridgeCallback := func(b Bridge) (error, error) {
 		// Execute script with output streaming
-		// stdout goes to nil - test suite's luaOutputCapture will collect from channel
-		// stderr goes to errorWriter for error validation
-		return nil, lua.ExecuteDeviceScriptWithOutput(
+		// Pass nil for both stdout and stderr to skip consumption in ExecuteDeviceScriptWithOutput
+		// This allows parent's luaOutputCapture to collect all output from OutputChannel
+		// Stderr errors are captured via customErrorHandler during Lua execution
+		err := lua.ExecuteDeviceScriptWithOutput(
 			bridgeCtx,
-			b.GetDevice(),
+			nil,
+			b.GetLuaAPI(),
 			suite.Logger,
 			script,
-			nil,         // no args
-			nil,         // stdout - test suite collects from channel
-			errorWriter, // stderr to error capture
+			nil, // no args
+			nil, // stdout - parent's luaOutputCapture collects from OutputChannel
+			nil, // stderr - also collected by luaOutputCapture; errors via customErrorHandler
 			50*time.Millisecond,
 		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Keep bridge running until the test completes (prevents premature Lua state cleanup)
+		// This matches production behavior where the bridge waits for Ctrl+C
+		<-bridgeCtx.Done()
+
+		return nil, nil
 	}
 
 	// Run bridge asynchronously for tests
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := RunDeviceBridge(
-			bridgeCtx,
-			&BridgeOptions{
-				Address:        "00:00:00:00:01",
-				ConnectTimeout: 5 * time.Second,
-				Services:       subscribeOptions,
-				Logger:         suite.Logger,
-			},
-			nil, // no progress callback for tests
-			bridgeCallback,
-		)
-		errCh <- err
+		err := func() error {
+			_, err := RunDeviceBridge(
+				bridgeCtx,
+				&BridgeOptions{
+					Address:        "00:00:00:00:01",
+					ConnectTimeout: 5 * time.Second,
+					Services:       subscribeOptions,
+					Logger:         suite.Logger,
+				},
+				nil, // no progress callback for tests
+				bridgeCallback,
+			)
+			return err
+		}()
+
+		// Try to send error, but don't block forever; then always close so Stop() unblocks.
+		select {
+		case errCh <- err:
+		default:
+		}
+		close(errCh)
 	}()
 
-	// Wait a bit for bridge to start
+	// Wait a bit for the bridge to start
 	time.Sleep(50 * time.Millisecond)
 
-	return &bridgeHandle{
+	handle := &bridgeHandle{
 		ctx:    bridgeCtx,
 		cancel: cancel,
 		errCh:  errCh,
-	}, nil
-}
+	}
 
-// errorCaptureWriter captures stderr output for error validation
-type errorCaptureWriter struct {
-	suite *BridgeSuite
-}
+	// Track active bridge for cleanup in TearDownTest
+	suite.activeBridge = handle
 
-func (w *errorCaptureWriter) Write(p []byte) (n int, err error) {
-	msg := string(p)
-	w.suite.customErrorHandler(time.Now(), msg)
-	return len(p), nil
+	return handle, nil
 }

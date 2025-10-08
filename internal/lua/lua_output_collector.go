@@ -153,6 +153,15 @@ func (c *LuaOutputCollector) Start() error {
 		for {
 			select {
 			case <-c.stop:
+				// drain remaining messages non-blocking
+				for {
+					select {
+					case <-c.outputChan:
+						// discard remaining messages
+					default:
+						return
+					}
+				}
 				return
 			case rec, ok := <-c.outputChan:
 				if !ok {

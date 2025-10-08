@@ -106,7 +106,7 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	// Load script content before creating the callback
 	var scriptContent string
 	if bridgeLuaScript != "" {
-		// Read custom script file
+		// Read the custom script file
 		logger.WithField("file", bridgeLuaScript).Info("Loading custom Lua script")
 		content, err := os.ReadFile(bridgeLuaScript)
 		if err != nil {
@@ -128,12 +128,14 @@ func runBridge(cmd *cobra.Command, args []string) error {
 
 	// Bridge callback - executes the Lua script with output streaming
 	bridgeCallback := func(b bridge.Bridge) (error, error) {
-		// Execute the Lua script to set up subscriptions
+
+		// Execute the Lua script to print the header
 		err := lua.ExecuteDeviceScriptWithOutput(
 			ctx,
-			b.GetDevice(),
+			nil,
+			b.GetLuaAPI(),
 			logger,
-			scriptContent,
+			blecli.BridgeHeaderLuaScript,
 			scriptArgs,
 			os.Stdout,
 			os.Stderr,
@@ -143,7 +145,23 @@ func runBridge(cmd *cobra.Command, args []string) error {
 			return nil, err
 		}
 
-		// Script executed successfully and subscriptions are active
+		// Execute the Lua script to set up subscriptions
+		err = lua.ExecuteDeviceScriptWithOutput(
+			ctx,
+			nil,
+			b.GetLuaAPI(),
+			logger,
+			scriptContent,
+			scriptArgs,
+			b.GetPTYMaster(),
+			os.Stderr,
+			50*time.Millisecond,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Script executed successfully, and subscriptions are active
 		// Wait for context cancellation (Ctrl+C) to keep the bridge running
 		<-ctx.Done()
 		logger.Info("Bridge shutting down...")

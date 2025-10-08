@@ -95,6 +95,13 @@ func (ja *JSONAsserter) diff(actualJSON, expectedJSON string) string {
 		return fmt.Sprintf("invalid actual JSON: %v", err)
 	}
 
+	// Wrap root-level arrays in objects (gojsondiff limitation workaround)
+	// This makes array comparison transparent to callers
+	if isArray(expected) && isArray(actual) {
+		expected = map[string]interface{}{"array": expected}
+		actual = map[string]interface{}{"array": actual}
+	}
+
 	// Apply placeholder logic only if allowed
 	if ja.options.AllowPresencePlaceholder {
 		replacePresenceWithActual(expected, actual)
@@ -103,6 +110,20 @@ func (ja *JSONAsserter) diff(actualJSON, expectedJSON string) string {
 	// Apply other normalization options
 	if ja.options.NilToEmptyArray {
 		normalizeNilArrays(expected, actual)
+	}
+
+	// CRITICAL: Remove ignored fields BEFORE sorting arrays.
+	//
+	// sortArrays() sorts by JSON representation of elements. If ignored fields
+	// (e.g., call_count, timestamp) are present during sorting, they will affect
+	// the sort order even though they're ignored during comparison. This causes
+	// elements with identical content but different ignored field values to sort
+	// differently, breaking the IgnoreArrayOrder functionality.
+	//
+	// Example: Two BLE notifications with the same data but different call_counts
+	// would sort in opposite order if call_count is included in the sort key.
+	if len(ja.options.IgnoredFields) > 0 {
+		removeIgnoredFields(expected, actual, ja.options.IgnoredFields)
 	}
 	// Sort arrays BEFORE pruning extra keys so elements align correctly
 	if ja.options.IgnoreArrayOrder {
@@ -114,9 +135,6 @@ func (ja *JSONAsserter) diff(actualJSON, expectedJSON string) string {
 	}
 	if ja.options.CompareOnlyExpectedKeys {
 		extractOnlyExpectedKeys(actual, expected)
-	}
-	if len(ja.options.IgnoredFields) > 0 {
-		removeIgnoredFields(expected, actual, ja.options.IgnoredFields)
 	}
 
 	//// Marshal back to bytes for diff
@@ -141,69 +159,6 @@ func (ja *JSONAsserter) diff(actualJSON, expectedJSON string) string {
 	f := formatter.NewAsciiFormatter(expected, config)
 	diffString, _ := f.Format(diff)
 	return diffString
-
-	//config := formatter.AsciiFormatterConfig{
-	//	ShowArrayIndex: true,
-	//	Coloring:       false,
-	//}
-	//f := formatter.NewAsciiFormatter(expected, config)
-	//diffString, _ := f.Format(diff)
-
-	// Code uses
-	//// Create a new Differ
-	//differ := jsondiff.Differ{}
-	//
-	//// Compare JSON documents (ignoring array order if desired)
-	//differ.Compare(expected, actual)
-	//
-	//// Retrieve the patch
-	//patch := differ.Patch()
-	//
-	//// If no differences, return empty string
-	//if patch.Empty() {
-	//	return ""
-	//}
-	//
-	//// Format the diff as a readable string
-	//diffString := ""
-	//for _, op := range patch {
-	//	diffString += fmt.Sprintf("%s %s => %v\n", op.Operation, op.Path, op.Value)
-	//}
-	//
-	//return diffString
-
-	//// Create a new Differ
-	//differ := jsondiff.Differ{}
-	//
-	//// Compare JSON documents
-	//differ.Compare(expectedBytes, actualBytes)
-	//
-	//// Retrieve the patch
-	//patch := differ.Patch()
-	//
-	//// If no differences, return empty string
-	//if len(patch) == 0 {
-	//	return ""
-	//}
-	//
-	//// Format the diff as a readable string
-	//diffString := ""
-	//for _, op := range patch {
-	//	diffString += fmt.Sprintf("%s %s => %v\n", op.Type, op.Path, op.Value)
-	//}
-	//
-	//return diffString
-
-	////Code use github.com/nsf/jsondiff
-	//// It does not produce diff format from out of the box
-	//opts := nsf.DefaultConsoleOptions()
-	//diff, str := nsf.Compare(expectedBytes, actualBytes, &opts)
-	//
-	//if diff == nsf.FullMatch {
-	//	return "" // no differences
-	//}
-	//
-	//return str
 }
 
 // replacePresenceWithActual copies actual values for "<<PRESENCE>>" placeholders
@@ -455,6 +410,12 @@ func WithIgnoreArrayOrder(ignore bool) Option {
 	return func(opts *JSONAssertOptions) {
 		opts.IgnoreArrayOrder = ignore
 	}
+}
+
+// isArray checks if the given interface is a JSON array ([]interface{})
+func isArray(v interface{}) bool {
+	_, ok := v.([]interface{})
+	return ok
 }
 
 // sortArrays recursively sorts arrays in JSON structures for order-independent comparison.

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-ble/ble"
@@ -61,6 +62,10 @@ const (
 // BLEValue with Pooling
 // ----------------------------
 
+// BLEValue represents a BLE notification value.
+// IMPORTANT: BLEValue objects are pooled and reused. The Data slice is only valid
+// until the value is released back to the pool. Subscribers MUST copy Data immediately
+// if they need to retain it beyond the callback invocation.
 type BLEValue struct {
 	TsUs  int64
 	Data  []byte
@@ -69,13 +74,15 @@ type BLEValue struct {
 }
 
 var valuePool = sync.Pool{
-	New: func() interface{} { return &BLEValue{Data: make([]byte, 256)} },
+	New: func() interface{} { return &BLEValue{Data: make([]byte, 0, 256)} },
 }
+
+var globalBLESeq uint64
 
 func newBLEValue(data []byte) *BLEValue {
 	v := valuePool.Get().(*BLEValue)
 	v.TsUs = time.Now().UnixMicro()
-	v.Seq++
+	v.Seq = atomic.AddUint64(&globalBLESeq, 1)
 	v.Flags = 0
 	if cap(v.Data) < len(data) {
 		v.Data = make([]byte, len(data))
@@ -86,6 +93,21 @@ func newBLEValue(data []byte) *BLEValue {
 }
 
 func releaseBLEValue(v *BLEValue) {
+	// Reset fields to zero to avoid keeping stale data
+	v.TsUs = 0
+	v.Seq = 0
+	v.Flags = 0
+
+	// Prevent keeping large buffers in the pool
+	const maxPooledBufferSize = 1024 // 1KB max
+	if cap(v.Data) > maxPooledBufferSize {
+		// Buffer too large, reallocate to default size
+		v.Data = make([]byte, 0, 256)
+	} else {
+		// Normal size, just reset length
+		v.Data = v.Data[:0]
+	}
+
 	valuePool.Put(v)
 }
 
@@ -103,19 +125,22 @@ type BLECharacteristic struct {
 	connection  *BLEConnection // reference to parent connection for reading
 
 	updates chan *BLEValue
+	closed  atomic.Bool
 	mu      sync.RWMutex
 	subs    []func(*BLEValue)
 }
 
 func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection) *BLECharacteristic {
-	uuid := c.UUID.String()
+	rawUUID := c.UUID.String()
+	uuid := normalizeUUID(rawUUID)
 
 	// Populate and sort descriptors
 	descriptors := make([]Descriptor, 0, len(c.Descriptors))
 	for _, d := range c.Descriptors {
+		descRawUUID := d.UUID.String()
 		descriptors = append(descriptors, &BLEDescriptor{
-			uuid:      d.UUID.String(),
-			knownName: bledb.LookupDescriptor(d.UUID.String()),
+			uuid:      normalizeUUID(descRawUUID),
+			knownName: bledb.LookupDescriptor(descRawUUID),
 		})
 	}
 	// Sort by UUID for consistent ordering
@@ -124,8 +149,8 @@ func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection) *
 	})
 
 	return &BLECharacteristic{
-		uuid:        uuid,
-		knownName:   bledb.LookupCharacteristic(uuid),
+		uuid:        uuid,                                // store normalized
+		knownName:   bledb.LookupCharacteristic(rawUUID), // lookup using raw form if DB expects dashed
 		BLEChar:     c,
 		properties:  blePropsToString(c.Property),
 		updates:     make(chan *BLEValue, buffer),
@@ -136,6 +161,13 @@ func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection) *
 }
 
 func (c *BLECharacteristic) EnqueueValue(v *BLEValue) {
+	// Check if channel is closed before attempting to send
+	// This prevents panic from send on closed channel if BLE callbacks fire after shutdown
+	if c.closed.Load() {
+		releaseBLEValue(v)
+		return
+	}
+
 	select {
 	case c.updates <- v:
 	default:
@@ -143,10 +175,19 @@ func (c *BLECharacteristic) EnqueueValue(v *BLEValue) {
 		old := <-c.updates
 		old.Flags |= FlagDropped
 		releaseBLEValue(old)
-		c.updates <- v
+		// Recheck closed before second send (could have closed while we were dropping)
+		if !c.closed.Load() {
+			c.updates <- v
+		} else {
+			releaseBLEValue(v)
+		}
 	}
 }
 
+// Subscribe registers a callback for characteristic notifications.
+// IMPORTANT: BLEValue objects are pooled and reused. The callback MUST copy
+// v.Data immediately if it needs to retain the data beyond the callback invocation.
+// The Data slice becomes invalid after the callback returns.
 func (c *BLECharacteristic) Subscribe(fn func(*BLEValue)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -177,6 +218,9 @@ func (c *BLECharacteristic) GetDescriptors() []Descriptor {
 	return c.descriptors
 }
 
+// GetValue returns the current cached value of the characteristic.
+// IMPORTANT: The returned slice is READ-ONLY. Callers MUST NOT modify it.
+// Modifying the returned slice will cause data races and undefined behavior.
 func (c *BLECharacteristic) GetValue() []byte {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -209,6 +253,30 @@ func (c *BLECharacteristic) Read() ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+// CloseUpdates safely closes the updates channel (once only, thread-safe)
+func (c *BLECharacteristic) CloseUpdates() {
+	if c.closed.CompareAndSwap(false, true) {
+		close(c.updates)
+	}
+}
+
+// ResetUpdates recreates the updates channel (for reconnection).
+// MUST only be called after CloseUpdates() has been called.
+// Returns error if channel is not closed.
+func (c *BLECharacteristic) ResetUpdates(buffer int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Verify channel is closed before resetting
+	if !c.closed.Load() {
+		return fmt.Errorf("cannot reset updates channel: channel is still open")
+	}
+
+	c.updates = make(chan *BLEValue, buffer)
+	c.closed.Store(false)
+	return nil
 }
 
 // ----------------------------
@@ -279,6 +347,9 @@ type LuaSubscription struct {
 	Mode     StreamMode
 	MaxRate  time.Duration
 	Callback func(*Record)
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // ----------------------------
@@ -296,6 +367,7 @@ type BLEConnection struct {
 	services map[string]*BLEService
 
 	subscriptions []*LuaSubscription
+	subWg         sync.WaitGroup // Tracks active Lua subscription goroutines
 	ctx           context.Context
 	cancel        context.CancelFunc
 }
@@ -346,10 +418,12 @@ func (c *BLEConnection) GetService(uuid string) (Service, error) {
 	return svc, nil
 }
 
+// GetDevice returns the associated Device object.
+// LIMITATION: BLEConnection does not hold a reference to the Device object.
+// This method always returns nil due to architectural constraints where the
+// Device is created during scanning but not retained during connection.
+// Callers MUST handle nil returns from this method.
 func (c *BLEConnection) GetDevice() Device {
-	// BLEConnection doesn't directly hold a device reference
-	// This is a limitation of the current architecture
-	// For now, return nil to satisfy the interface
 	return nil
 }
 
@@ -379,8 +453,8 @@ func NewBLEConnection(logger *logrus.Logger) *BLEConnection {
 	return &BLEConnection{
 		client:        nil,
 		services:      make(map[string]*BLEService),
-		subscriptions: nil,
-		ctx:           nil,
+		subscriptions: make([]*LuaSubscription, 0),
+		ctx:           context.Background(),
 		cancel:        nil,
 		logger:        logger,
 	}
@@ -427,32 +501,42 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 
 	// Populate services and characteristics from BLE Profile
 	for _, bleSvc := range bleProfile.Services {
-		svcUUID := bleSvc.UUID.String()
-		c.logger.WithField("service_uuid", svcUUID).Debug("Found service UUID")
+		svcRawUUID := bleSvc.UUID.String()
+		svcUUID := normalizeUUID(svcRawUUID)
+		c.logger.WithField("service_uuid", svcRawUUID).Debug("Found service UUID")
 		svc, ok := c.services[svcUUID]
 		if !ok {
 			svc = &BLEService{
-				UUID:            svcUUID,
-				knownName:       bledb.LookupService(svcUUID),
+				UUID:            svcUUID,                         // store normalized
+				knownName:       bledb.LookupService(svcRawUUID), // lookup using raw form if DB expects dashed
 				Characteristics: make(map[string]*BLECharacteristic),
 			}
 			c.services[svcUUID] = svc
 		}
 
 		for _, bleCharacteristic := range bleSvc.Characteristics {
-			uuid := bleCharacteristic.UUID.String()
-			c.logger.WithFields(map[string]interface{}{
+			charRawUUID := bleCharacteristic.UUID.String()
+			charUUID := normalizeUUID(charRawUUID)
+			c.logger.WithFields(logrus.Fields{
 				"service_uuid": svcUUID,
-				"char_uuid":    uuid,
+				"char_uuid":    charRawUUID,
 			}).Debug("Found characteristic UUID")
-			characteristic, ok := svc.Characteristics[uuid]
+			characteristic, ok := svc.Characteristics[charUUID]
 			if !ok {
 				// Create BLECharacteristic with connection reference for reading
 				characteristic = NewCharacteristic(bleCharacteristic, 128, c)
-				svc.Characteristics[uuid] = characteristic
+				svc.Characteristics[charUUID] = characteristic
 			} else {
-				// Update live handle
+				// Reconnecting - update live handle and recreate channel if closed on disconnect
 				characteristic.BLEChar = bleCharacteristic
+				if characteristic.closed.Load() {
+					if err := characteristic.ResetUpdates(128); err != nil {
+						c.logger.WithFields(logrus.Fields{
+							"char_uuid": charUUID,
+							"error":     err,
+						}).Warn("Failed to reset updates channel during reconnection")
+					}
+				}
 			}
 		}
 	}
@@ -461,19 +545,18 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 	c.client = client
 	c.isConnected = true
 
-	// Set up context for subscriptions
-	c.ctx, c.cancel = context.WithCancel(context.Background())
+	// Set up context for subscriptions - derive from caller's context to tie lifecycle
+	c.ctx, c.cancel = context.WithCancel(ctx)
 
 	c.logger.WithField("services", len(c.services)).Info("BLE device connected")
 	return nil
 }
 
 func (c *BLEConnection) Disconnect() error {
+	// Acquire and snapshot state, cancel subs under lock
 	c.connMutex.Lock()
-	defer c.connMutex.Unlock()
-
-	// Check if already disconnected
 	if c.client == nil || !c.isConnected {
+		c.connMutex.Unlock()
 		if c.logger != nil {
 			c.logger.Info("Already disconnected")
 		}
@@ -481,29 +564,68 @@ func (c *BLEConnection) Disconnect() error {
 	}
 
 	if c.logger != nil {
-		c.logger.Info("Disconnecting BLE device...")
+		c.logger.WithField("connection_ptr", fmt.Sprintf("%p", c)).Info("Disconnecting BLE device...")
 	}
 
-	// First, unsubscribe from all subscriptions to clean up properly
-	if err := c.unsubscribeInternal(nil); err != nil {
-		if c.logger != nil {
-			c.logger.WithField("error", err).Warn("Failed to unsubscribe from all characteristics during disconnect")
+	// Cancel per-subscriptions (they will stop via sub.ctx)
+	for _, sub := range c.subscriptions {
+		if sub != nil && sub.cancel != nil {
+			sub.cancel()
 		}
-		// Don't return error here - continue with disconnect even if unsubscribe fails
+	}
+	// clear subscription list
+	c.subscriptions = nil
+
+	// Grab client and cancel func to release lock before blocking waits
+	client := c.client
+	cancel := c.cancel
+
+	// Snapshot services to drain channels outside the lock
+	servicesCopy := make(map[string]*BLEService)
+	for k, v := range c.services {
+		servicesCopy[k] = v
 	}
 
-	// Cancel context to stop any ongoing operations
-	c.cancel()
-
-	// Close the BLE connection
-	var disconnectErr error
-	if c.client != nil {
-		disconnectErr = c.client.CancelConnection()
-		c.client = nil
-	}
-
-	// Mark as disconnected
+	// set fields to nil/false while still holding lock
+	c.client = nil
+	c.cancel = nil
 	c.isConnected = false
+	c.connMutex.Unlock()
+
+	// Cancel the connection-level context (if present)
+	if cancel != nil {
+		cancel()
+	}
+
+	// Wait for all subscription goroutines to exit
+	if c.logger != nil {
+		c.logger.WithField("connection_ptr", fmt.Sprintf("%p", c)).Debug("Waiting for subscription goroutines to complete...")
+	}
+	c.subWg.Wait()
+	if c.logger != nil {
+		c.logger.WithField("connection_ptr", fmt.Sprintf("%p", c)).Debug("All subscription goroutines completed")
+	}
+
+	// Unsubscribe from remote BLE notifications before cancelling connection
+	unsubscribeErrors := c.unsubscribeAllCharacteristics(client, servicesCopy)
+	if len(unsubscribeErrors) > 0 && c.logger != nil {
+		c.logger.WithField("errors", strings.Join(unsubscribeErrors, "; ")).Warn("Failed to unsubscribe from some characteristics during disconnect")
+	}
+
+	// Drain and close per-characteristic update channels
+	for _, service := range servicesCopy {
+		for _, char := range service.Characteristics {
+			drainAndReleaseChannel(char.updates)
+			// Close channel to signal EOF - will be recreated on reconnect
+			char.CloseUpdates()
+		}
+	}
+
+	// Finally, disconnect BLE client (network call) outside the lock
+	var disconnectErr error
+	if client != nil {
+		disconnectErr = client.CancelConnection()
+	}
 
 	if c.logger != nil {
 		if disconnectErr != nil {
@@ -520,6 +642,74 @@ func (c *BLEConnection) Disconnect() error {
 // Should only be called when the caller already holds connMutex.RLock() or connMutex.Lock().
 func (c *BLEConnection) isConnectedInternal() bool {
 	return c.client != nil && c.isConnected
+}
+
+// drainAndReleaseChannel drains all pending BLEValue objects from a channel and releases them to the pool.
+func drainAndReleaseChannel(ch chan *BLEValue) {
+	for {
+		select {
+		case v := <-ch:
+			if v == nil {
+				return
+			}
+			releaseBLEValue(v)
+		default:
+			return
+		}
+	}
+}
+
+// tryUnsubscribe attempts to unsubscribe from a characteristic using both notify and indicate modes.
+// Returns error only if both modes fail. Logs success/failure appropriately.
+func (c *BLEConnection) tryUnsubscribe(client ble.Client, char *BLECharacteristic, serviceUUID, charUUID string) error {
+	if char.BLEChar == nil {
+		return nil
+	}
+
+	err1 := client.Unsubscribe(char.BLEChar, false) // notify
+	err2 := client.Unsubscribe(char.BLEChar, true)  // indicate
+
+	// Only return error if both notify and indicate failed
+	if err1 != nil && err2 != nil {
+		if c.logger != nil {
+			c.logger.WithFields(logrus.Fields{
+				"serviceUUID": serviceUUID,
+				"charUUID":    charUUID,
+				"notifyErr":   err1,
+				"indicateErr": err2,
+			}).Error("Failed to unsubscribe from characteristic notifications")
+		}
+		return fmt.Errorf("%s: notify=%v, indicate=%v", charUUID, err1, err2)
+	}
+
+	if c.logger != nil {
+		c.logger.WithFields(logrus.Fields{
+			"serviceUUID": serviceUUID,
+			"charUUID":    charUUID,
+		}).Debug("Unsubscribed from characteristic notifications")
+	}
+	return nil
+}
+
+// unsubscribeAllCharacteristics unsubscribes from all characteristics in the given services.
+// Returns a list of error messages for failed unsubscriptions.
+// Should be called without holding locks.
+func (c *BLEConnection) unsubscribeAllCharacteristics(client ble.Client, services map[string]*BLEService) []string {
+	var unsubscribeErrors []string
+
+	if client == nil {
+		return unsubscribeErrors
+	}
+
+	for serviceUUID, service := range services {
+		for charUUID, char := range service.Characteristics {
+			if err := c.tryUnsubscribe(client, char, serviceUUID, charUUID); err != nil {
+				unsubscribeErrors = append(unsubscribeErrors, fmt.Sprintf("%s (in service %s): %v", charUUID, serviceUUID, err))
+			}
+		}
+	}
+
+	return unsubscribeErrors
 }
 
 func (c *BLEConnection) IsConnected() bool {
@@ -596,11 +786,12 @@ func (c *BLEConnection) validateSubscribeOptions(opts *SubscribeOptions, require
 }
 
 func (c *BLEConnection) BLESubscribe(opts *SubscribeOptions) error {
+	// Acquire lock, validate, copy characteristics, then release lock before network calls
 	c.connMutex.RLock()
-	defer c.connMutex.RUnlock()
 
 	// Check if connected
 	if !c.isConnectedInternal() {
+		c.connMutex.RUnlock()
 		if c.client == nil {
 			return fmt.Errorf("device not connected - establish connection before subscribing to notifications")
 		}
@@ -610,27 +801,37 @@ func (c *BLEConnection) BLESubscribe(opts *SubscribeOptions) error {
 	// Validate subscription options and get characteristics
 	characteristicsToSubscribe, err := c.validateSubscribeOptions(opts, true)
 	if err != nil {
+		c.connMutex.RUnlock()
 		return fmt.Errorf("subscription %w", err)
 	}
 
 	// If no characteristics support notifications after validation
 	if len(characteristicsToSubscribe) == 0 {
+		c.connMutex.RUnlock()
 		return fmt.Errorf("no characteristics available for subscription in service %s", opts.Service)
 	}
 
-	// All validation passed - proceed with subscriptions
+	// Copy characteristics and get client reference
+	characteristicsCopy := make(map[string]*BLECharacteristic)
+	for k, v := range characteristicsToSubscribe {
+		characteristicsCopy[k] = v
+	}
+	client := c.client
+	c.connMutex.RUnlock()
+
+	// All validation passed - proceed with subscriptions outside the lock
 	var subscriptionErrors []string
-	for charUUID, char := range characteristicsToSubscribe {
+	for charUUID, char := range characteristicsCopy {
 		// create a local variable to capture the current char
 		charCapture := char
-		err := c.client.Subscribe(char.BLEChar, false, func(data []byte) {
+		err := client.Subscribe(char.BLEChar, false, func(data []byte) {
 			c.ProcessCharacteristicNotification(charCapture, data)
 		})
 
 		if err != nil {
 			subscriptionErrors = append(subscriptionErrors, fmt.Sprintf("%s: %v", charUUID, err))
 			if c.logger != nil {
-				c.logger.WithFields(map[string]interface{}{
+				c.logger.WithFields(logrus.Fields{
 					"serviceUUID": opts.Service,
 					"charUUID":    charUUID,
 					"error":       err,
@@ -638,7 +839,7 @@ func (c *BLEConnection) BLESubscribe(opts *SubscribeOptions) error {
 			}
 		} else {
 			if c.logger != nil {
-				c.logger.WithFields(map[string]interface{}{
+				c.logger.WithFields(logrus.Fields{
 					"serviceUUID": opts.Service,
 					"charUUID":    charUUID,
 				}).Info("Successfully subscribed to characteristic notifications")
@@ -655,43 +856,84 @@ func (c *BLEConnection) BLESubscribe(opts *SubscribeOptions) error {
 }
 
 func (c *BLEConnection) Unsubscribe(opts *SubscribeOptions) error {
+	// Acquire lock, validate, copy characteristics, then release lock before network calls
 	c.connMutex.RLock()
-	defer c.connMutex.RUnlock()
 
-	return c.unsubscribeInternal(opts)
-}
-
-// unsubscribeInternal performs unsubscribe operations without acquiring locks
-// Should only be called when the caller already holds the appropriate lock
-func (c *BLEConnection) unsubscribeInternal(opts *SubscribeOptions) error {
-	// Allow unsubscribe if client exists (for cleanup during disconnect)
-	if c.client == nil {
-		return fmt.Errorf("unsubscribe unavailable - no active connection")
+	// Validate specific subscription options (don't require notification support for unsubscribe)
+	characteristicsToUnsubscribe, err := c.validateSubscribeOptions(opts, false)
+	if err != nil {
+		c.connMutex.RUnlock()
+		return fmt.Errorf("unsubscribe %w", err)
 	}
 
+	// If no characteristics found after validation
+	if len(characteristicsToUnsubscribe) == 0 {
+		c.connMutex.RUnlock()
+		return fmt.Errorf("no characteristics available for unsubscribe in service %s", opts.Service)
+	}
+
+	// Copy characteristics and get client reference
+	characteristicsCopy := make(map[string]*BLECharacteristic)
+	for k, v := range characteristicsToUnsubscribe {
+		characteristicsCopy[k] = v
+	}
+	client := c.client
+	c.connMutex.RUnlock()
+
+	// All validation passed - proceed with unsubscriptions outside the lock
+	var unsubscribeErrors []string
+	for charUUID, char := range characteristicsCopy {
+		if err := c.tryUnsubscribe(client, char, opts.Service, charUUID); err != nil {
+			unsubscribeErrors = append(unsubscribeErrors, err.Error())
+		}
+	}
+
+	// Return error if any unsubscriptions failed
+	if len(unsubscribeErrors) > 0 {
+		return fmt.Errorf("unsubscribe failures - %s", strings.Join(unsubscribeErrors, "; "))
+	}
+
+	return nil
+}
+
+// unsubscribeInternal performs unsubscribe operations
+// Acquires and releases locks as needed to avoid deadlocks
+func (c *BLEConnection) unsubscribeInternal(opts *SubscribeOptions) error {
 	// Handle unsubscribe from all subscriptions when opts is nil
 	if opts == nil {
 		var unsubscribeErrors []string
 
-		// Unsubscribe from all characteristics in all services
-		for serviceUUID, service := range c.services {
-			for charUUID, char := range service.Characteristics {
-				if char.BLEChar != nil {
-					// Try both notify and indicate unsubscribe
-					err1 := c.client.Unsubscribe(char.BLEChar, false) // notify
-					err2 := c.client.Unsubscribe(char.BLEChar, true)  // indicate
+		// Acquire lock to cancel subscriptions and snapshot state
+		c.connMutex.Lock()
 
-					if err1 != nil && err2 != nil {
-						unsubscribeErrors = append(unsubscribeErrors, fmt.Sprintf("%s (in service %s): notify=%v, indicate=%v", charUUID, serviceUUID, err1, err2))
-					} else {
-						if c.logger != nil {
-							c.logger.WithFields(map[string]interface{}{
-								"serviceUUID": serviceUUID,
-								"charUUID":    charUUID,
-							}).Info("Successfully unsubscribed from characteristic notifications")
-						}
-					}
-				}
+		// First: cancel and remove per-subscriptions so runLuaSubscription exits
+		for _, sub := range c.subscriptions {
+			if sub != nil && sub.cancel != nil {
+				sub.cancel()
+			}
+		}
+		// Clear subscriptions slice (we'll still try to call client.Unsubscribe below)
+		c.subscriptions = nil
+
+		// Snapshot client and services for operations outside the lock
+		client := c.client
+		servicesCopy := make(map[string]*BLEService)
+		for k, v := range c.services {
+			servicesCopy[k] = v
+		}
+
+		c.connMutex.Unlock()
+
+		// Wait for all subscription goroutines to exit (outside lock to avoid deadlock)
+		c.subWg.Wait()
+
+		// Unsubscribe from remote BLE notifications
+		unsubscribeErrors = c.unsubscribeAllCharacteristics(client, servicesCopy)
+
+		// Drain per-characteristic update channels and release BLEValue objects
+		for _, service := range servicesCopy {
+			for _, char := range service.Characteristics {
+				drainAndReleaseChannel(char.updates)
 			}
 		}
 
@@ -700,47 +942,36 @@ func (c *BLEConnection) unsubscribeInternal(opts *SubscribeOptions) error {
 		}
 
 		if c.logger != nil {
-			c.logger.Info("Successfully unsubscribed from all characteristic notifications")
+			c.logger.Info("Successfully unsubscribed from all characteristic notifications (local cleanup done)")
 		}
 		return nil
 	}
 
+	// Acquire lock to validate and snapshot client
+	c.connMutex.RLock()
+
 	// Validate specific subscription options (don't require notification support for unsubscribe)
 	characteristicsToUnsubscribe, err := c.validateSubscribeOptions(opts, false)
 	if err != nil {
+		c.connMutex.RUnlock()
 		return fmt.Errorf("unsubscribe %w", err)
 	}
 
 	// If no characteristics found after validation
 	if len(characteristicsToUnsubscribe) == 0 {
+		c.connMutex.RUnlock()
 		return fmt.Errorf("no characteristics available for unsubscribe in service %s", opts.Service)
 	}
+
+	// Snapshot client for network operations outside the lock
+	client := c.client
+	c.connMutex.RUnlock()
 
 	// All validation passed - proceed with unsubscriptions
 	var unsubscribeErrors []string
 	for charUUID, char := range characteristicsToUnsubscribe {
-		// Try both notify and indicate unsubscribe
-		err1 := c.client.Unsubscribe(char.BLEChar, false) // notify
-		err2 := c.client.Unsubscribe(char.BLEChar, true)  // indicate
-
-		// Only report error if both notify and indicate failed
-		if err1 != nil && err2 != nil {
-			unsubscribeErrors = append(unsubscribeErrors, fmt.Sprintf("%s: notify=%v, indicate=%v", charUUID, err1, err2))
-			if c.logger != nil {
-				c.logger.WithFields(map[string]interface{}{
-					"serviceUUID": opts.Service,
-					"charUUID":    charUUID,
-					"notifyErr":   err1,
-					"indicateErr": err2,
-				}).Error("Failed to unsubscribe from characteristic notifications")
-			}
-		} else {
-			if c.logger != nil {
-				c.logger.WithFields(map[string]interface{}{
-					"serviceUUID": opts.Service,
-					"charUUID":    charUUID,
-				}).Info("Successfully unsubscribed from characteristic notifications")
-			}
+		if err := c.tryUnsubscribe(client, char, opts.Service, charUUID); err != nil {
+			unsubscribeErrors = append(unsubscribeErrors, err.Error())
 		}
 	}
 
@@ -760,7 +991,7 @@ func (c *BLEConnection) unsubscribeInternal(opts *SubscribeOptions) error {
 //	  { ServiceUUID: "1000180d-0000-1000-8000-00805f9b34fb", Characteristics: []string{"10002a37-0000-1000-8000-00805f9b34fb"} }
 //	}, StreamEveryUpdate, 0, func(record *Record) { ... })
 func (c *BLEConnection) Subscribe(opts []*SubscribeOptions, mode StreamMode, maxRate time.Duration, callback func(*Record)) error {
-	c.logger.WithFields(map[string]interface{}{
+	c.logger.WithFields(logrus.Fields{
 		"services": len(opts),
 		"mode":     mode,
 	}).Debug("Subscribe called - about to create goroutine")
@@ -808,37 +1039,49 @@ func (c *BLEConnection) Subscribe(opts []*SubscribeOptions, mode StreamMode, max
 		MaxRate:  maxRate,
 		Callback: callback,
 	}
+	sub.ctx, sub.cancel = context.WithCancel(c.ctx)
 
 	c.subscriptions = append(c.subscriptions, sub)
 
+	c.subWg.Add(1)
 	go c.runLuaSubscription(sub)
 
 	return nil
 }
 
 func (c *BLEConnection) runLuaSubscription(sub *LuaSubscription) {
+	defer c.subWg.Done()
+
+	if c.logger != nil {
+		c.logger.WithField("connection_ptr", fmt.Sprintf("%p", c)).Debug("Subscription goroutine started")
+	}
+	defer func() {
+		if c.logger != nil {
+			c.logger.WithField("connection_ptr", fmt.Sprintf("%p", c)).Debug("Subscription goroutine exiting")
+		}
+	}()
+
 	// Only create ticker for modes that need rate limiting
 	var ticker *time.Ticker
+	var tickerC <-chan time.Time
 	if sub.Mode == StreamBatched || sub.Mode == StreamAggregated {
 		if sub.MaxRate <= 0 {
 			// Default to 100ms for batched/aggregated modes if MaxRate is 0 or negative
 			sub.MaxRate = 100 * time.Millisecond
 		}
 		ticker = time.NewTicker(sub.MaxRate)
+		tickerC = ticker.C
 		defer ticker.Stop()
+	} else {
+		// nil channel blocks forever in select - perfect for EveryUpdate mode
+		tickerC = nil
 	}
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-sub.ctx.Done():
 			return
-		case <-func() <-chan time.Time {
-			if ticker != nil {
-				return ticker.C
-			}
-			// Return a channel that never fires for EveryUpdate mode
-			return make(chan time.Time)
-		}():
+		case <-tickerC:
 			if sub.Mode == StreamBatched {
 				record := newRecord(StreamBatched)
 				for _, c := range sub.Chars {
@@ -886,22 +1129,30 @@ func (c *BLEConnection) runLuaSubscription(sub *LuaSubscription) {
 			}
 		default:
 			if sub.Mode == StreamEveryUpdate {
-				for _, c := range sub.Chars {
+				hasData := false
+				for _, char := range sub.Chars {
 					select {
-					case val := <-c.updates:
+					case <-sub.ctx.Done():
+						return
+					case val := <-char.updates:
 						record := newRecord(StreamEveryUpdate)
-						record.Values[c.GetUUID()] = val.Data
+						record.Values[char.GetUUID()] = val.Data
 						record.TsUs = val.TsUs
 						if val.Flags != 0 {
 							record.Flags |= val.Flags
 						}
 						sub.Callback(record)
 						releaseBLEValue(val)
+						hasData = true
 					default:
 					}
 				}
+				// Sleep briefly if no data available to avoid hot loop
+				if !hasData {
+					time.Sleep(5 * time.Millisecond)
+				}
 			} else {
-				time.Sleep(time.Millisecond)
+				time.Sleep(5 * time.Millisecond)
 			}
 		}
 	}

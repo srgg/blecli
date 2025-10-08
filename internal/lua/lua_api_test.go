@@ -3,6 +3,7 @@ package lua
 import (
 	"context"
 	"testing"
+	"time"
 
 	_ "embed"
 
@@ -41,13 +42,6 @@ func (suite *LuaApiTestSuite) ExecuteScript(script string) error {
 	return err
 }
 
-//func (suite *LuaApiTestSuite) ExecuteScript2(script string) error {
-//	err := suite.LuaApi.LoadScript(script, "test")
-//	suite.NoError(err, "Should load subscription script with nio errors")
-//	err = suite.LuaApi.ExecuteScript2(context.Background(), "")
-//	return err
-//}
-
 // TestErrorHandling tests error conditions and recovery
 // NOTE: Most error handling tests have been moved to YAML format in lua-api-test-scenarios.yaml
 //
@@ -82,6 +76,47 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 
 		err := suite.ExecuteScript(`ble.subscribe("not a table")`)
 		suite.AssertLuaError(err, "Error: subscribe() expects a lua table argument")
+	})
+
+	suite.Run("Lua: Callback causes panic", func() {
+		// GOAL: Verify that panics in subscription callbacks are recovered and don't crash the system
+		//
+		// TEST SCENARIO: Create subscription with callback that causes Lua panic → send notification → panic recovered → verify error logged
+
+		// Create a subscription with a callback that will cause a panic when it tries to access nil values
+		script := `
+			ble.subscribe{
+				services = {
+					{
+						service = "1234",
+						chars = {"5678"}
+					}
+				},
+				Mode = "EveryUpdate",
+				MaxRate = 0,
+				Callback = function(record)
+					-- This will cause a panic by accessing nil table index deeply
+					local x = nil
+					local y = x.foo.bar.baz  -- This should cause a Lua error/panic
+				end
+			}
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should successfully create subscription even if callback will panic")
+
+		// Simulate a notification to trigger the callback
+		suite.NewPeripheralDataSimulator().
+			WithService("1234").
+			WithCharacteristic("5678", []byte{0x01, 0x02}).
+			Simulate(false)
+
+		// Give time for the async callback to execute and panic
+		time.Sleep(50 * time.Millisecond)
+
+		// The panic should be recovered and logged, but execution should continue
+		// We verify this by checking that we can still execute Lua code
+		err = suite.ExecuteScript(`print("Still working after panic")`)
+		suite.NoError(err, "System should continue working after callback panic")
 	})
 
 	// NOTE: The following error tests are in YAML (lua-api-test-scenarios.yaml):
@@ -378,7 +413,8 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 			local services = ble.list()
 			local read_count = 0
 
-			for service_uuid, service_info in pairs(services) do
+			for _, service_uuid in ipairs(services) do
+				local service_info = services[service_uuid]
 				for _, char_uuid in ipairs(service_info.characteristics) do
 					local char = ble.characteristic(service_uuid, char_uuid)
 

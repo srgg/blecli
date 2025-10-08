@@ -11,6 +11,7 @@ import (
 
 	"github.com/srg/blim/internal/device"
 	"github.com/srg/blim/internal/testutils"
+	"github.com/stretchr/testify/require"
 	orderedmap "github.com/wk8/go-ordered-map/v2"
 
 	"gopkg.in/yaml.v3"
@@ -61,6 +62,12 @@ type TestCase struct {
 
 	// ExpectedErrors is a list of expected error message substrings (Bridge tests only)
 	ExpectedErrors []string `json:"expected_errors,omitempty" yaml:"expected_errors,omitempty"`
+
+	// Skip marks this test case as skipped with the provided reason.
+	// When set, the test will be skipped and the skip reason will be logged.
+	// Useful for tests that cannot be programmatically validated or have known issues.
+	// Example: skip: "Cannot programmatically validate - manual verification required"
+	Skip string `json:"skip,omitempty" yaml:"skip,omitempty"`
 }
 
 // TestSubscriptionOptions configures BLE characteristic subscription behavior and callbacks.
@@ -99,6 +106,9 @@ type TestStep struct {
 
 	// ExpectedJSONOutput validates Lua output immediately after this step (optional, validated during step execution).
 	ExpectedJSONOutput []map[string]interface{} `json:"expected_json_output,omitempty" yaml:"expected_json_output,omitempty"`
+
+	// ExpectedErrors is a list of expected error message substrings to validate after this step (optional)
+	ExpectedErrors []string `json:"expected_errors,omitempty" yaml:"expected_errors,omitempty"`
 }
 
 // ServiceValues represents updates to all characteristics of a single service.
@@ -233,6 +243,14 @@ type LuaApiSuite struct {
 	skipOutputSetup  bool // Allow child suites to skip output collector setup
 }
 
+// ExecuteScript loads and executes a Lua script for testing
+func (suite *LuaApiSuite) ExecuteScript(script string) error {
+	err := suite.LuaApi.LoadScript(script, "test")
+	suite.NoError(err, "Should load script without errors")
+	err = suite.LuaApi.ExecuteScript(context.Background(), "")
+	return err
+}
+
 // SetupTest initializes the test environment with a mock BLE peripheral and Lua API instance.
 // Creates default services (1234, 180D, 180F) if no custom peripheral is configured.
 // Sets up output collector to capture Lua stdout/stderr for validation.
@@ -290,9 +308,9 @@ func (suite *LuaApiSuite) createLuaApi() *BLEAPI2 {
 	dev := device.NewDeviceWithAddress("00:00:00:00:00:01", suite.Logger)
 
 	// Set up mock connection with test services and characteristics
-	// Use proper context with a timeout for the connection
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Use context with 10s timeout for safety, but don't cancel it immediately
+	// The context lives until timeout expires or Disconnect() is called
+	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 
 	// Define the services and characteristics needed for tests
 	// Get services from the configured peripheral builder
@@ -358,13 +376,31 @@ func (suite *LuaApiSuite) setupOutputCollector() error {
 	return nil
 }
 
-// TearDownTest cleans up test resources in proper order: output collector, Lua API, then peripheral.
+// TearDownTest cleans up test resources in proper order: device, output collector, Lua API, then peripheral.
 // Called automatically after each test case by the testing framework.
 // Logs warnings for cleanup errors but does not fail the test.
+//
+// CRITICAL ORDER: Disconnect device FIRST to stop subscriptions and prevent writes to closed channels,
+// THEN stop output collector to drain remaining output, THEN close Lua API.
 func (suite *LuaApiSuite) TearDownTest() {
 	var errors []error
 
-	// Stop Lua output collector first
+	// Step 1: Disconnect device FIRST to stop subscriptions and prevent writes to output channels
+	if suite.LuaApi != nil {
+		suite.Logger.WithField("lua_api_ptr", fmt.Sprintf("%p", suite.LuaApi)).Debug("TearDownTest: About to disconnect device")
+		if dev := suite.LuaApi.GetDevice(); dev != nil && dev.IsConnected() {
+			suite.Logger.WithFields(map[string]interface{}{
+				"device_ptr":     fmt.Sprintf("%p", dev),
+				"device_address": dev.GetAddress(),
+			}).Debug("TearDownTest: Disconnecting device...")
+			if err := dev.Disconnect(); err != nil {
+				errors = append(errors, fmt.Errorf("disconnecting device: %w", err))
+			}
+			suite.Logger.Debug("TearDownTest: Device disconnected")
+		}
+	}
+
+	// Step 2: Stop output collector AFTER device disconnect to drain any final output
 	if suite.luaOutputCapture != nil {
 		if err := suite.luaOutputCapture.Stop(); err != nil {
 			errors = append(errors, fmt.Errorf("stopping lua output collector: %w", err))
@@ -372,13 +408,15 @@ func (suite *LuaApiSuite) TearDownTest() {
 		suite.luaOutputCapture = nil
 	}
 
-	// Close lua API
+	// Step 3: Close Lua API
 	if suite.LuaApi != nil {
+		suite.Logger.WithField("lua_api_ptr", fmt.Sprintf("%p", suite.LuaApi)).Debug("TearDownTest: About to close Lua API")
 		suite.LuaApi.Close()
+		suite.Logger.Debug("TearDownTest: Lua API closed")
 		suite.LuaApi = nil
 	}
 
-	// Call parent teardown
+	// Step 4: Call parent teardown
 	suite.MockBLEPeripheralSuite.TearDownTest()
 
 	// Report any cleanup errors (but don't fail the test)
@@ -394,7 +432,14 @@ func (suite *LuaApiSuite) TearDownTest() {
 // Enables running multiple test cases in the same test function using suite.Run().
 // Called automatically before each subtest by the testing framework.
 func (suite *LuaApiSuite) SetupSubTest() {
-	// Clean up existing resources in proper order
+	// Skip reinitialization for step subtests (Step_1, Step_2, etc.)
+	// Steps share the same LuaApi and output collector as the parent test case
+	testName := suite.T().Name()
+	if strings.HasPrefix(testName, "Step_") || strings.Contains(testName, "/Step_") {
+		return
+	}
+
+	// Clean up existing resources in proper order (for test case subtests only)
 	if suite.luaOutputCapture != nil {
 		if err := suite.luaOutputCapture.Stop(); err != nil {
 			suite.T().Fatalf("Failed to stop lua output collector during subtest setup: %v", err)
@@ -418,8 +463,15 @@ func (suite *LuaApiSuite) SetupSubTest() {
 
 // CreateSubscriptionJsonScript generates a Lua script that subscribes to BLE characteristics and processes notifications.
 // Returns a complete Lua script string with JSON callback logic for use in tests.
+//
+// Error Handling: Panics on invalid test configuration (programmer errors):
+//   - Empty service/characteristic UUIDs → test YAML is malformed
+//   - Negative maxRate → test configuration bug
+//
+// Note: Invalid UUID *format* (like "not-a-uuid") passes through to BLE code for error testing.
+// Only structural omissions (empty strings, missing arrays) cause panics.
 func (suite *LuaApiSuite) CreateSubscriptionJsonScript(pattern string, maxRate time.Duration, callbackScript string, subscription ...device.SubscribeOptions) string {
-	// Validate inputs
+	// Validate test configuration (panics on programmer errors)
 	if maxRate < 0 {
 		panic(fmt.Sprintf("CreateSubscriptionJsonScript: maxRate cannot be negative (got %v)", maxRate))
 	}
@@ -479,145 +531,6 @@ func (suite *LuaApiSuite) CreateSubscriptionJsonScript(pattern string, maxRate t
 		}`, services.String(), pattern, maxRate.Milliseconds(), callbackBody)
 }
 
-// GetLuaStdout retrieves all stdout output from the Lua output collector.
-// Consumes and returns only stdout records, filtering out stderr.
-// Returns an error if output collection failed.
-func (suite *LuaApiSuite) GetLuaStdout() (string, error) {
-	output, err := ConsumeRecords(suite.luaOutputCapture, func(record *LuaOutputRecord) (string, error) {
-		if record == nil {
-			return "", nil
-		}
-		if record.Source == "stdout" {
-			return record.Content, nil
-		}
-		return "", nil
-	})
-	if err != nil {
-		return "", fmt.Errorf("error consuming lua stdout: %v", err)
-	}
-	return output, nil
-}
-
-// LuaOutputAsJSON parses Lua output as JSON subscription callback data.
-// Separates stdout (JSON) from stderr (errors) and returns structured callback data.
-// Supports both single JSON objects and JSONL (JSON Lines) format for multiple callbacks.
-// Collects stderr errors and attaches them to the first callback record.
-// Returns an error if JSON parsing fails or no valid data is found.
-//
-// Format detection:
-//   - Tries parsing as single JSON object first
-//   - Falls back to JSONL if single JSON parsing fails
-//   - Returns error if both formats fail
-func (suite *LuaApiSuite) LuaOutputAsJSON() ([]LuaSubscriptionCallbackData, error) {
-	// Create a custom consumer that separates stdout (JSON) and stderr (errors)
-	var stdoutBuilder strings.Builder
-	var collectedErrors []LuaErrorInfo
-
-	consumer := func(record *LuaOutputRecord) (string, error) {
-		if record == nil {
-			// No more records - return accumulated stdout
-			return stdoutBuilder.String(), nil
-		}
-
-		// Separate stdout and stderr records
-		if record.Source == "stderr" {
-			// Collect error information
-			collectedErrors = append(collectedErrors, LuaErrorInfo{
-				Message:   record.Content,
-				Source:    "callback",
-				Timestamp: record.Timestamp.Format(time.RFC3339),
-			})
-		} else {
-			// Accumulate stdout (JSON output)
-			stdoutBuilder.WriteString(record.Content)
-		}
-
-		return "", nil // Continue processing
-	}
-
-	// Collect all outputs using custom consumer
-	output, err := ConsumeRecords(suite.luaOutputCapture, consumer)
-	if err != nil {
-		return nil, fmt.Errorf("error consuming lua output: %v", err)
-	}
-
-	suite.Equal(int64(0), suite.luaOutputCapture.GetMetrics().ErrorsOccurred, "error occurred on lua output")
-
-	// Bulletproof detection: try single JSON first, fallback to JSONL
-	output = strings.TrimSpace(output)
-
-	// Try parsing as a single JSON object first
-	var singleData LuaSubscriptionCallbackData
-	if err := json.Unmarshal([]byte(output), &singleData); err == nil {
-		// Successfully parsed as a single JSON - return as an array with one element
-		singleData.Errors = collectedErrors
-		return []LuaSubscriptionCallbackData{singleData}, nil
-	}
-
-	// Failed as a single JSON, try JSONL format
-	lines := strings.Split(output, "\n")
-	var arrayData []LuaSubscriptionCallbackData
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		var data LuaSubscriptionCallbackData
-		if err := json.Unmarshal([]byte(line), &data); err != nil {
-			return nil, fmt.Errorf("error unmarshalling as both JSON and JSONL - line %q: %v", line, err)
-		}
-
-		arrayData = append(arrayData, data)
-	}
-
-	if len(arrayData) == 0 {
-		// If no JSON output, but we have errors, return a single record with errors
-		if len(collectedErrors) > 0 {
-			return []LuaSubscriptionCallbackData{{
-				CallCount: 0,
-				Errors:    collectedErrors,
-			}}, nil
-		}
-		return nil, fmt.Errorf("no valid JSON data found in output")
-	}
-
-	// Add collected errors to the first callback record
-	if len(arrayData) > 0 && len(collectedErrors) > 0 {
-		arrayData[0].Errors = collectedErrors
-	}
-
-	return arrayData, nil
-}
-
-// GetCharacteristicValue retrieves the current value of a BLE characteristic.
-// Returns the raw byte value from the mock peripheral's connection.
-// Validates that service and characteristic UUIDs are non-empty.
-// Returns an error if connection is unavailable or characteristic not found.
-func (suite *LuaApiSuite) GetCharacteristicValue(service string, characteristic string) ([]byte, error) {
-	// Validate inputs
-	if service == "" {
-		return nil, fmt.Errorf("GetCharacteristicValue: service UUID cannot be empty")
-	}
-	if characteristic == "" {
-		return nil, fmt.Errorf("GetCharacteristicValue: characteristic UUID cannot be empty")
-	}
-
-	conn := suite.LuaApi.GetDevice().GetConnection()
-
-	if conn == nil {
-		return nil, fmt.Errorf("connection should be available")
-	}
-
-	c, err := conn.GetCharacteristic(service, characteristic)
-	if err != nil {
-		return nil, fmt.Errorf("should be able to get characteristic \"%s:%s\": %w", service, characteristic, err)
-	}
-
-	return c.GetValue(), nil
-}
-
 // ensurePeripheralService ensures a service and its characteristics exist in the peripheral builder
 func (suite *LuaApiSuite) ensurePeripheralService(serviceUUID string, characteristicUUIDs []string) {
 	// Check if service already exists in the peripheral builder
@@ -642,6 +555,16 @@ func (suite *LuaApiSuite) ensurePeripheralService(serviceUUID string, characteri
 			svcBuilder.WithCharacteristic(charUUID, "read,notify", []byte{})
 		}
 	}
+}
+
+// RunTestCasesFromFile loads YAML test case definitions from a file and executes them.
+// The file path is relative to the project root (uses testutils.LoadScript for finding the root).
+// Expects a "test_cases" array at the root level in the YAML file.
+// Each test case runs as a separate subtest with full isolation.
+func (suite *LuaApiSuite) RunTestCasesFromFile(filePath string) {
+	content, err := testutils.LoadScript(filePath)
+	suite.Require().NoError(err, "Failed to load test cases from file: %s", filePath)
+	suite.RunTestCasesFromYAML(content)
 }
 
 // RunTestCasesFromYAML parses YAML test case definitions and executes them.
@@ -763,72 +686,54 @@ func (suite *LuaApiSuite) RunTestCases(testCases ...TestCase) {
 		}
 
 		suite.Run(testCase.Name, func() {
-			suite.runTestCase(testCase)
+			suite.RunTestCase(testCase)
 		})
 	}
 }
 
-// runTestCase executes a single test case
-func (suite *LuaApiSuite) runTestCase(testCase TestCase) {
-	var scriptErr error
-
-	// Handle standalone Script field (mutually exclusive with Subscription)
+// buildScriptFromTestCase builds a Lua script from the test case configuration.
+// Handles both standalone scripts (Script field) and subscription-based tests (Subscription field).
+// Returns the complete script ready for execution and any build errors.
+//
+// Error Handling: Returns errors for runtime failures (external system issues):
+//   - File loading failures → file moved/deleted/permissions
+//   - URL parsing failures → could be runtime file path changes
+//
+// These are recoverable errors that tests can validate with ExpectErrorMessage.
+func (suite *LuaApiSuite) buildScriptFromTestCase(testCase TestCase) (string, error) {
+	// Handle standalone Script field
 	if testCase.Script != "" {
 		var scriptContent string
 		var params map[string]string
 
 		// Check if Script is a file:// URL
 		if strings.HasPrefix(testCase.Script, "file://") {
-			// Parse file URL to extract path and query parameters
 			filePath, urlParams, err := parseFileURL(testCase.Script)
 			if err != nil {
-				scriptErr = fmt.Errorf("failed to parse script URL %q: %w", testCase.Script, err)
-			} else {
-				params = urlParams
-				// Load script content
-				content, err := testutils.LoadScript(filePath)
-				if err != nil {
-					scriptErr = fmt.Errorf("failed to load script file %q: %w", filePath, err)
-				} else {
-					scriptContent = content
-				}
+				return "", fmt.Errorf("failed to parse script URL %q: %w", testCase.Script, err)
 			}
+			params = urlParams
+
+			content, err := testutils.LoadScript(filePath)
+			if err != nil {
+				return "", fmt.Errorf("failed to load script file %q: %w", filePath, err)
+			}
+			scriptContent = content
 		} else {
 			// Inline script
 			scriptContent = testCase.Script
 		}
 
-		// Execute a script with arg[] table populated from URL params
-		if scriptErr == nil {
-			// Build arg[] table initialization
-			var argTable strings.Builder
-			argTable.WriteString("arg = {}\n")
-			for key, value := range params {
-				// Escape the value for Lua string
-				escapedValue := strings.ReplaceAll(value, "\\", "\\\\")
-				escapedValue = strings.ReplaceAll(escapedValue, "\"", "\\\"")
-				fmt.Fprintf(&argTable, "arg[%q] = %q\n", key, escapedValue)
-			}
-
-			// Combine arg[] initialization with script content
-			fullScript := argTable.String() + scriptContent
-
-			if err := suite.LuaApi.LoadScript(fullScript, testCase.Name); err != nil {
-				scriptErr = err
-			} else if err := suite.LuaApi.ExecuteScript(context.Background(), ""); err != nil {
-				scriptErr = err
-			}
+		// Build arg[] table initialization
+		var argTable strings.Builder
+		argTable.WriteString("arg = {}\n")
+		for key, value := range params {
+			escapedValue := strings.ReplaceAll(value, "\\", "\\\\")
+			escapedValue = strings.ReplaceAll(escapedValue, "\"", "\\\"")
+			fmt.Fprintf(&argTable, "arg[%q] = %q\n", key, escapedValue)
 		}
 
-		// Check for errors - fail test cleanly and return
-		if scriptErr != nil {
-			if testCase.ExpectErrorMessage != "" {
-				suite.Require().Contains(scriptErr.Error(), testCase.ExpectErrorMessage, "Error message should contain expected text")
-			} else {
-				suite.Require().NoError(scriptErr, "Script execution failed")
-			}
-			return
-		}
+		return argTable.String() + scriptContent, nil
 	}
 
 	// Handle subscription-based tests
@@ -839,41 +744,28 @@ func (suite *LuaApiSuite) runTestCase(testCase TestCase) {
 			mode = "EveryUpdate"
 		}
 
-		// Check if CallbackScript is a file reference (starts with "file://")
+		// Check if CallbackScript is a file reference
 		callbackScript := subscription.CallbackScript
 		if strings.HasPrefix(callbackScript, "file://") {
-			// Extract file path from file://path/to/file.lua
 			filePath := strings.TrimPrefix(callbackScript, "file://")
-
-			// Read the file content using testutils.LoadScript (finds project root)
 			fileContent, err := testutils.LoadScript(filePath)
 			if err != nil {
-				scriptErr = fmt.Errorf("failed to load script file %q: %w", filePath, err)
-			} else {
-				callbackScript = fileContent
+				return "", fmt.Errorf("failed to load script file %q: %w", filePath, err)
 			}
+			callbackScript = fileContent
 		}
 
-		if scriptErr == nil {
-			script := suite.CreateSubscriptionJsonScript(mode, subscription.MaxRate, callbackScript, subscription.Services...)
-			if err := suite.LuaApi.LoadScript(script, testCase.Name); err != nil {
-				scriptErr = err
-			} else if err := suite.LuaApi.ExecuteScript(context.Background(), ""); err != nil {
-				scriptErr = err
-			}
-		}
+		script := suite.CreateSubscriptionJsonScript(mode, subscription.MaxRate, callbackScript, subscription.Services...)
+		return script, nil
 	}
 
-	// Check for the expected error
-	if testCase.ExpectErrorMessage != "" {
-		suite.Require().Error(scriptErr, "Expected an error but got none")
-		suite.Require().Contains(scriptErr.Error(), testCase.ExpectErrorMessage, "Error message should contain expected text")
-		return // Don't execute steps if we expected an error
-	}
+	return "", nil
+}
 
-	// If we didn't expect an error, require no error
-	suite.Require().NoError(scriptErr)
-
+// executeTestSteps executes all test steps with timing and peripheral simulation.
+// Helper method extracted for reuse in template method pattern.
+// Each step runs as a subtest for clear visibility and isolation.
+func (suite *LuaApiSuite) executeTestSteps(testCase TestCase, conn device.Connection, collector *LuaOutputCollector) {
 	// Sort steps by time to ensure correct execution order
 	steps := make([]TestStep, len(testCase.Steps))
 	copy(steps, testCase.Steps)
@@ -883,130 +775,324 @@ func (suite *LuaApiSuite) runTestCase(testCase TestCase) {
 
 	// Execute test steps with timing
 	startTime := time.Now()
-	for _, step := range steps {
-		if step.At > 0 {
-			elapsed := time.Since(startTime)
-			if step.At > elapsed {
-				time.Sleep(step.At - elapsed)
+	for stepIdx, step := range steps {
+		// Capture step for closure
+		stepNum := stepIdx + 1
+		currentStep := step
+
+		// Run each step as a subtest for clear identification and proper SIGSEGV attribution
+		// Use suite.Run() so testify can properly log SIGSEGV under the step
+		// SetupSubTest will skip reinitialization for Step_* subtests
+		suite.Run(fmt.Sprintf("Step_%d", stepNum), func() {
+			if currentStep.At > 0 {
+				elapsed := time.Since(startTime)
+				if currentStep.At > elapsed {
+					time.Sleep(currentStep.At - elapsed)
+				}
 			}
-		}
 
-		// Simulate data for this step
-		simulator := suite.NewPeripheralDataSimulator()
-		if testCase.AllowMultiValue {
-			simulator.AllowMultiValue()
-		}
-		for _, svc := range step.Services {
-			svcBuilder := simulator.WithService(svc.Service)
-			for _, charVal := range svc.Values {
-				svcBuilder.WithCharacteristic(charVal.Characteristic, charVal.Value)
+			// Simulate peripheral data
+			simulator := suite.NewPeripheralDataSimulator()
+			if testCase.AllowMultiValue {
+				simulator.AllowMultiValue()
 			}
-		}
+			for _, svc := range currentStep.Services {
+				svcBuilder := simulator.WithService(svc.Service)
+				for _, charVal := range svc.Values {
+					svcBuilder.WithCharacteristic(charVal.Characteristic, charVal.Value)
+				}
+			}
 
-		_, err := simulator.Simulate(true)
-		suite.Require().NoError(err)
+			// Use SimulateFor with explicit connection
+			_, err := simulator.SimulateFor(conn, true)
+			suite.Require().NoError(err)
 
-		// Wait after step execution
-		if waitAfter := step.WaitAfter; waitAfter > 0 {
-			time.Sleep(waitAfter)
-		} else if waitAfter := testCase.WaitAfter; waitAfter > 0 {
-			time.Sleep(waitAfter)
-		} else {
-			time.Sleep(DefaultStepWaitDuration)
-		}
+			// Wait after step execution
+			if waitAfter := currentStep.WaitAfter; waitAfter > 0 {
+				time.Sleep(waitAfter)
+			} else if waitAfter := testCase.WaitAfter; waitAfter > 0 {
+				time.Sleep(waitAfter)
+			} else {
+				time.Sleep(DefaultStepWaitDuration)
+			}
 
-		// Validate step output if expected output is provided
-		if len(step.ExpectedJSONOutput) > 0 {
-			suite.validateJSONOutput(step.ExpectedJSONOutput, true)
-		}
+			// Validate step output
+			if len(currentStep.ExpectedJSONOutput) > 0 {
+				suite.ValidateOutput2(collector, currentStep.ExpectedJSONOutput, "", true)
+			}
+
+			// Validate step errors
+			if len(currentStep.ExpectedErrors) > 0 {
+				suite.ValidateOutput2(collector, nil, "", true, currentStep.ExpectedErrors...)
+			}
+		})
 	}
-
-	// Validate expectations at test case level
-	suite.ValidateExpectations(testCase)
 }
 
-// ValidateExpectations validates test case output against expected results.
-// Waits for output processing to complete before validation.
-// Validates both JSON output (expected_json_output) and plain text output (expected_stdout).
-// Extension point for child suites (e.g., BridgeSuite) to add custom validation logic.
-func (suite *LuaApiSuite) ValidateExpectations(testCase TestCase) {
-	// Wait if needed for output to be processed
-	if len(testCase.ExpectedJSONOutput) > 0 || testCase.ExpectedStdout != "" {
+// validateFinalOutput performs final validation after all test steps complete.
+// Helper method extracted for reuse in template method pattern.
+func (suite *LuaApiSuite) validateFinalOutput(testCase TestCase, collector *LuaOutputCollector) {
+	if len(testCase.ExpectedJSONOutput) > 0 || testCase.ExpectedStdout != "" || len(testCase.ExpectedErrors) > 0 {
 		waitDuration := testCase.WaitAfter
 		if waitDuration == 0 {
 			waitDuration = DefaultStepWaitDuration
 		}
 		time.Sleep(waitDuration)
-	}
 
-	// Validate ExpectedJSONOutput
-	if len(testCase.ExpectedJSONOutput) > 0 {
-		// Scripts use isSubscription=false, subscriptions use isSubscription=true
-		suite.validateJSONOutput(testCase.ExpectedJSONOutput, testCase.Script == "")
-	}
-
-	// Validate ExpectedStdout (plain text output from standalone scripts)
-	if testCase.ExpectedStdout != "" {
-		actualOutput, err := suite.luaOutputCapture.ConsumePlainText()
-		suite.Require().NoError(err, "Should be able to consume plain text output")
-		suite.Require().Equal(testCase.ExpectedStdout, actualOutput, "Stdout output should match expected")
+		isSubscription := testCase.Script == ""
+		var expectedJson interface{}
+		if len(testCase.ExpectedJSONOutput) > 0 {
+			expectedJson = testCase.ExpectedJSONOutput
+		}
+		suite.ValidateOutput2(collector, expectedJson, testCase.ExpectedStdout, isSubscription, testCase.ExpectedErrors...)
 	}
 }
 
-// validateJSONOutput is the unified validation logic for both subscription callbacks and script output
-func (suite *LuaApiSuite) validateJSONOutput(expectedOutput []map[string]interface{}, isSubscription bool) {
-	var actual interface{}
+// ExecuteScriptWithCallbacks is a template method that executes a Lua script with before/after callbacks.
+// The default implementation uses suite.LuaApi. BridgeSuite can override to use Bridge's LuaAPI.
+// The 'before' callback is used for setup (e.g., starting the output collector).
+// The 'after' callback executes test steps and validation (blocks until complete).
+func (suite *LuaApiSuite) ExecuteScriptWithCallbacks(
+	script string,
+	before func(luaApi *BLEAPI2),
+	after func(luaApi *BLEAPI2),
+) error {
+	before(suite.LuaApi)
 
-	if isSubscription {
-		// Get subscription callback JSON data
-		jsonData, err := suite.LuaOutputAsJSON()
-		suite.Require().NoError(err, "Failed to get Lua output")
-		actual = jsonData
-	} else {
-		// Get script stdout and parse as JSON
-		output, err := suite.luaOutputCapture.ConsumePlainText()
-		suite.Require().NoError(err, "Failed to get Lua stdout")
-
-		var actualData map[string]interface{}
-		err = json.Unmarshal([]byte(strings.TrimSpace(output)), &actualData)
-		suite.Require().NoError(err, "Failed to parse JSON output from script")
-
-		actual = []map[string]interface{}{actualData}
-	}
-
-	// Normalize the expected output (convert byte arrays to strings to match Lua's JSON encoding)
-	normalizedExpected := suite.normalizeExpectedOutput(expectedOutput)
-
-	// Add default call_count only for subscription callbacks
-	if isSubscription {
-		for i, item := range normalizedExpected {
-			if _, hasCallCount := item["call_count"]; !hasCallCount {
-				item["call_count"] = i + 1
-			}
+	var err error
+	if script != "" {
+		if loadErr := suite.LuaApi.LoadScript(script, "test"); loadErr != nil {
+			err = loadErr
+		} else if execErr := suite.LuaApi.ExecuteScript(context.Background(), ""); execErr != nil {
+			err = execErr
 		}
 	}
 
-	// Convert string values to hex representation for better diff visibility
-	actualWithHex := suite.convertStringsToHex(actual)
-	expectedWithHex := suite.convertStringsToHex(normalizedExpected)
+	after(suite.LuaApi)
+	return err
+}
 
-	// Wrap arrays in objects since jsonassert doesn't support root-level arrays
-	actualWrapped := map[string]interface{}{"array": actualWithHex}
-	expectedWrapped := map[string]interface{}{"array": expectedWithHex}
-
-	// Create asserter with optional ignored fields (only for subscriptions)
-	ja := testutils.NewJSONAsserter(suite.T())
-	if isSubscription {
-		ja = ja.WithOptions(
-			testutils.WithIgnoredFields("TsUs", "Seq", "Flags", "timestamp", "call_count"),
-			testutils.WithIgnoreArrayOrder(true),
-		)
+// RunTestCase executes a single test case using the ExecuteScriptWithCallbacks template method
+func (suite *LuaApiSuite) RunTestCase(testCase TestCase) {
+	// Skip test if skip reason is provided
+	if testCase.Skip != "" {
+		suite.T().Skip(testCase.Skip)
+		return
 	}
 
-	actualJSON, _ := json.Marshal(actualWrapped)
-	expectedJSON, _ := json.Marshal(expectedWrapped)
+	// Stop suite's collector before creating new one to avoid dual-collector race
+	if suite.luaOutputCapture != nil {
+		if err := suite.luaOutputCapture.Stop(); err != nil {
+			suite.T().Logf("Warning: failed to stop suite output collector: %v", err)
+		}
+		suite.luaOutputCapture = nil
+	}
 
-	ja.Assert(string(actualJSON), string(expectedJSON))
+	// Build script
+	script, buildErr := suite.buildScriptFromTestCase(testCase)
+
+	// Collector and connection in closure context
+	var collector *LuaOutputCollector
+	var conn device.Connection
+
+	// Execute via a template method with before/after callbacks
+	scriptErr := suite.ExecuteScriptWithCallbacks(
+		script,
+		// Before: setup output collector
+		func(luaApi *BLEAPI2) {
+			var err error
+			collector, err = NewLuaOutputCollector(luaApi.OutputChannel(), 1024, func(err error) {
+				suite.T().Errorf("Output collector error: %v", err)
+			})
+			suite.Require().NoError(err, "Failed to create output collector")
+			suite.Require().NoError(collector.Start(), "Failed to start output collector")
+
+			// Get connection for test steps
+			conn = luaApi.GetDevice().GetConnection()
+		},
+		// After: execute steps and validate (blocks until complete)
+		func(luaApi *BLEAPI2) {
+			defer func() {
+				if err := collector.Stop(); err != nil {
+					suite.T().Logf("Warning: failed to stop test collector: %v", err)
+				}
+			}()
+
+			// Check for script build errors first
+			if buildErr != nil {
+				return // Error will be checked below
+			}
+
+			// Execute test steps
+			suite.executeTestSteps(testCase, conn, collector)
+
+			// Final validation
+			suite.validateFinalOutput(testCase, collector)
+		},
+	)
+
+	// Combine build and script errors
+	if buildErr != nil {
+		scriptErr = buildErr
+	}
+
+	// Handle error validation
+	if testCase.ExpectErrorMessage != "" {
+		suite.Require().Error(scriptErr, "Expected an error but got none")
+		suite.Require().Contains(scriptErr.Error(), testCase.ExpectErrorMessage, "Error message should contain expected text")
+		return
+	}
+
+	// If we didn't expect an error, require no error
+	suite.Require().NoError(scriptErr)
+}
+
+// ValidateOutput2 validates Lua output with flexible parameters, agnostic to test case or test step structure.
+// Consumes output once and validates JSON, stdout text, or stderr errors independently.
+//
+// Parameters:
+//   - collector: Output collector to consume from
+//   - expectedJson: Expected JSON structure from stdout (nil to skip) - accepts any type: string, map, struct, and array of any of those
+//   - expectedStdout: Expected stdout text (empty to skip)
+//   - isSubscription: true for subscription callbacks (ignores call_count, TsUs, etc.), false for freeform JSON
+//   - expectedErrors: Expected error substrings in stderr (variadic, empty to skip)
+//
+// JSON validation supports flexible formats for both expected and actual: string, map, struct, array, or array of maps/structs.
+// Reuses normalization and hex conversion for consistent validation.
+func (suite *LuaApiSuite) ValidateOutput2(collector *LuaOutputCollector, expectedJson interface{}, expectedStdout string, isSubscription bool, expectedErrors ...string) {
+	// testify automatically handles T substitution when using suite.Run()
+	t := suite.T()
+	req := require.New(t)
+
+	// Consumer: split stdout/stderr
+	var stdoutBuf strings.Builder
+	var stderrLines []string
+
+	type Output struct {
+		Stdout string
+		Stderr []string
+	}
+
+	consumer := func(record *LuaOutputRecord) (Output, error) {
+		if record == nil {
+			return Output{Stdout: stdoutBuf.String(), Stderr: stderrLines}, nil
+		}
+		if record.Source == "stdout" {
+			stdoutBuf.WriteString(record.Content)
+		} else if record.Source == "stderr" {
+			stderrLines = append(stderrLines, record.Content)
+		}
+		return Output{}, nil
+	}
+
+	output, err := ConsumeRecords(collector, consumer)
+	req.NoError(err, "Failed to consume output")
+
+	// Validate JSON (flexible: string/array/map/struct)
+	if expectedJson != nil {
+		var actualJson interface{}
+		stdout := strings.TrimSpace(output.Stdout)
+
+		if isSubscription {
+			// Subscription mode: Parse as JSONL (JSON Lines) or single JSON object
+			// Try single JSON object first
+			var singleData LuaSubscriptionCallbackData
+			if err := json.Unmarshal([]byte(stdout), &singleData); err == nil {
+				// Successfully parsed as single JSON - convert to generic format
+				actualJson = []LuaSubscriptionCallbackData{singleData}
+			} else {
+				// Failed as single JSON, try JSONL (multiple lines)
+				lines := strings.Split(stdout, "\n")
+				var arrayData []LuaSubscriptionCallbackData
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if line == "" {
+						continue
+					}
+					var data LuaSubscriptionCallbackData
+					if err := json.Unmarshal([]byte(line), &data); err != nil {
+						req.NoError(err, "Failed to parse subscription JSON line: %q", line)
+					}
+					arrayData = append(arrayData, data)
+				}
+				actualJson = arrayData
+			}
+		} else {
+			// Script mode: Parse stdout as raw JSON
+			// The script output is typically a map, but expected is an array (from YAML)
+			// so we wrap it in an array to match the original validateJSONOutput behavior
+			var scriptData map[string]interface{}
+			err := json.Unmarshal([]byte(stdout), &scriptData)
+			req.NoError(err, "Failed to parse JSON output from script")
+			actualJson = []map[string]interface{}{scriptData}
+		}
+
+		// Normalize byte arrays to strings (matches Lua's JSON encoding)
+		normalized := suite.normalizeValue(expectedJson)
+
+		// KEY FIX: Add default call_count to expected (matches original validateJSONOutput behavior)
+		// This must be done BEFORE hex conversion, working with the normalized data
+		if isSubscription {
+			// expectedJson should be []map[string]interface{} for subscriptions
+			if normalizedArray, ok := normalized.([]map[string]interface{}); ok {
+				for i, item := range normalizedArray {
+					if _, hasCallCount := item["call_count"]; !hasCallCount {
+						item["call_count"] = i + 1
+					}
+				}
+			}
+		}
+
+		// Convert to hex for better diff readability
+		actualHex := suite.convertStringsToHex(actualJson)
+		expectedHex := suite.convertStringsToHex(normalized)
+
+		// Wrap arrays in objects since jsonassert doesn't support root-level arrays
+		actualWrapped := map[string]interface{}{"array": actualHex}
+		expectedWrapped := map[string]interface{}{"array": expectedHex}
+
+		// JSONAsserter with mode-specific options (use current test context)
+		ja := testutils.NewJSONAsserter(t)
+		if isSubscription {
+			ja = ja.WithOptions(
+				testutils.WithIgnoredFields("TsUs", "Seq", "Flags", "timestamp", "call_count"),
+				testutils.WithIgnoreArrayOrder(true),
+			)
+		}
+
+		actualJSON, _ := json.Marshal(actualWrapped)
+		expectedJSON, _ := json.Marshal(expectedWrapped)
+		ja.Assert(string(actualJSON), string(expectedJSON))
+	}
+
+	// Validate stdout text (using TextAsserter for better diff output, use current test context)
+	if expectedStdout != "" {
+		ta := testutils.NewTextAsserter(t)
+		ta.Assert(output.Stdout, expectedStdout)
+	}
+
+	// Validate stderr errors (substring matching, following bridge pattern)
+	if len(expectedErrors) > 0 {
+		if len(output.Stderr) == 0 {
+			req.Fail("Expected errors but got none",
+				"Expected errors: %q\nActual errors: none", expectedErrors)
+			return
+		}
+
+		// Check that all expected error substrings are found in captured errors
+		for _, expectedErr := range expectedErrors {
+			found := false
+			for _, capturedErr := range output.Stderr {
+				if strings.Contains(capturedErr, expectedErr) {
+					found = true
+					break
+				}
+			}
+			req.True(found,
+				"Expected error substring %q not found in stderr: %v",
+				expectedErr, output.Stderr)
+		}
+	}
 }
 
 // convertStringsToHex converts binary string values to hex representation for better diff readability
@@ -1023,8 +1109,11 @@ func (suite *LuaApiSuite) convertStringsToHex(data interface{}) interface{} {
 				recordMap["BatchValues"] = suite.convertBatchValuesMapToHex(item.Record.BatchValues)
 			}
 			itemMap := map[string]interface{}{
-				"call_count": item.CallCount,
-				"record":     recordMap,
+				"record": recordMap,
+			}
+			// Include call_count (will be ignored by JSONAsserter with WithIgnoredFields)
+			if item.CallCount > 0 {
+				itemMap["call_count"] = item.CallCount
 			}
 			// Include errors if present
 			if len(item.Errors) > 0 {
@@ -1135,15 +1224,6 @@ func (suite *LuaApiSuite) stringToHex(s string) string {
 	return hexStr.String()
 }
 
-// normalizeExpectedOutput converts byte arrays in expected output to strings
-// to match how Lua's JSON encoder represents binary data (modifies maps in-place)
-func (suite *LuaApiSuite) normalizeExpectedOutput(expected []map[string]interface{}) []map[string]interface{} {
-	for _, item := range expected {
-		suite.normalizeMapInPlace(item)
-	}
-	return expected
-}
-
 // normalizeMapInPlace recursively converts byte arrays to strings in a map (modifies in-place)
 func (suite *LuaApiSuite) normalizeMapInPlace(m map[string]interface{}) {
 	for k, v := range m {
@@ -1154,6 +1234,12 @@ func (suite *LuaApiSuite) normalizeMapInPlace(m map[string]interface{}) {
 // normalizeValue converts a value, handling byte arrays specially
 func (suite *LuaApiSuite) normalizeValue(v interface{}) interface{} {
 	switch val := v.(type) {
+	case []map[string]interface{}:
+		// Handle array of maps (e.g., YAML test cases)
+		for i := range val {
+			suite.normalizeMapInPlace(val[i])
+		}
+		return val
 	case []interface{}:
 		// Check if this is a byte array (all elements are numbers 0-255)
 		if isByteArray(val) {
@@ -1372,11 +1458,18 @@ func (s *ServiceDataSimulatorBuilder) Simulate(verbose bool) *ServiceDataSimulat
 // It sends notifications index-by-index across all characteristics (round-robin style) in insertion order
 func (b *PeripheralDataSimulatorBuilder) Simulate(verbose bool) (*PeripheralDataSimulatorBuilder, error) {
 	conn := b.suite.LuaApi.GetDevice().GetConnection()
+	return b.SimulateFor(conn, verbose)
+}
+
+// SimulateFor executes all configured characteristic data simulations using the provided connection.
+// This is a stateless variant of Simulate() that doesn't depend on suite state.
+// It sends notifications index-by-index across all characteristics (round-robin style) in insertion order.
+func (b *PeripheralDataSimulatorBuilder) SimulateFor(conn device.Connection, verbose bool) (*PeripheralDataSimulatorBuilder, error) {
 	b.suite.NotNil(conn, "Connection should be available")
 
 	bleConn, ok := conn.(*device.BLEConnection)
 	if !ok {
-		panic(fmt.Sprintf("BUG: connection is not a *device.BLEConnection (got %T) - this indicates a test setup error", conn))
+		return nil, fmt.Errorf("connection is not a *device.BLEConnection (got %T)", conn)
 	}
 
 	// Find maximum number of values across all characteristics

@@ -92,6 +92,7 @@ func executeInspectLuaScript(ctx context.Context, dev device.Device, logger *log
 	return lua.ExecuteDeviceScriptWithOutput(
 		ctx,
 		dev,
+		nil,
 		logger,
 		blecli.DefaultInspectLuaScript,
 		args,

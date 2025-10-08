@@ -49,9 +49,6 @@ func InspectDevice[R any](ctx context.Context, address string, opts *InspectOpti
 		return zero, err
 	}
 
-	// Report phase change: connected
-	progressCallback("Connected")
-
 	// Ensure the device is disconnected after the callback completes
 	defer func(dev device.Device) {
 		err := dev.Disconnect()
@@ -59,6 +56,9 @@ func InspectDevice[R any](ctx context.Context, address string, opts *InspectOpti
 			logger.WithError(err).Error("failed to disconnect device")
 		}
 	}(dev)
+
+	// Report phase change: connected
+	progressCallback("Connected")
 
 	// Report phase change: processing results
 	progressCallback("Processing results")

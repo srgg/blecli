@@ -20,3 +20,13 @@ test_cases:
     expected_stdout: |
       arg["format"] = "json"
       arg["verbose"] = "true"
+
+# GOAL: Verify that error validation shows expected vs actual when errors are expected but none are found
+#
+# TEST SCENARIO: Execute script with no errors → expect errors → verify error message shows expected errors list
+  - name: "Shows expected errors when none found"
+    script: 'print("Hello World")'
+    expected_errors:
+      - "expected error 1"
+      - "expected error 2"
+    skip: "Cannot programmatically validate error message format - Go testify/suite framework doesn't expose subtest failure messages. This test demonstrates the error message but must be manually verified."
