@@ -38,8 +38,15 @@ internal/testutils/mocks/
 # Code coverage reports
 coverage/
 
+# Temporary/generated files consolidated in .tmp/
+.tmp/
+
+# Generated files outside .tmp/
+site/
+internal/bledb/bledb_generated.go
+
+# Shell script temp files
+scripts/*.log
+
 # PlatformIO build
 .pio/
-
-.bledb-cache
-internal/bledb/bledb_generated.go

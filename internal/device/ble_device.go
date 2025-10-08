@@ -13,6 +13,17 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const (
+	// DefaultBLEWriteChunkSize is the maximum number of bytes to write in a single BLE operation.
+	// BLE 4.0/4.1 spec defines ATT_MTU of 23 bytes (20 bytes payload after ATT header overhead).
+	// Keeping chunks at 20 bytes ensures compatibility with all BLE versions.
+	DefaultBLEWriteChunkSize = 20
+
+	// DefaultBLEWriteDelay is the delay between consecutive write chunks.
+	// This prevents overwhelming the BLE peripheral's receive buffer and ensures reliable delivery.
+	DefaultBLEWriteDelay = 10 * time.Millisecond
+)
+
 // BLEDescriptor implements the Descriptor interface
 type BLEDescriptor struct {
 	uuid      string
@@ -185,23 +196,14 @@ func (d *BLEDevice) GetServiceData() map[string][]byte {
 	return d.serviceData
 }
 
-//func (d *BLEDevice) DisplayName() string {
-//	d.mu.RLock()
-//	defer d.mu.RUnlock()
-//	if d.name != "" {
-//		return d.name
-//	}
-//	return d.address
-//}
-
 // Connect establishes a BLE connection and populates live characteristics
 func (d *BLEDevice) Connect(ctx context.Context, opts *ConnectOptions) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Assert: connection should never be nil with the preconnection pattern
+	// Defensive check: connection should never be nil with the preconnection pattern
 	if d.connection == nil {
-		panic("BUG: connection is nil - this should never happen with preconnection pattern")
+		return fmt.Errorf("internal error: connection is not initialized")
 	}
 
 	// Set default options if not provided
@@ -253,20 +255,20 @@ func (d *BLEDevice) Disconnect() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Assert: connection should never be nil with preconnection pattern
+	// Defensive check: connection should never be nil with the preconnection pattern
 	if d.connection == nil {
-		panic("BUG: connection is nil - this should never happen with preconnection pattern")
+		return fmt.Errorf("internal error: connection is not initialized")
 	}
 
 	// Use the BLEConnection to disconnect
 	return d.connection.Disconnect()
 }
 
-// isConnectedInternal returnShshoulsd IsConnected call isConedeteInternal?s connection status without acquiring locks (for internal use)
+// isConnectedInternal returns connection status without acquiring locks (for internal use)
 func (d *BLEDevice) isConnectedInternal() bool {
-	// Assert: connection should never be nil with preconnection pattern
+	// Defensive check: connection should never be nil with the preconnection pattern
 	if d.connection == nil {
-		panic("BUG: connection is nil - this should never happen with preconnection pattern")
+		return false
 	}
 
 	return d.connection.IsConnected()
@@ -330,58 +332,75 @@ func (d *BLEDevice) Update(adv ble.Advertisement) {
 // BLE-specific methods
 
 // WriteToCharacteristic writes data to a BLE characteristic
-func (b *BLEDevice) WriteToCharacteristic(uuid string, data []byte) error {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+func (d *BLEDevice) WriteToCharacteristic(uuid string, data []byte) error {
+	d.mu.RLock()
+	if d.connection == nil {
+		d.mu.RUnlock()
+		return fmt.Errorf("device not connected")
+	}
+	conn := d.connection
+	d.mu.RUnlock()
 
-	if b.connection == nil || !b.connection.IsConnected() {
+	// Acquire connection lock to check state and snapshot client/characteristics atomically
+	conn.connMutex.RLock()
+	if !conn.isConnectedInternal() {
+		conn.connMutex.RUnlock()
 		return fmt.Errorf("device not connected")
 	}
 
 	// Find characteristic across all services
 	var char *BLECharacteristic
-	for _, service := range b.connection.services {
+	var serviceUUID string
+	for svcUUID, service := range conn.services {
 		if bleChar, ok := service.Characteristics[uuid]; ok {
 			char = bleChar
+			serviceUUID = svcUUID
 			break
 		}
 	}
 
 	if char == nil {
+		conn.connMutex.RUnlock()
 		return fmt.Errorf("characteristic %s not found", uuid)
 	}
 
 	if char.BLEChar == nil {
+		conn.connMutex.RUnlock()
 		return fmt.Errorf("characteristic %s not connected", uuid)
 	}
 
-	b.connection.writeMutex.Lock()
-	defer b.connection.writeMutex.Unlock()
+	// Snapshot client reference before releasing read lock
+	client := conn.client
+	conn.connMutex.RUnlock()
 
-	maxChunk := 20
+	// Acquire write mutex to serialize writes
+	conn.writeMutex.Lock()
+	defer conn.writeMutex.Unlock()
+
+	// Write data in chunks
 	for len(data) > 0 {
 		n := len(data)
-		if n > maxChunk {
-			n = maxChunk
+		if n > DefaultBLEWriteChunkSize {
+			n = DefaultBLEWriteChunkSize
 		}
-		if err := b.connection.client.WriteCharacteristic(char.BLEChar, data[:n], false); err != nil {
-			return err
+		if err := client.WriteCharacteristic(char.BLEChar, data[:n], false); err != nil {
+			return fmt.Errorf("failed to write to characteristic %s in service %s: %w", uuid, serviceUUID, err)
 		}
 		data = data[n:]
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(DefaultBLEWriteDelay)
 	}
 	return nil
 }
 
 // GetBLEServices returns services with their characteristics
-func (b *BLEDevice) GetBLEServices() ([]*BLEService, error) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+func (d *BLEDevice) GetBLEServices() ([]*BLEService, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 
 	// Return connected services if device is connected
-	if b.isConnectedInternal() {
-		result := make([]*BLEService, 0, len(b.connection.services))
-		for _, svc := range b.connection.services {
+	if d.isConnectedInternal() {
+		result := make([]*BLEService, 0, len(d.connection.services))
+		for _, svc := range d.connection.services {
 			result = append(result, svc)
 		}
 		return result, nil
@@ -392,14 +411,14 @@ func (b *BLEDevice) GetBLEServices() ([]*BLEService, error) {
 }
 
 // GetCharacteristics returns all characteristics as device.Characteristic
-func (b *BLEDevice) GetCharacteristics() ([]Characteristic, error) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+func (d *BLEDevice) GetCharacteristics() ([]Characteristic, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 
 	// Return connected characteristics if device is connected
-	if b.isConnectedInternal() {
+	if d.isConnectedInternal() {
 		var result []Characteristic
-		for _, service := range b.connection.services {
+		for _, service := range d.connection.services {
 			for _, char := range service.Characteristics {
 				result = append(result, char)
 			}
@@ -412,10 +431,10 @@ func (b *BLEDevice) GetCharacteristics() ([]Characteristic, error) {
 }
 
 // SetDataHandler sets callback for received notifications
-func (b *BLEDevice) SetDataHandler(f func(uuid string, data []byte)) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.onData = f
+func (d *BLEDevice) SetDataHandler(f func(uuid string, data []byte)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.onData = f
 }
 
 // GetConnection returns the BLE connection interface
@@ -473,19 +492,11 @@ func (d *BLEDevice) extractNameFromManufacturerData(data []byte) string {
 		}
 	}
 
-	// Pattern 2: Apple iBeacon format - check for known manufacturer IDs
-	if len(data) >= 2 {
-		manufacturerID := uint16(data[0]) | uint16(data[1])<<8
-
-		switch manufacturerID {
-		case 0x004C: // Apple
-			return d.parseAppleManufacturerData(data[2:])
-		case 0x0006: // Microsoft
-			return d.parseMicrosoftManufacturerData(data[2:])
-		case 0x000F: // Broadcom
-			return d.parseBroadcomManufacturerData(data[2:])
-		}
-	}
+	// Pattern 2: Manufacturer-specific data parsing
+	// Note: Vendor-specific manufacturer data parsing is complex and varies by device.
+	// For now, we don't parse manufacturer data - it's kept for future implementation.
+	// Manufacturer IDs reference: Apple=0x004C, Microsoft=0x0006, Broadcom=0x000F
+	_ = data // Suppress unused parameter warning
 
 	return ""
 }
@@ -511,25 +522,6 @@ func isValidDeviceName(name string) bool {
 	}
 
 	return hasLetter
-}
-
-// parseAppleManufacturerData attempts to extract device names from Apple manufacturer data
-func (d *BLEDevice) parseAppleManufacturerData(data []byte) string {
-	// Apple devices sometimes include device type information
-	// This is a simplified parser - real implementation would be more comprehensive
-	return ""
-}
-
-// parseMicrosoftManufacturerData attempts to extract device names from Microsoft manufacturer data
-func (d *BLEDevice) parseMicrosoftManufacturerData(data []byte) string {
-	// Microsoft devices sometimes include device information
-	return ""
-}
-
-// parseBroadcomManufacturerData attempts to extract device names from Broadcom manufacturer data
-func (d *BLEDevice) parseBroadcomManufacturerData(data []byte) string {
-	// Broadcom devices sometimes include device information
-	return ""
 }
 
 // hasServiceUUID checks if services already contain a service with the given UUID (case-insensitive)

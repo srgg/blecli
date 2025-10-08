@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	cacheDir          = "../../.bledb-cache"
+	cacheDir          = "../../.tmp/bledb-cache"
 	outFile           = "../../internal/bledb/bledb_generated.go"
 	serviceURL        = "https://raw.githubusercontent.com/NordicSemiconductor/bluetooth-numbers-database/master/v1/service_uuids.json"
 	characteristicURL = "https://raw.githubusercontent.com/NordicSemiconductor/bluetooth-numbers-database/master/v1/characteristic_uuids.json"

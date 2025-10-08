@@ -20,12 +20,14 @@ build:
 	@echo "Building $(BINARY_NAME) with LuaJIT for maximum performance..."
 	go build $(BUILD_FLAGS) -o $(BINARY_NAME) ./cmd/${BINARY_NAME}
 
-# Clean build artifacts
+# Clean everything
 .PHONY: clean
-clean:
+clean: clean-mocks clean-docs
 	@echo "Cleaning build artifacts..."
 	rm -f $(BINARY_NAME)
 	rm -rf $(COVERAGE_DIR)
+	@echo "Cleaning all temporary files..."
+	rm -rf .tmp
 
 # Generate BLE database
 .PHONY: generate-bledb
@@ -194,33 +196,76 @@ clean-mocks:
 .PHONY: generate
 generate: generate-bledb generate-mocks
 
-# Clean with mocks
-.PHONY: clean-all
-clean-all: clean clean-mocks
+# Generate static documentation for GitHub/Cloudflare Pages
+.PHONY: docs
+docs:
+	@./scripts/generate-docs.sh
+
+# Serve generated static documentation locally
+.PHONY: docs-serve
+docs-serve:
+	@if [ ! -d ".tmp/docs-build" ]; then \
+		echo "Error: Documentation not generated. Run 'make docs' first."; \
+		exit 1; \
+	fi
+	@echo "Starting local preview server..."
+	@echo "Documentation will be available at http://127.0.0.1:8000"
+	@echo "Press Ctrl+C to stop"
+	@cd .tmp/docs-build && ../../.tmp/venv-docs/bin/mkdocs serve
+
+# Clean generated documentation
+.PHONY: clean-docs
+clean-docs:
+	@echo "Cleaning generated documentation..."
+	@rm -rf .tmp/docs-build .tmp/venv-docs site
+	@echo "Documentation artifacts cleaned"
 
 # Help target
 .PHONY: help
 help:
 	@echo "Available targets:"
+	@echo ""
+	@echo "Build & Run:"
 	@echo "  build            - Build the application"
+	@echo ""
+	@echo "Testing:"
 	@echo "  test             - Run all tests or specific test (TEST=<test_name>)"
 	@echo "  test-race        - Run tests with race detection"
 	@echo "  test-coverage    - Run tests with coverage report"
 	@echo "  coverage         - Show coverage summary"
+	@echo "  test-device      - Run device package tests"
+	@echo "  test-ble         - Run BLE package tests"
+	@echo "  test-config      - Run config package tests"
+	@echo ""
+	@echo "Benchmarking:"
 	@echo "  bench            - Run benchmarks"
 	@echo "  bench-cpu        - Run benchmarks with CPU profiling"
 	@echo "  bench-mem        - Run benchmarks with memory profiling"
+	@echo "  bench-device     - Run device package benchmarks"
+	@echo "  bench-ble        - Run BLE package benchmarks"
+	@echo ""
+	@echo "Code Quality:"
 	@echo "  lint             - Run linter"
 	@echo "  fmt              - Format code"
 	@echo "  security         - Run security checks"
 	@echo "  check            - Run full quality check"
+	@echo ""
+	@echo "Documentation:"
+	@echo "  docs             - Generate static docs for GH/CF Pages (site/)"
+	@echo "  docs-serve       - Serve generated docs locally"
+	@echo "  clean-docs       - Clean generated documentation"
+	@echo ""
+	@echo "Code Generation:"
 	@echo "  generate         - Generate BLE database and mocks"
 	@echo "  generate-bledb   - Generate BLE UUID database"
 	@echo "  generate-mocks   - Generate mocks using mockery"
-	@echo "  clean            - Clean build artifacts"
-	@echo "  clean-mocks      - Clean generated mocks"
-	@echo "  clean-all        - Clean all artifacts, including mocks"
+	@echo ""
+	@echo "Maintenance:"
+	@echo "  clean            - Clean everything (build, mocks, docs)"
+	@echo "  clean-mocks      - Clean generated mocks only"
+	@echo "  clean-docs       - Clean generated docs only"
 	@echo "  tidy             - Tidy dependencies"
 	@echo "  verify           - Verify dependencies"
 	@echo "  install-tools    - Install development tools"
+	@echo ""
 	@echo "  help             - Show this help message"

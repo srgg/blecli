@@ -1,6 +1,6 @@
 module github.com/srg/blim
 
-go 1.25.1
+go 1.25.2
 
 require (
 	github.com/aarzilli/golua v0.0.0-20250217091409-248753f411c4

@@ -8,6 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+//nolint:revive // DeviceInfo name is intentional for clarity when used as device.DeviceInfo
 type DeviceInfo interface {
 	GetID() string
 	GetName() string
