@@ -202,7 +202,7 @@ test_cases:
 #
 # TEST SCENARIO: Execute inspect.lua script → verify text format output matches an expected format
   - name: "Inspect Device Test"
-    script: "file://examples/inspect.lua"
+    script: "file:///examples/inspect.lua"
     wait_after: 500ms
     peripheral:
       - service: "1234"
@@ -237,7 +237,7 @@ test_cases:
 #
 # TEST SCENARIO: Execute inspect.lua with ?format=json → verify JSON structure via expected_output
   - name: "Inspect Device Test (JSON format)"
-    script: "file://examples/inspect.lua?format=json"
+    script: "file:///examples/inspect.lua?format=json"
     wait_after: 500ms
     peripheral:
       - service: "1234"

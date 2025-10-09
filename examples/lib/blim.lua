@@ -10,6 +10,20 @@ blim.list = native.list
 blim.characteristic = native.characteristic
 blim.device = native.device
 
+-- Bridge info: wrap getter functions to appear as values
+--  native.bridge always exists, but the functions inside check if bridge is actually set
+blim.bridge = setmetatable({}, {
+	__index = function(_, key)
+		local getter = native.bridge[key]
+		if getter then
+			-- Call the getter function (it will raise error if bridge not set)
+			return getter()
+		else
+			return nil
+		end
+	end
+})
+
 
 
 -- Helper functions for Lua scripts

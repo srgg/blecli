@@ -31,7 +31,7 @@ func (suite *LuaOutputCollectorTestSuite) waitForState(collector *LuaOutputColle
 	return false
 }
 
-// TestNewLuaOutputCollector tests the constructor with various input scenarios
+// TestNewLuaOutputCollector tests the constructor with various input test-scenarios
 func (suite *LuaOutputCollectorTestSuite) TestNewLuaOutputCollector() {
 	// GOAL: Verify LuaOutputCollector constructor validates parameters and initializes correctly
 	//
@@ -705,7 +705,7 @@ func (suite *LuaOutputCollectorTestSuite) TestConcurrency() {
 	})
 }
 
-// TestErrorHandling tests error scenarios and recovery
+// TestErrorHandling tests error test-scenarios and recovery
 func (suite *LuaOutputCollectorTestSuite) TestErrorHandling() {
 	// GOAL: Verify custom error handlers are called and default behavior panics on errors
 	//
@@ -935,7 +935,7 @@ func (suite *LuaOutputCollectorTestSuite) TestRaceConditions() {
 	})
 }
 
-// TestLuaOutputCollectorEdgeCases tests specific edge cases and stress scenarios
+// TestLuaOutputCollectorEdgeCases tests specific edge cases and stress test-scenarios
 func TestLuaOutputCollectorEdgeCases(t *testing.T) {
 	// GOAL: Verify collector handles edge cases like boundary conditions and high throughput
 	//
@@ -999,7 +999,7 @@ func TestLuaOutputCollectorEdgeCases(t *testing.T) {
 	})
 
 	t.Run("HighThroughputStressTest", func(t *testing.T) {
-		// GOAL: Verify collector handles high-throughput scenarios with 100k records efficiently
+		// GOAL: Verify collector handles high-throughput test-scenarios with 100k records efficiently
 		//
 		// TEST SCENARIO: Send 100k records rapidly → verify all processed → check performance metrics
 		if testing.Short() {

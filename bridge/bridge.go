@@ -290,7 +290,7 @@ func RunDeviceBridge[R any](
 //}
 
 // createPTY creates a pseudo-terminal and configures it for raw mode.
-// Returns clear error messages for common failure scenarios including permission issues.
+// Returns clear error messages for common failure test-scenarios including permission issues.
 func createPTY() (master *os.File, slave *os.File, err error) {
 	master, slave, err = pty.Open()
 	if err != nil {

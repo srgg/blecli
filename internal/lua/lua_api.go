@@ -1,7 +1,5 @@
 package lua
 
-import "C"
-
 import (
 	"context"
 	"fmt"
@@ -14,6 +12,12 @@ import (
 	blim "github.com/srg/blim"
 	"github.com/srg/blim/internal/device"
 )
+
+// BridgeInfo contains bridge information to expose to Lua
+type BridgeInfo interface {
+	GetPTYName() string     // PTY device name for display
+	GetSymlinkPath() string // Symlink path (empty if not created)
+}
 
 // LuaSubscriptionTable Lua subscription configuration
 type LuaSubscriptionTable struct {
@@ -29,6 +33,7 @@ type BLEAPI2 struct {
 	device    device.Device
 	LuaEngine *LuaEngine
 	logger    *logrus.Logger
+	bridge    BridgeInfo // Optional bridge information
 }
 
 // NewBLEAPI2 creates a new BLE API instance with subscription support
@@ -45,6 +50,53 @@ func NewBLEAPI2(device device.Device, logger *logrus.Logger) *BLEAPI2 {
 
 func (api *BLEAPI2) GetDevice() device.Device {
 	return api.device
+}
+
+// SetBridge sets the bridge information (accessed at runtime via metatable)
+func (api *BLEAPI2) SetBridge(bridge BridgeInfo) {
+	api.logger.WithFields(logrus.Fields{
+		"bridge_set": bridge != nil,
+		"api_ptr":    fmt.Sprintf("%p", api),
+	}).Debug("SetBridge called")
+	api.bridge = bridge
+}
+
+// registerBridgeInfo registers the blim.bridge table with runtime bridge checking
+// This is called internally during API registration within the DoWithState block
+// Stack: expects _blim_internal table at top (-1)
+func (api *BLEAPI2) registerBridgeInfo(L *lua.State) {
+	L.PushString("bridge")
+
+	// Create bridge table with getter functions that check at runtime
+	L.NewTable() // Stack: _blim_internal, "bridge", {}
+
+	// Add pty_name as a getter function
+	L.PushString("pty_name")
+	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.pty_name", func(L *lua.State) int {
+		if api.bridge == nil {
+			api.logger.WithField("api_ptr", fmt.Sprintf("%p", api)).Error("bridge.pty_name accessed but api.bridge is nil")
+			L.RaiseError("bridge field 'pty_name' is not available (not running in bridge mode)")
+			return 0
+		}
+		L.PushString(api.bridge.GetPTYName())
+		return 1
+	}))
+	L.SetTable(-3)
+
+	// Add symlink_path as a getter function
+	L.PushString("symlink_path")
+	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.symlink_path", func(L *lua.State) int {
+		if api.bridge == nil {
+			L.RaiseError("bridge field 'symlink_path' is not available (not running in bridge mode)")
+			return 0
+		}
+		L.PushString(api.bridge.GetSymlinkPath())
+		return 1
+	}))
+	L.SetTable(-3)
+
+	// Set _blim_internal.bridge = <table with getter functions>
+	L.SetTable(-3)
 }
 
 // SafePushGoFunction pushes a function name and safe-wrapped Go function onto the Lua stack.
@@ -126,6 +178,9 @@ func (api *BLEAPI2) registerBlimAPI() {
 		api.registerListFunction(L)
 		api.registerDeviceInfo(L)
 		api.registerCharacteristicFunction(L)
+
+		// Register bridge info if set
+		api.registerBridgeInfo(L)
 
 		// Set global '_blim_internal' variable
 		L.SetGlobal("_blim_internal")

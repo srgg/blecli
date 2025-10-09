@@ -148,6 +148,16 @@ type LuaSubscriptionCallbackData struct {
 	} `json:"record"`
 }
 
+// ScriptExecutor defines the interface for executing Lua scripts with callbacks.
+// This enables polymorphic behavior for different execution contexts (e.g., standard vs bridge mode).
+type ScriptExecutor interface {
+	ExecuteScriptWithCallbacks(
+		script string,
+		before func(luaApi *BLEAPI2),
+		after func(luaApi *BLEAPI2),
+	) error
+}
+
 // LuaApiSuite provides test infrastructure for BLE API testing with Lua integration.
 //
 // It embeds MockBLEPeripheralSuite for peripheral simulation and manages a BLEAPI2 instance
@@ -240,7 +250,8 @@ type LuaApiSuite struct {
 
 	LuaApi           *BLEAPI2
 	luaOutputCapture *LuaOutputCollector
-	skipOutputSetup  bool // Allow child suites to skip output collector setup
+	Executor         ScriptExecutor
+	templateData     map[string]interface{} // Template data for dynamic test assertions
 }
 
 // ExecuteScript loads and executes a Lua script for testing
@@ -294,12 +305,15 @@ func (suite *LuaApiSuite) SetupTest() {
 	// -- Create lua api
 	suite.LuaApi = suite.createLuaApi()
 
+	// Initialize executor to self for polymorphic ExecuteScriptWithCallbacks
+	suite.Executor = suite
+
+	// Clear template data for clean test state
+	suite.templateData = nil
+
 	// Create and start a Lua output collector with proper error handling
-	// Skip if child suite (e.g., BridgeSuite) manages its own output collector
-	if !suite.skipOutputSetup {
-		if err := suite.setupOutputCollector(); err != nil {
-			suite.T().Fatalf("Failed to setup output collector: %v", err)
-		}
+	if err := suite.setupOutputCollector(); err != nil {
+		suite.T().Fatalf("Failed to setup output collector: %v", err)
 	}
 }
 
@@ -427,6 +441,13 @@ func (suite *LuaApiSuite) TearDownTest() {
 	}
 }
 
+// SetTemplateData sets template data for dynamic test assertions.
+// Used by subclasses like BridgeSuite to provide runtime values (PTY paths, device addresses)
+// for template-based validation of test output.
+func (suite *LuaApiSuite) SetTemplateData(data map[string]interface{}) {
+	suite.templateData = data
+}
+
 // SetupSubTest reinitializes test resources for subtests.
 // Cleans up existing output collector and Lua API, then creates fresh instances.
 // Enables running multiple test cases in the same test function using suite.Run().
@@ -438,6 +459,9 @@ func (suite *LuaApiSuite) SetupSubTest() {
 	if strings.HasPrefix(testName, "Step_") || strings.Contains(testName, "/Step_") {
 		return
 	}
+
+	// Clear template data for clean test case state
+	suite.templateData = nil
 
 	// Clean up existing resources in proper order (for test case subtests only)
 	if suite.luaOutputCapture != nil {
@@ -895,8 +919,8 @@ func (suite *LuaApiSuite) RunTestCase(testCase TestCase) {
 	var collector *LuaOutputCollector
 	var conn device.Connection
 
-	// Execute via a template method with before/after callbacks
-	scriptErr := suite.ExecuteScriptWithCallbacks(
+	// Execute via executor interface for polymorphic dispatch
+	scriptErr := suite.Executor.ExecuteScriptWithCallbacks(
 		script,
 		// Before: setup output collector
 		func(luaApi *BLEAPI2) {
@@ -1068,7 +1092,8 @@ func (suite *LuaApiSuite) ValidateOutput2(collector *LuaOutputCollector, expecte
 	// Validate stdout text (using TextAsserter for better diff output, use current test context)
 	if expectedStdout != "" {
 		ta := testutils.NewTextAsserter(t)
-		ta.Assert(output.Stdout, expectedStdout)
+		// Use template-based assertion for bridges
+		ta.AssertWithTemplate(output.Stdout, expectedStdout, suite.templateData)
 	}
 
 	// Validate stderr errors (substring matching, following bridge pattern)

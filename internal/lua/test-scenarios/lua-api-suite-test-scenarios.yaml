@@ -15,7 +15,7 @@ test_cases:
 #
 # TEST SCENARIO: Load script with URL params → verify arg[] contains params
   - name: "URL Parameters in arg[] table"
-    script: "file://internal/lua/scenarios/test_arg_url_params.lua?format=json&verbose=true"
+    script: "file:///internal/lua/test-scenarios/test_arg_url_params.lua?format=json&verbose=true"
     wait_after: 100ms
     expected_stdout: |
       arg["format"] = "json"

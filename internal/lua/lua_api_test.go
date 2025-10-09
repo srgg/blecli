@@ -7,11 +7,9 @@ import (
 
 	_ "embed"
 
+	"github.com/srg/blim/internal/testutils/mocks"
 	suitelib "github.com/stretchr/testify/suite"
 )
-
-//go:embed scenarios/lua-api-test-scenarios.yaml
-var testCases string
 
 // BLEAPI2TestSuite
 type LuaApiTestSuite struct {
@@ -43,7 +41,7 @@ func (suite *LuaApiTestSuite) ExecuteScript(script string) error {
 }
 
 // TestErrorHandling tests error conditions and recovery
-// NOTE: Most error handling tests have been moved to YAML format in lua-api-test-scenarios.yaml
+// NOTE: Most error handling tests have been moved to YAML format in lua-api-test-test-scenarios.yaml
 //
 //	The following tests remain in Go because they test Lua syntax errors that cannot be
 //	generated through the YAML framework (which always generates valid subscription scripts)
@@ -119,22 +117,22 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 		suite.NoError(err, "System should continue working after callback panic")
 	})
 
-	// NOTE: The following error tests are in YAML (lua-api-test-scenarios.yaml):
+	// NOTE: The following error tests are in YAML (lua-api-test-test-scenarios.yaml):
 	// - "Error Handling: Missing Services"
 	// - "Error Handling: Non-existent Service"
 	// - "Error Handling: Non-existent Characteristic"
 }
 
 // TestSubscriptionScenarios validates BLE subscription behavior across multiple streaming modes
-// by executing YAML-defined test scenarios.
+// by executing YAML-defined test test-scenarios.
 //
-// Test scenarios are externalized in lua-api-test-scenarios.yaml for maintainability
+// Test test-scenarios are externalized in lua-api-test-test-scenarios.yaml for maintainability
 // and clarity. Each scenario defines subscription configuration, simulation steps, and
 // expected Lua callback outputs.
 //
-// See lua-api-test-scenarios.yaml for individual test case documentation.
+// See lua-api-test-test-scenarios.yaml for individual test case documentation.
 func (suite *LuaApiTestSuite) TestSubscriptionScenarios() {
-	suite.RunTestCasesFromYAML(testCases)
+	suite.RunTestCasesFromFile("test-scenarios/lua-api-test-scenarios.yaml")
 }
 
 // TestCharacteristicFunction tests the blim.characteristic() function
@@ -594,6 +592,72 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		`
 		err := suite.ExecuteScript(script)
 		suite.NoError(err, "Should handle empty values")
+	})
+}
+
+// TestLuaBridgeAccess tests blim.bridge exposure to Lua
+func (suite *LuaApiTestSuite) TestLuaBridgeAccess() {
+	suite.Run("Bridge not set - raises error on field access", func() {
+		// GOAL: Verify blim.bridge exists, but raises an error when accessing fields in non-bridge mode
+		//
+		// TEST SCENARIO: No SetBridge() called → blim.bridge exists → accessing fields raises error
+
+		// First verify blim.bridge exists for bridge mode detection
+		script := `
+			assert(blim.bridge ~= nil, "blim.bridge should exist for mode detection")
+			assert(type(blim.bridge) == "table", "blim.bridge should be table")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "blim.bridge should exist for mode detection")
+
+		// Verify accessing pty_name raises error
+		script = `
+			local pty = blim.bridge.pty_name
+		`
+		err = suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "not available (not running in bridge mode)")
+
+		// Verify accessing symlink_path raises error
+		script = `
+			local symlink = blim.bridge.symlink_path
+		`
+		err = suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "not available (not running in bridge mode)")
+	})
+
+	suite.Run("Bridge is set - PTY and symlink info accessible", func() {
+		// GOAL: Verify blim.bridge contains pty_name and symlink_path when bridge is set
+		//
+		// TEST SCENARIO: SetBridge() called with mock bridge → blim.bridge populated → verify fields accessible
+
+		// Create mock bridge using mockery-generated mock
+		mockBridge := mocks.NewMockBridgeInfo(suite.T())
+		mockBridge.On("GetPTYName").Return("/dev/ttys999")
+		mockBridge.On("GetSymlinkPath").Return("/tmp/test-bridge-link")
+
+		// Set bridge info in Lua API
+		suite.LuaApi.SetBridge(mockBridge)
+
+		script := `
+			-- Verify blim.bridge table exists
+			assert(blim.bridge ~= nil, "blim.bridge should exist")
+			assert(type(blim.bridge) == "table", "blim.bridge should be table")
+
+			-- Verify pty_name field
+			assert(blim.bridge.pty_name ~= nil, "pty_name should be set")
+			assert(type(blim.bridge.pty_name) == "string", "pty_name should be string")
+			assert(blim.bridge.pty_name == "/dev/ttys999", "pty_name should match mock value")
+
+			-- Verify symlink_path field
+			assert(blim.bridge.symlink_path ~= nil, "symlink_path should be set")
+			assert(type(blim.bridge.symlink_path) == "string", "symlink_path should be string")
+			assert(blim.bridge.symlink_path == "/tmp/test-bridge-link", "symlink_path should match mock value")
+
+			print("✓ blim.bridge.pty_name: " .. blim.bridge.pty_name)
+			print("✓ blim.bridge.symlink_path: " .. blim.bridge.symlink_path)
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should access bridge info when set")
 	})
 }
 

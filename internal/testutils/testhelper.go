@@ -24,87 +24,9 @@ func NewTestHelper(t *testing.T) *TestHelper {
 	}
 }
 
-func CreateMockAdvertisement(name, address string, rssi int) *AdvertisementBuilder {
-	return NewAdvertisementBuilder().WithName(name).WithAddress(address).WithRSSI(rssi)
-}
-
 func CreateMockAdvertisementFromJSON(jsonStrFmt string, args ...interface{}) *AdvertisementBuilder {
 	return NewAdvertisementBuilder().FromJSON(jsonStrFmt, args...)
 }
-
-func CreateMockPeripheralDevice() *PeripheralDeviceBuilder {
-	return NewPeripheralDeviceBuilder()
-}
-
-func CreateMockPeripheralDeviceFromJSON(jsonStrFmt string, args ...interface{}) *PeripheralDeviceBuilder {
-	return NewPeripheralDeviceBuilder().FromJSON(jsonStrFmt, args...)
-}
-
-//// CreateComprehensiveMockDevice creates a mock device with all services needed for comprehensive testing
-//func CreateComprehensiveMockDevice() *PeripheralDeviceBuilder {
-//	return CreateMockPeripheralDeviceFromJSON(`{
-//		"services": [
-//			{
-//				"uuid": "1234",
-//				"characteristics": [
-//					{
-//						"uuid": "5678",
-//						"properties": "read,notify",
-//						"value": [0]
-//					}
-//				]
-//			},
-//			{
-//				"uuid": "180D",
-//				"characteristics": [
-//					{ "uuid": "2A37", "properties": "read,notify", "value": [0] },
-//					{ "uuid": "2A38", "properties": "read,notify", "value": [0] }
-//				]
-//			},
-//			{
-//				"uuid": "180F",
-//				"characteristics": [
-//					{ "uuid": "2A19", "properties": "read,notify", "value": [0] }
-//				]
-//			},
-//			{
-//				"uuid": "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
-//				"characteristics": [
-//					{
-//						"uuid": "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
-//						"properties": "read,notify",
-//						"value": [0]
-//					},
-//					{
-//						"uuid": "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
-//						"properties": "read,notify",
-//						"value": [0]
-//					}
-//				]
-//			},
-//			{
-//				"uuid": "0000180d-0000-1000-8000-00805f9b34fb",
-//				"characteristics": [
-//					{
-//						"uuid": "00002a37-0000-1000-8000-00805f9b34fb",
-//						"properties": "read,notify",
-//						"value": [0]
-//					}
-//				]
-//			},
-//			{
-//				"uuid": "1000180d-0000-1000-8000-00805f9b34fb",
-//				"characteristics": [
-//					{
-//						"uuid": "10002a37-0000-1000-8000-00805f9b34fb",
-//						"properties": "read,notify",
-//						"value": [0]
-//					}
-//				]
-//			}
-//		]
-//	}`)
-//}
 
 func LoadScript(relPath string) (string, error) {
 	wd, err := os.Getwd()
@@ -112,21 +34,32 @@ func LoadScript(relPath string) (string, error) {
 		return "", fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	// Navigate up to find the project root (look for go.mod file)
-	projectRoot := wd
-	for {
-		if _, err := os.Stat(filepath.Join(projectRoot, "go.mod")); err == nil {
-			break
-		}
-		parent := filepath.Dir(projectRoot)
-		if parent == projectRoot {
-			return "", fmt.Errorf("could not find project root (go.mod not found)")
-		}
-		projectRoot = parent
-	}
+	// Clean the path to normalize './', '../', and redundant separators
+	relPath = filepath.Clean(relPath)
 
-	// Join project root with the given relative path
-	fullPath := filepath.Join(projectRoot, relPath)
+	var fullPath string
+
+	// If path starts with '/', treat it as relative to project root
+	if len(relPath) > 0 && relPath[0] == '/' {
+		// Navigate up to find the project root (look for go.mod file)
+		projectRoot := wd
+		for {
+			if _, err := os.Stat(filepath.Join(projectRoot, "go.mod")); err == nil {
+				break
+			}
+			parent := filepath.Dir(projectRoot)
+			if parent == projectRoot {
+				return "", fmt.Errorf("could not find project root (go.mod not found)")
+			}
+			projectRoot = parent
+		}
+
+		// Strip leading '/' and join with project root
+		fullPath = filepath.Join(projectRoot, relPath[1:])
+	} else {
+		// Treat as relative to the current working directory
+		fullPath = filepath.Join(wd, relPath)
+	}
 
 	// Read the file contents
 	data, err := os.ReadFile(fullPath)

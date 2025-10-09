@@ -75,6 +75,27 @@ for uuid, data in pairs(blim.device.service_data) do
 end
 ```
 
+### `blim.bridge`
+Read-only table containing bridge information (only available when running in bridge mode).
+
+**Fields:**
+- `pty_name` (string) - PTY device path (e.g., "/dev/ttys010")
+- `symlink_path` (string) - Symlink path to PTY (empty if not created)
+
+**Example:**
+```lua
+-- Check if running in bridge mode
+if blim.bridge.pty_name and blim.bridge.pty_name ~= "" then
+    print("Bridge PTY:", blim.bridge.pty_name)
+
+    if blim.bridge.symlink_path ~= "" then
+        print("Symlink:", blim.bridge.symlink_path)
+    end
+else
+    print("Not running in bridge mode")
+end
+```
+
 ### `blim.list()`
 Returns a table mapping service UUIDs to service info.
 

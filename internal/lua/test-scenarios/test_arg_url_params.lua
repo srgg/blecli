@@ -1,11 +1,11 @@
 -- Test Script: URL Parameters via arg[] Table
 --
--- PURPOSE: This script is used by lua-api-suite-test-scenarios.yaml to verify
+-- PURPOSE: This script is used by lua-api-suite-test-test-scenarios.yaml to verify
 --          that URL query parameters are correctly parsed and passed to Lua scripts
 --          via the arg[] table.
 --
 -- USAGE: Called from YAML test with URL like:
---        script: "file://internal/lua/scenarios/test_arg_url_params.lua?format=json&verbose=true"
+--        script: "file://internal/lua/test-scenarios/test_arg_url_params.lua?format=json&verbose=true"
 --
 -- EXPECTED: The runTestCase function should:
 --           1. Parse the URL query parameters (format=json, verbose=true)

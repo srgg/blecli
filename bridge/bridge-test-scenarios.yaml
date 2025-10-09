@@ -147,7 +147,8 @@ test_cases:
     # prints "Bridge is Active" header → dumps notifications in compact format
     # Tests file:// protocol and proper startup validation
     # NOTE: bridge.lua lists ALL services from default test peripheral (1234, 180d, 180f, 6e400001...)
-    script: "file://examples/bridge-header.lua"
+    # NOTE: Uses Go template syntax for a dynamic PTY path: {{.PTY}}
+    script: "file:///examples/bridge-header.lua"
     steps:
       - services:
           - service: "180f"
@@ -167,7 +168,9 @@ test_cases:
     expected_stdout: |-
 
       === BLE-PTY Bridge is Active ===
-      Device: 00:00:00:00:00:01
+      Device: {{.DeviceAddress}}
+      PTY: {{.PTY}}
+
       Service: 1234
       Characteristics: 1
         - 5678

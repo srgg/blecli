@@ -1,9 +1,11 @@
 package testutils
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
+	"text/template"
 
 	"github.com/fatih/color"
 	"github.com/hexops/gotextdiff"
@@ -72,6 +74,45 @@ func (ta *TextAsserter) GetOptions() TextAssertOptions {
 
 // Assert compares actual text against expected text
 func (ta *TextAsserter) Assert(actual, expected string) {
+	diff := ta.diff(actual, expected)
+	if diff != "" {
+		ta.t.Errorf("Text assertion failed:\n%s", diff)
+	}
+}
+
+// AssertWithTemplate compares actual text against expected template text.
+// The expectedTemplate is rendered using Go's text/template with the provided data.
+// This allows dynamic values (like PTY paths) to be interpolated into the expected output.
+//
+// Example:
+//
+//	data := map[string]interface{}{
+//	    "PTY": "/dev/ttys010",
+//	    "Device": "00:00:00:00:00:01",
+//	}
+//	expectedTemplate := `
+//	=== BLE-PTY Bridge is Active ===
+//	Device: {{.Device}}
+//	PTY: {{.PTY}}
+//	`
+//	ta.AssertWithTemplate(actualOutput, expectedTemplate, data)
+func (ta *TextAsserter) AssertWithTemplate(actual, expectedTemplate string, data interface{}) {
+	// Render the template
+	tmpl, err := template.New("expected").Parse(expectedTemplate)
+	if err != nil {
+		ta.t.Errorf("Failed to parse expected template: %v", err)
+		return
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		ta.t.Errorf("Failed to execute expected template: %v", err)
+		return
+	}
+
+	expected := buf.String()
+
+	// Use the standard Assert logic
 	diff := ta.diff(actual, expected)
 	if diff != "" {
 		ta.t.Errorf("Text assertion failed:\n%s", diff)
@@ -210,7 +251,7 @@ func WithIgnoreEmptyLines(ignore bool) TextOption {
 	}
 }
 
-// WithTrimSpace sets whether to trim leading and trailing whitespace from entire text
+// WithTrimSpace sets whether to trim leading and trailing whitespace from the entire text
 func WithTrimSpace(trim bool) TextOption {
 	return func(opts *TextAssertOptions) {
 		opts.TrimSpace = trim

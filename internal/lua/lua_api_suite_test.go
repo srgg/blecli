@@ -15,10 +15,10 @@ type LuaApiSuiteTestSuite struct {
 func (suite *LuaApiSuiteTestSuite) TestSuiteScenarios() {
 	// GOAL: Verify that the test suite infrastructure works correctly
 	//
-	// TEST SCENARIO: Load and execute all test cases from lua-api-suite-test-scenarios.yaml
+	// TEST SCENARIO: Load and execute all test cases from lua-api-suite-test-test-scenarios.yaml
 	//
 	// These tests verify error reporting, output validation, and other test infrastructure features
-	suite.RunTestCasesFromFile("internal/lua/scenarios/lua-api-suite-test-scenarios.yaml")
+	suite.RunTestCasesFromFile("test-scenarios/lua-api-suite-test-scenarios.yaml")
 }
 
 // TestLuaApiSuiteTestSuite runs the suite test infrastructure tests
