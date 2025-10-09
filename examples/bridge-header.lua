@@ -1,5 +1,5 @@
 -- Discover all services and characteristics
-local services_table = ble.list()
+local services_table = blim.list()
 
 -- Check if any services were found
 local service_count = 0
@@ -9,7 +9,7 @@ end
 
 if service_count == 0 then
     print("")
-    print(string.format("Device: %s", ble.device.address))
+    print(string.format("Device: %s", blim.device.address))
     print("Characteristics: 0 (service not found)")
     print("")
     error("No services found - cannot start bridge")
@@ -26,7 +26,7 @@ for _, service_uuid in ipairs(services_table) do
     -- Filter characteristics to only those that support notifications
     local notifiable_chars = {}
     for i, char_uuid in ipairs(service_info.characteristics) do
-        local char_info = ble.characteristic(service_uuid, char_uuid) or {}
+        local char_info = blim.characteristic(service_uuid, char_uuid) or {}
         if char_info.properties and (char_info.properties.notify or char_info.properties.indicate) then
             table.insert(notifiable_chars, char_uuid)
         end
@@ -44,7 +44,7 @@ end
 
 print("")
 print("=== BLE-PTY Bridge is Active ===")
-print(string.format("Device: %s", ble.device.address))
+print(string.format("Device: %s", blim.device.address))
 
 -- Print only services with notifiable characteristics
 for _, svc in ipairs(services) do
@@ -56,5 +56,4 @@ for _, svc in ipairs(services) do
     print("")
 end
 
-print("Bridge is running. Press Ctrl+C to stop the bridge.")
-print("")
+io.write("Bridge is running. Press Ctrl+C to stop the bridge.")

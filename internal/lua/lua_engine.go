@@ -19,9 +19,6 @@ import (
 //go:embed lua-libs/json.lua
 var jsonLua string // json.lua is embedded into this string
 
-//go:embed lua-libs/bleutils.lua
-var bleutilsLua string // bleutils.lua is embedded into this string
-
 // LuaOutputRecord represents a single output record from Lua script execution
 type LuaOutputRecord struct {
 	Content   string    `json:"content"`
@@ -341,50 +338,34 @@ func (e *LuaEngine) registerIOWriteCaptureInternal() {
 	})
 }
 
-// preloadJSONLibInternal loads the embedded JSON.lua library directly into the package.loaded["json"]
-// This avoids the package.preload callback issues and follows the RegisterLibrary pattern.
-// The embedded JSON library provides json.encode() and json.decode() functions to Lua scripts.
-func (e *LuaEngine) preloadJSONLibInternal() {
+// PreloadLuaLibrary loads a Lua library script into package.loaded[libraryName]
+// This generic function follows the RegisterLibrary pattern and avoids package.preload callback issues.
+func (e *LuaEngine) PreloadLuaLibrary(libraryCode, libraryName, errorContext string) {
 	e.doWithStateInternal(func(L *lua.State) interface{} {
-		// Load and execute the JSON Lua module directly
-		if err := L.LoadString(jsonLua); err != 0 {
-			e.logger.Error("Failed to load embedded json.lua")
+		// Load and execute the Lua module
+		if err := L.LoadString(libraryCode); err != 0 {
+			e.logger.Errorf("Failed to load embedded %s", errorContext)
 			return nil
 		}
 
-		// Execute the chunk to get the JSON module table
+		// Execute the chunk to get the module table
 		L.Call(0, 1) // runs chunk -> pushes module table
 
-		// Put it directly into the package.loaded["json"] like RegisterLibrary does
+		// Put it directly into package.loaded[libraryName] like RegisterLibrary does
 		L.GetField(lua.LUA_GLOBALSINDEX, "package")
 		L.GetField(-1, "loaded")
-		L.PushValue(-3)        // Push the JSON module table
-		L.SetField(-2, "json") // package.loaded["json"] = module
-		L.Pop(2)               // Pop package and loaded
+		L.PushValue(-3)             // Push the module table
+		L.SetField(-2, libraryName) // package.loaded[libraryName] = module
+		L.Pop(2)                    // Pop package and loaded
 		return nil
 	})
 }
 
-func (e *LuaEngine) preloadBleUtilsLibInternal() {
-	e.doWithStateInternal(func(L *lua.State) interface{} {
-		// Load and execute the JSON Lua module directly
-		if err := L.LoadString(bleutilsLua); err != 0 {
-			e.logger.Error("Failed to load embedded bleutils.lua")
-			return nil
-		}
-
-		// Execute the chunk to get a library table
-		L.Call(0, 1) // runs chunk -> pushes module table
-
-		// Put it directly into the package.loaded["json"] like RegisterLibrary does
-		L.GetField(lua.LUA_GLOBALSINDEX, "package")
-		L.GetField(-1, "loaded")
-		L.PushValue(-3)            // Push the JSON module table
-		L.SetField(-2, "bleutils") // package.loaded["bleutils"] = module
-		L.Pop(2)                   // Pop package and loaded
-		return nil
-	})
-
+// preloadJSONLibInternal loads the embedded JSON.lua library directly into the package.loaded["json"]
+// This avoids the package.preload callback issues and follows the RegisterLibrary pattern.
+// The embedded JSON library provides json.encode() and json.decode() functions to Lua scripts.
+func (e *LuaEngine) preloadJSONLibInternal() {
+	e.PreloadLuaLibrary(jsonLua, "json", "json.lua")
 }
 
 // OutputChannel returns the output channel
@@ -554,7 +535,6 @@ func (e *LuaEngine) resetInternal() {
 	e.registerPrintCaptureInternal()
 	e.registerIOWriteCaptureInternal()
 	e.preloadJSONLibInternal()
-	e.preloadBleUtilsLibInternal()
 	e.registerBlockedLuaFunctions()
 }
 

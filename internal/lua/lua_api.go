@@ -11,6 +11,7 @@ import (
 
 	"github.com/aarzilli/golua/lua"
 	"github.com/sirupsen/logrus"
+	blim "github.com/srg/blim"
 	"github.com/srg/blim/internal/device"
 )
 
@@ -106,27 +107,31 @@ func (api *BLEAPI2) LoadScript(script, name string) error {
 
 func (api *BLEAPI2) Reset() {
 	api.LuaEngine.Reset()
-	api.registerLuaAPI()
+	api.registerBlimAPI() // Register _blim_internal for Lua wrapper
 }
 
 func (api *BLEAPI2) OutputChannel() <-chan LuaOutputRecord {
 	return api.LuaEngine.OutputChannel()
 }
 
-// registerLuaAPI registers the BLE API functions in the Lua state
-func (api *BLEAPI2) registerLuaAPI() {
+// registerBlimAPI registers the internal BLE API (_blim_internal) for Lua wrapper
+// This demonstrates the CGO-like approach where Lua wraps Go functions
+func (api *BLEAPI2) registerBlimAPI() {
 	api.LuaEngine.DoWithState(func(L *lua.State) interface{} {
-		// Create ble table
+		// Create _blim_internal table
 		L.NewTable()
 
-		// Register API functions
+		// Register API functions (same as ble)
 		api.registerSubscribeFunction(L)
 		api.registerListFunction(L)
 		api.registerDeviceInfo(L)
 		api.registerCharacteristicFunction(L)
 
-		// Set global 'ble' variable
-		L.SetGlobal("ble")
+		// Set global '_blim_internal' variable
+		L.SetGlobal("_blim_internal")
+
+		// Preload the blim.lua scripts (creates global ble and blim)
+		api.LuaEngine.PreloadLuaLibrary(blim.BlimLuaScript, "blim", "blim.lua")
 
 		return nil
 	})

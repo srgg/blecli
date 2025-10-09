@@ -49,12 +49,12 @@ func (suite *LuaApiTestSuite) ExecuteScript(script string) error {
 //	generated through the YAML framework (which always generates valid subscription scripts)
 func (suite *LuaApiTestSuite) TestErrorHandling() {
 	suite.Run("Lua: Missing callback", func() {
-		// GOAL: Verify ble.subscribe() returns clear error when Callback field is missing
+		// GOAL: Verify blim.subscribe() returns clear error when Callback field is missing
 		//
 		// TEST SCENARIO: Call subscribing without Callback field → Lua error raised → verify error message
 
 		err := suite.ExecuteScript(`
-			ble.subscribe{
+			blim.subscribe{
 				services = {
 					{
 						service = "1234",
@@ -70,11 +70,11 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 	})
 
 	suite.Run("Lua: Invalid argument type", func() {
-		// GOAL: Verify ble.subscribe() returns clear error when passed non-table argument
+		// GOAL: Verify blim.subscribe() returns clear error when passed non-table argument
 		//
 		// TEST SCENARIO: Call subscribe with string instead of table → Lua error raised → verify error message
 
-		err := suite.ExecuteScript(`ble.subscribe("not a table")`)
+		err := suite.ExecuteScript(`blim.subscribe("not a table")`)
 		suite.AssertLuaError(err, "Error: subscribe() expects a lua table argument")
 	})
 
@@ -85,7 +85,7 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 
 		// Create a subscription with a callback that will cause a panic when it tries to access nil values
 		script := `
-			ble.subscribe{
+			blim.subscribe{
 				services = {
 					{
 						service = "1234",
@@ -137,15 +137,15 @@ func (suite *LuaApiTestSuite) TestSubscriptionScenarios() {
 	suite.RunTestCasesFromYAML(testCases)
 }
 
-// TestCharacteristicFunction tests the ble.characteristic() function
+// TestCharacteristicFunction tests the blim.characteristic() function
 func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	suite.Run("Valid characteristic lookup", func() {
-		// GOAL: Verify ble.characteristic() returns handle with correct metadata fields (uuid, service, properties, descriptors)
+		// GOAL: Verify blim.characteristic() returns handle with correct metadata fields (uuid, service, properties, descriptors)
 		//
 		// TEST SCENARIO: Lookup valid characteristic → handle returned → verify all metadata fields present
 
 		script := `
-			local char = ble.characteristic("1234", "5678")
+			local char = blim.characteristic("1234", "5678")
 			assert(char ~= nil, "characteristic should not be nil")
 			assert(char.uuid == "5678", "uuid should match")
 			assert(char.service == "1234", "service should match")
@@ -162,7 +162,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 		// TEST SCENARIO: Lookup characteristic without descriptors → descriptors is empty table → verify length is 0
 
 		script := `
-			local char = ble.characteristic("1234", "5678")
+			local char = blim.characteristic("1234", "5678")
 			assert(char ~= nil, "characteristic should not be nil")
 			assert(type(char.descriptors) == "table", "descriptors should be a table")
 			assert(#char.descriptors == 0, "should have 0 descriptors")
@@ -177,7 +177,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 		// TEST SCENARIO: Lookup characteristic → properties is table → verify at least one property is set
 
 		script := `
-			local char = ble.characteristic("180D", "2A37")
+			local char = blim.characteristic("180D", "2A37")
 			assert(char.properties ~= nil, "properties should not be nil")
 			assert(type(char.properties) == "table", "properties should be a table")
 			-- Check that at least one property is set
@@ -190,49 +190,49 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Error: Invalid service UUID", func() {
-		// GOAL: Verify ble.characteristic() raises error when service UUID not found
+		// GOAL: Verify blim.characteristic() raises error when service UUID not found
 		//
 		// TEST SCENARIO: Lookup with non-existent service UUID → Lua error raised → verify error message
 
 		script := `
-			local char = ble.characteristic("9999", "5678")
+			local char = blim.characteristic("9999", "5678")
 		`
 		err := suite.ExecuteScript(script)
 		suite.AssertLuaError(err, "characteristic not found")
 	})
 
 	suite.Run("Error: Invalid characteristic UUID", func() {
-		// GOAL: Verify ble.characteristic() raises error when characteristic UUID not found in service
+		// GOAL: Verify blim.characteristic() raises error when characteristic UUID not found in service
 		//
 		// TEST SCENARIO: Lookup with valid service but invalid char UUID → Lua error raised → verify error message
 
 		script := `
-			local char = ble.characteristic("1234", "9999")
+			local char = blim.characteristic("1234", "9999")
 		`
 		err := suite.ExecuteScript(script)
 		suite.AssertLuaError(err, "characteristic not found")
 	})
 
 	suite.Run("Error: Missing arguments", func() {
-		// GOAL: Verify ble.characteristic() raises error when only one argument provided (needs two)
+		// GOAL: Verify blim.characteristic() raises error when only one argument provided (needs two)
 		//
 		// TEST SCENARIO: Call with only service UUID → Lua error raised → verify error mentions two arguments
 
 		script := `
-			local char = ble.characteristic("1234")
+			local char = blim.characteristic("1234")
 		`
 		err := suite.ExecuteScript(script)
 		suite.AssertLuaError(err, "expects two string arguments")
 	})
 
 	suite.Run("Error: Invalid argument type - number converted to string", func() {
-		// GOAL: Verify ble.characteristic() handles Lua's implicit number-to-string conversion and fails lookup
+		// GOAL: Verify blim.characteristic() handles Lua's implicit number-to-string conversion and fails lookup
 		//       (Note: Lua ToString() converts numbers to strings, so 123 becomes "123", then lookup fails)
 		//
 		// TEST SCENARIO: Call with number instead of string → number converted to string → lookup fails → error raised
 
 		script := `
-			local char = ble.characteristic(123, "5678")
+			local char = blim.characteristic(123, "5678")
 		`
 		err := suite.ExecuteScript(script)
 		// The number 123 gets converted to string "123", then lookup fails
@@ -240,24 +240,24 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Error: Invalid argument type - table instead of string", func() {
-		// GOAL: Verify ble.characteristic() raises error when passed table instead of string UUID
+		// GOAL: Verify blim.characteristic() raises error when passed table instead of string UUID
 		//
 		// TEST SCENARIO: Call with table as service UUID → Lua error raised → verify error mentions string arguments
 
 		script := `
-			local char = ble.characteristic({service="1234"}, "5678")
+			local char = blim.characteristic({service="1234"}, "5678")
 		`
 		err := suite.ExecuteScript(script)
 		suite.AssertLuaError(err, "expects two string arguments")
 	})
 
 	suite.Run("Error: No arguments provided", func() {
-		// GOAL: Verify ble.characteristic() raises error when called with no arguments
+		// GOAL: Verify blim.characteristic() raises error when called with no arguments
 		//
 		// TEST SCENARIO: Call with no arguments → Lua error raised → verify error mentions two string arguments
 
 		script := `
-			local char = ble.characteristic()
+			local char = blim.characteristic()
 		`
 		err := suite.ExecuteScript(script)
 		suite.AssertLuaError(err, "expects two string arguments")
@@ -269,7 +269,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 		// TEST SCENARIO: Lookup characteristic → verify uuid/service/properties/descriptors exist → verify correct types
 
 		script := `
-			local char = ble.characteristic("180F", "2A19")
+			local char = blim.characteristic("180F", "2A19")
 			-- Verify all required fields exist
 			assert(char.uuid ~= nil, "uuid field should exist")
 			assert(char.service ~= nil, "service field should exist")
@@ -292,7 +292,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 		// TEST SCENARIO: Get characteristic → access descriptors[0] → verify it's nil (Lua arrays start at 1)
 
 		script := `
-			local char = ble.characteristic("180D", "2A37")
+			local char = blim.characteristic("180D", "2A37")
 			-- Lua arrays are 1-indexed (even if empty)
 			assert(char.descriptors[0] == nil, "index 0 should be nil")
 			-- Note: descriptor count varies by characteristic
@@ -302,13 +302,13 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Multiple calls return consistent data", func() {
-		// GOAL: Verify ble.characteristic() returns consistent metadata across multiple calls for same characteristic
+		// GOAL: Verify blim.characteristic() returns consistent metadata across multiple calls for same characteristic
 		//
 		// TEST SCENARIO: Call twice for same characteristic → compare all fields → verify identical metadata
 
 		script := `
-			local char1 = ble.characteristic("1234", "5678")
-			local char2 = ble.characteristic("1234", "5678")
+			local char1 = blim.characteristic("1234", "5678")
+			local char2 = blim.characteristic("1234", "5678")
 			assert(char1.uuid == char2.uuid, "uuid should be consistent")
 			assert(char1.service == char2.service, "service should be consistent")
 
@@ -369,7 +369,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		// TEST SCENARIO: Read from readable characteristic → value returned with no error → verify value is non-empty string
 
 		script := `
-			local char = ble.characteristic("180A", "2A29")  -- Device Info: Manufacturer Name
+			local char = blim.characteristic("180A", "2A29")  -- Device Info: Manufacturer Name
 
 			if not char.properties.read then
 				error("Test setup error: characteristic should be readable")
@@ -391,7 +391,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		// TEST SCENARIO: Read the write-only characteristic → error returned with nil value → verify error message format
 
 		script := `
-			local char = ble.characteristic("AAAA", "BBBB")
+			local char = blim.characteristic("AAAA", "BBBB")
 			local value, err = char.read()
 
 			-- MUST fail because the characteristic doesn't support read
@@ -410,13 +410,13 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		// TEST SCENARIO: Loop through all characteristics → read readable ones → count successful reads ≥ 1
 
 		script := `
-			local services = ble.list()
+			local services = blim.list()
 			local read_count = 0
 
 			for _, service_uuid in ipairs(services) do
 				local service_info = services[service_uuid]
 				for _, char_uuid in ipairs(service_info.characteristics) do
-					local char = ble.characteristic(service_uuid, char_uuid)
+					local char = blim.characteristic(service_uuid, char_uuid)
 
 					if char.properties.read then
 						local value, err = char.read()
@@ -440,7 +440,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		// TEST SCENARIO: Read the same characteristic 3 times → all return success → verify consistent behavior
 
 		script := `
-			local char = ble.characteristic("180f", "2a19")  -- Battery Level
+			local char = blim.characteristic("180f", "2a19")  -- Battery Level
 
 			local value1, err1 = char.read()
 			local value2, err2 = char.read()
@@ -465,7 +465,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		// TEST SCENARIO: Read characteristic with byte value 85 → access via string.byte → verify numeric value in range 0-255
 
 		script := `
-			local char = ble.characteristic("180f", "2a19")  -- Battery Level
+			local char = blim.characteristic("180f", "2a19")  -- Battery Level
 			local value, err = char.read()
 
 			assert(err == nil, "read should succeed")
@@ -492,7 +492,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		suite.NoError(disconnectErr, "Should disconnect successfully")
 
 		script := `
-			local char = ble.characteristic("1234", "5678")
+			local char = blim.characteristic("1234", "5678")
 			local value, err = char.read()
 
 			-- MUST fail because device is not connected
@@ -510,7 +510,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		// TEST SCENARIO: Check properties.read flag → conditionally call read() → verify proper pattern usage
 
 		script := `
-			local char = ble.characteristic("180d", "2a37")  -- Heart Rate Measurement
+			local char = blim.characteristic("180d", "2a37")  -- Heart Rate Measurement
 
 			-- Always check if readable before reading
 			if char.properties.read then
@@ -535,7 +535,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 
 		script := `
 			-- Read multi-byte characteristic (Heart Rate: flag byte + value)
-			local hr = ble.characteristic("180d", "2a37")
+			local hr = blim.characteristic("180d", "2a37")
 			local hr_value, err = hr.read()
 
 			assert(err == nil, "read should succeed")
@@ -559,7 +559,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		// TEST SCENARIO: Get a characteristic handle → check a read type is userdata/function → verify callable
 
 		script := `
-			local char = ble.characteristic("180f", "2a19")
+			local char = blim.characteristic("180f", "2a19")
 
 			-- read should be a callable (in aarzilli/golua, Go functions are userdata type, not "function")
 			-- The important thing is that it's not nil and can be called
@@ -582,7 +582,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		// TEST SCENARIO: Read characteristic → verify a string type and non-negative length (including zero)
 
 		script := `
-			local char = ble.characteristic("180a", "2a29")
+			local char = blim.characteristic("180a", "2a29")
 			local value, err = char.read()
 
 			-- Read should succeed

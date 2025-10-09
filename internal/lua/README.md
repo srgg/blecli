@@ -1,4 +1,4 @@
-# BLE Lua API Reference
+# BLIM Lua API Reference
 
 Lua scripting interface for Bluetooth Low Energy device interaction.
 
@@ -39,11 +39,11 @@ local obj = json.decode('{"temp":23.5}')
 print(obj.temp)  -- 23.5
 ```
 
-## BLE API
+## BLIM API
 
-The global `ble` table provides BLE functionality.
+The global `blim` table provides BLE functionality.
 
-### `ble.device`
+### `blim.device`
 Read-only table containing device information.
 
 **Fields:**
@@ -60,29 +60,29 @@ Read-only table containing device information.
 
 **Example:**
 ```lua
-print("Device:", ble.device.name)
-print("Address:", ble.device.address)
-print("RSSI:", ble.device.rssi, "dBm")
+print("Device:", blim.device.name)
+print("Address:", blim.device.address)
+print("RSSI:", blim.device.rssi, "dBm")
 
 -- Iterate advertised services
-for i, uuid in ipairs(ble.device.advertised_services) do
+for i, uuid in ipairs(blim.device.advertised_services) do
     print("Service:", uuid)
 end
 
 -- Access service data
-for uuid, data in pairs(ble.device.service_data) do
+for uuid, data in pairs(blim.device.service_data) do
     print(uuid, "=>", data)
 end
 ```
 
-### `ble.list()`
+### `blim.list()`
 Returns a table mapping service UUIDs to service info.
 
 **Returns:** `{ [service_uuid] = { characteristics = {char_uuid, ...} } }`
 
 **Example:**
 ```lua
-local services = ble.list()
+local services = blim.list()
 
 for service_uuid, service_info in pairs(services) do
     print("Service:", service_uuid)
@@ -102,7 +102,7 @@ Service: 180f
   Char: 2a19
 ```
 
-### `ble.subscribe(config)`
+### `blim.subscribe(config)`
 Subscribes to BLE characteristic notifications/indications.
 
 **Parameters:**
@@ -129,7 +129,7 @@ Subscribes to BLE characteristic notifications/indications.
 ```lua
 local json = require("json")
 
-ble.subscribe{
+blim.subscribe{
     services = {
         {service="180d", chars={"2a37"}},  -- Heart Rate
         {service="180f", chars={"2a19"}}   -- Battery
@@ -153,7 +153,7 @@ ble.subscribe{
 
 **Example: Batched mode**
 ```lua
-ble.subscribe{
+blim.subscribe{
     services = {
         {service="180d", chars={"2a37", "2a38"}}
     },
@@ -174,7 +174,7 @@ ble.subscribe{
 
 **Example: Aggregated mode**
 ```lua
-ble.subscribe{
+blim.subscribe{
     services = {
         {service="180d", chars={"2a37"}}
     },
@@ -247,13 +247,13 @@ Errors in Lua scripts are sent to stderr and logged.
 
 ```lua
 -- This will raise an error
-ble.subscribe{
+blim.subscribe{
     services = {},  -- ERROR: empty services array
     Callback = function(record) end
 }
 
 -- This will raise an error
-ble.subscribe("invalid")  -- ERROR: expects table
+blim.subscribe("invalid")  -- ERROR: expects table
 ```
 
 ## Complete Example: Heart Rate Monitor
@@ -262,11 +262,11 @@ ble.subscribe("invalid")  -- ERROR: expects table
 local json = require("json")
 
 print("Starting Heart Rate Monitor")
-print("Device:", ble.device.name)
+print("Device:", blim.device.name)
 
 local sample_count = 0
 
-ble.subscribe{
+blim.subscribe{
     services = {
         {service="180d", chars={"2a37"}}  -- Heart Rate Measurement
     },
@@ -299,7 +299,7 @@ ble.subscribe{
 }
 ```
 
-### `ble.characteristic(service_uuid, char_uuid)` → `handle`
+### `blim.characteristic(service_uuid, char_uuid)` → `handle`
 Returns a characteristic handle with metadata and methods.
 
 **Handle fields:**
@@ -317,7 +317,7 @@ Returns a characteristic handle with metadata and methods.
 
 **Example: Read characteristic value**
 ```lua
-local char = ble.characteristic("180a", "2a29")  -- Device Info: Manufacturer Name
+local char = blim.characteristic("180a", "2a29")  -- Device Info: Manufacturer Name
 
 if char.properties.read then
     local value, err = char.read()
@@ -331,13 +331,13 @@ end
 
 **Example: Inspect and read all readable characteristics**
 ```lua
-local services = ble.list()
+local services = blim.list()
 
 for service_uuid, service_info in pairs(services) do
     print("Service:", service_uuid)
 
     for _, char_uuid in ipairs(service_info.characteristics) do
-        local char = ble.characteristic(service_uuid, char_uuid)
+        local char = blim.characteristic(service_uuid, char_uuid)
 
         io.write("  Char: " .. char_uuid .. " [")
         if char.properties.read then io.write("R") end
@@ -426,7 +426,7 @@ ble.unsubscribe()
 - One-off reads/writes
 - Maximum code clarity
 
-**Handle-based** (`ble.characteristic()` → handle) is ideal for:
+**Handle-based** (`blim.characteristic()` → handle) is ideal for:
 - Tight loops with repeated operations
 - Bulk data transfers
 - When metadata access is needed
@@ -440,10 +440,10 @@ Both approaches will coexist - use whichever fits your use case.
 
 **✅ Available features:**
 - ✅ **Read operations** - `handle.read()` reads characteristic values on demand
-- ✅ **Characteristic inspection** - `ble.characteristic()` returns metadata (UUID, service, properties, descriptors)
-- ✅ **Service listing** - `ble.list()` enumerates all GATT services and characteristics
-- ✅ **Device information** - `ble.device` provides device metadata and advertisement data
-- ✅ **Subscriptions** - `ble.subscribe()` supports notifications/indications with multiple streaming modes
+- ✅ **Characteristic inspection** - `blim.characteristic()` returns metadata (UUID, service, properties, descriptors)
+- ✅ **Service listing** - `blim.list()` enumerates all GATT services and characteristics
+- ✅ **Device information** - `blim.device` provides device metadata and advertisement data
+- ✅ **Subscriptions** - `blim.subscribe()` supports notifications/indications with multiple streaming modes
 
 **⚠️ Planned features:**
 - ⚠️ **Write operations** - Cannot write to characteristics yet
@@ -510,9 +510,9 @@ The wrapper handles panics as follows:
 All Go functions exposed to Lua are wrapped:
 
 **BLE API (`lua_api.go`):**
-- ✅ `ble.subscribe()`
-- ✅ `ble.list()`
-- ✅ `ble.characteristic()`
+- ✅ `blim.subscribe()`
+- ✅ `blim.list()`
+- ✅ `blim.characteristic()`
 - ✅ `char.read()` (characteristic handle method)
 
 **Engine Functions (`lua_engine.go`):**

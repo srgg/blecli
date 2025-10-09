@@ -522,7 +522,7 @@ func (suite *LuaApiSuite) CreateSubscriptionJsonScript(pattern string, maxRate t
 		local json = require("json")
 		call_count = 0
 
-		ble.subscribe{
+		blim.subscribe{
 			services = %s,
 			Mode = "%s",
 			MaxRate = %d,

@@ -16,3 +16,9 @@ var BridgeHeaderLuaScript string
 //
 //go:embed examples/bridge.lua
 var DefaultBridgeLuaScript string
+
+// BlimLuaScript contains the embedded blim.lua wrapper script
+// This provides the CGO-like Lua wrapper for BLE API
+//
+//go:embed examples/lib/blim.lua
+var BlimLuaScript string

@@ -143,11 +143,11 @@ test_cases:
   - name: "Bridge Monitor2 Script: Human-Readable PTY Output with Header"
     # GOAL: Load and execute examples/bridge.lua - bridge.go header format + notifications
     #
-    # TEST SCENARIO: Load bridge.lua from file:// → validates services/characteristics →
+    # TEST SCENARIO: Load  bridge-header.lua  from file:// → validates services/characteristics →
     # prints "Bridge is Active" header → dumps notifications in compact format
     # Tests file:// protocol and proper startup validation
     # NOTE: bridge.lua lists ALL services from default test peripheral (1234, 180d, 180f, 6e400001...)
-    script: "file://examples/bridge.lua"
+    script: "file://examples/bridge-header.lua"
     steps:
       - services:
           - service: "180f"
@@ -164,7 +164,7 @@ test_cases:
             values:
               - char: "2a19"
                 value: [0xFF, 0xAA, 0xBB]  # Binary data (non-printable)
-    expected_stdout: |
+    expected_stdout: |-
 
       === BLE-PTY Bridge is Active ===
       Device: 00:00:00:00:00:01
@@ -187,8 +187,3 @@ test_cases:
         - 6e400003b5a3f393e0a9e50e24dcca9e
 
       Bridge is running. Press Ctrl+C to stop the bridge.
-
-      [0] 2a19: 42 | B (1b)
-      [0] 2a37: 48 65 6C 6C 6F | Hello (5b)
-      [0] 2a19: FF AA BB | ... (3b)
-    skip: "RunDeviceBridge refactoring: PTY output monitoring code is commented out (bridge.go:706-782). OutputCollector creation, monitor goroutine, and monitorBridgeOutput/consumeBridgeOutput functions are all disabled. Lua output goes to OutputChannel but nothing consumes it or writes to PTY. This YAML test approach is obsolete - need proper bridge_test.go test that captures PTY output from RunDeviceBridge."

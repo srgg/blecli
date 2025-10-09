@@ -1,11 +1,22 @@
--- BLE Utilities Library
--- Shared helper functions for BLE scripts
+-- BLIM API - Lua wrapper around Go-implemented functions
+-- CGO-like approach: Lua functions call Go backends via _blim_internal
 
-local bleutils = {}
+local blim = {}
+local native = _blim_internal
+
+-- Direct assignments (zero overhead - just references to Go functions)
+blim.subscribe = native.subscribe
+blim.list = native.list
+blim.characteristic = native.characteristic
+blim.device = native.device
+
+
+
+-- Helper functions for Lua scripts
 
 -- Convert byte string to hex representation with spaces between bytes
 -- Example: "AB\x01" -> "41 42 01"
-function bleutils.to_hex(data)
+function blim.to_hex(data)
     if not data or data == "" then
         return ""
     end
@@ -18,7 +29,7 @@ end
 
 -- Convert byte string to hex representation without spaces (uppercase)
 -- Example: "AB\x01" -> "4142FF"
-function bleutils.bytes_to_hex(data)
+function blim.bytes_to_hex(data)
     if not data or data == "" then
         return ""
     end
@@ -29,7 +40,7 @@ end
 
 -- Convert byte string to printable ASCII (non-printable chars become '.')
 -- Example: "Hello\x00World" -> "Hello.World"
-function bleutils.to_ascii(data)
+function blim.to_ascii(data)
     if not data or data == "" then
         return ""
     end
@@ -41,12 +52,10 @@ function bleutils.to_ascii(data)
     return table.concat(ascii)
 end
 
--- Alias for compatibility
-bleutils.ascii_preview = bleutils.to_ascii
 
--- Shorten UUID (show only first 8 chars for long UUIDs)
+-- Shorten UUID (show only first eight chars for long UUIDs)
 -- Example: "6e400001-b5a3-f393-e0a9-e50e24dcca9e" -> "6e400001"
-function bleutils.short_uuid(uuid)
+function blim.short_uuid(uuid)
     if not uuid then
         return ""
     end
@@ -56,4 +65,8 @@ function bleutils.short_uuid(uuid)
     return uuid
 end
 
-return bleutils
+
+-- Export as global blim
+_G.blim = blim
+
+return blim

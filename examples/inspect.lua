@@ -1,32 +1,6 @@
 -- BLE Inspect: Device Inspection
 -- This script replicates the output format of the Go outputInspectText function
 
--- Helper function to convert byte array to hex string
-local function bytes_to_hex(bytes)
-    if not bytes or bytes == "" then
-        return ""
-    end
-    -- Convert to uppercase hex representation
-    return string.upper(bytes)
-end
-
--- Helper function to create ASCII preview (printable chars only, others become '.')
-local function ascii_preview(bytes)
-    if not bytes or bytes == "" then
-        return ""
-    end
-    local result = {}
-    for i = 1, #bytes do
-        local c = string.byte(bytes, i)
-        if c >= 32 and c <= 126 then
-            table.insert(result, string.char(c))
-        else
-            table.insert(result, '.')
-        end
-    end
-    return table.concat(result)
-end
-
 -- Device Information Service (DIS) characteristic mapping
 local DIS_CHARACTERISTICS = {
     ["2A29"] = "Manufacturer Name",
@@ -52,10 +26,10 @@ local function extract_dis_info(services)
                     -- For string characteristics, use ASCII representation
                     if char_uuid_upper == "2A29" or char_uuid_upper == "2A24" or char_uuid_upper == "2A25" or
                        char_uuid_upper == "2A26" or char_uuid_upper == "2A27" or char_uuid_upper == "2A28" then
-                        dis_data[char_name] = ascii_preview(char.value)
+                        dis_data[char_name] = blim.to_ascii(char.value)
                     else
                         -- For other characteristics (System ID, PnP ID), keep as hex
-                        dis_data[char_name] = bytes_to_hex(char.value)
+                        dis_data[char_name] = blim.bytes_to_hex(char.value)
                     end
                 end
             end
@@ -71,20 +45,20 @@ local function collect_device_data()
 
     -- Device info
     data.device = {
-        id = ble.device.id,
-        address = ble.device.address,
-        name = ble.device.name,
-        rssi = ble.device.rssi,
-        connectable = ble.device.connectable,
-        tx_power = ble.device.tx_power,
-        advertised_services = ble.device.advertised_services or {},
-        manufacturer_data = ble.device.manufacturer_data,
-        service_data = ble.device.service_data or {}
+        id = blim.device.id,
+        address = blim.device.address,
+        name = blim.device.name,
+        rssi = blim.device.rssi,
+        connectable = blim.device.connectable,
+        tx_power = blim.device.tx_power,
+        advertised_services = blim.device.advertised_services or {},
+        manufacturer_data = blim.device.manufacturer_data,
+        service_data = blim.device.service_data or {}
     }
 
     -- GATT Services
     data.services = {}
-    local services = ble.list()
+    local services = blim.list()
 
     -- Note: services table has both array part (for ordered iteration) and hash part (for UUID lookup)
     -- We use ipairs() to iterate in sorted order: services[1], services[2], etc.
@@ -98,7 +72,7 @@ local function collect_device_data()
         if service_info.characteristics then
             -- Characteristics are already sorted by the BLE API
             for _, char_uuid in ipairs(service_info.characteristics) do
-                local char_info = ble.characteristic(service_uuid, char_uuid) or {}
+                local char_info = blim.characteristic(service_uuid, char_uuid) or {}
 
                 -- Build properties object
                 local props = {
@@ -166,7 +140,7 @@ local function output_text(data)
 
     -- Manufacturer Data section
     if data.device.manufacturer_data and data.device.manufacturer_data ~= "" then
-        io.write(string.format("  Manufacturer Data: %s\n", bytes_to_hex(data.device.manufacturer_data)))
+        io.write(string.format("  Manufacturer Data: %s\n", blim.bytes_to_hex(data.device.manufacturer_data)))
     else
         io.write("  Manufacturer Data: none\n")
     end
@@ -181,7 +155,7 @@ local function output_text(data)
         io.write("  Service Data:\n")
         table.sort(service_data_keys)
         for _, k in ipairs(service_data_keys) do
-            io.write(string.format("    - %s: %s\n", k, bytes_to_hex(data.device.service_data[k])))
+            io.write(string.format("    - %s: %s\n", k, blim.bytes_to_hex(data.device.service_data[k])))
         end
     else
         io.write("  Service Data: none\n")
@@ -239,8 +213,8 @@ local function output_text(data)
 
             -- Show characteristic value if available
             if char.value and char.value ~= "" then
-                local value_hex = bytes_to_hex(char.value)
-                local value_ascii = ascii_preview(char.value)
+                local value_hex = blim.bytes_to_hex(char.value)
+                local value_ascii = blim.to_ascii(char.value)
 
                 if value_hex ~= "" then
                     io.write(string.format("      value (hex):   %s\n", value_hex))
