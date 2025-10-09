@@ -24,6 +24,7 @@ type Bridge interface {
 	GetLuaAPI() *lua.BLEAPI2
 	GetPTYMaster() *os.File // PTY master for script I/O
 	GetPTYName() string     // PTY device name for display
+	GetSymlinkPath() string // Symlink path (empty if not created)
 }
 
 // BridgeOptions contains all the configuration for running a bridge
@@ -33,6 +34,7 @@ type BridgeOptions struct {
 	Services         []device.SubscribeOptions // Services to subscribe to
 	Logger           *logrus.Logger            // Logger instance
 	OutputBufferSize int                       // Lua output buffer size (0 = use default)
+	SymlinkPath      string                    // Optional symlink path for PTY slave (e.g., /tmp/ble-device)
 }
 
 // ProgressCallback is called when the bridge phase changes
@@ -43,9 +45,10 @@ type BridgeCallback[R any] func(Bridge) (R, error)
 
 // bridgeImpl implements the Bridge interface
 type bridgeImpl struct {
-	luaApi    *lua.BLEAPI2
-	ptyMaster *os.File
-	ptySlave  *os.File
+	luaApi      *lua.BLEAPI2
+	ptyMaster   *os.File
+	ptySlave    *os.File
+	symlinkPath string // Symlink to PTY slave (empty if not created)
 }
 
 func (b *bridgeImpl) GetLuaAPI() *lua.BLEAPI2 {
@@ -61,6 +64,10 @@ func (b *bridgeImpl) GetPTYName() string {
 		return b.ptySlave.Name()
 	}
 	return ""
+}
+
+func (b *bridgeImpl) GetSymlinkPath() string {
+	return b.symlinkPath
 }
 
 // RunDeviceBridge connects to a BLE device, creates a PTY bridge, and executes the callback with the bridge.
@@ -104,9 +111,10 @@ func RunDeviceBridge[R any](
 
 	// Setup cleanup on error
 	var (
-		luaApi    *lua.BLEAPI2
-		ptyMaster *os.File
-		ptySlave  *os.File
+		luaApi      *lua.BLEAPI2
+		ptyMaster   *os.File
+		ptySlave    *os.File
+		symlinkPath string
 		//outputCollector *lua.LuaOutputCollector
 		//monitorWg       sync.WaitGroup
 	)
@@ -120,6 +128,15 @@ func RunDeviceBridge[R any](
 		//if outputCollector != nil {
 		//	_ = outputCollector.Stop()
 		//}
+
+		// Remove symlink before closing PTY (cleanup order matters)
+		if symlinkPath != "" {
+			if err := os.Remove(symlinkPath); err != nil {
+				logger.WithError(err).WithField("symlink", symlinkPath).Warn("Failed to remove symlink")
+			} else {
+				logger.WithField("symlink", symlinkPath).Debug("Removed symlink")
+			}
+		}
 
 		if luaApi != nil {
 			if luaApi.GetDevice() != nil && luaApi.GetDevice().IsConnected() {
@@ -171,6 +188,18 @@ func RunDeviceBridge[R any](
 
 	logger.WithField("tty", ptySlave.Name()).Info("Created PTY device")
 
+	// Create symlink to PTY slave if requested
+	if opts.SymlinkPath != "" {
+		if err := os.Symlink(ptySlave.Name(), opts.SymlinkPath); err != nil {
+			return zero, fmt.Errorf("failed to create symlink %s -> %s: %w", opts.SymlinkPath, ptySlave.Name(), err)
+		}
+		symlinkPath = opts.SymlinkPath
+		logger.WithFields(logrus.Fields{
+			"symlink": symlinkPath,
+			"target":  ptySlave.Name(),
+		}).Info("Created PTY symlink")
+	}
+
 	//// Create an output collector
 	//collector, err := lua.NewLuaOutputCollector(
 	//	luaApi.OutputChannel(),
@@ -200,9 +229,10 @@ func RunDeviceBridge[R any](
 
 	// Create bridge implementation
 	bridge := &bridgeImpl{
-		luaApi:    luaApi,
-		ptyMaster: ptyMaster,
-		ptySlave:  ptySlave,
+		luaApi:      luaApi,
+		ptyMaster:   ptyMaster,
+		ptySlave:    ptySlave,
+		symlinkPath: symlinkPath,
 	}
 
 	// Execute callback with the bridge

@@ -47,6 +47,7 @@ var (
 	bridgeConnectTimeout time.Duration
 	bridgeVerbose        bool
 	bridgeLuaScript      string
+	bridgeSymlink        string
 )
 
 func init() {
@@ -54,6 +55,7 @@ func init() {
 	bridgeCmd.Flags().DurationVar(&bridgeConnectTimeout, "connect-timeout", 30*time.Second, "Connection timeout")
 	bridgeCmd.Flags().BoolVarP(&bridgeVerbose, "verbose", "v", false, "Verbose output")
 	bridgeCmd.Flags().StringVar(&bridgeLuaScript, "script", "", "Lua script file with ble_to_tty() and tty_to_ble() functions")
+	bridgeCmd.Flags().StringVar(&bridgeSymlink, "symlink", "", "Create a symlink to the PTY device (e.g., /tmp/ble-device)")
 }
 
 func runBridge(cmd *cobra.Command, args []string) error {
@@ -180,7 +182,8 @@ func runBridge(cmd *cobra.Command, args []string) error {
 					Service: serviceUUID.String(),
 				},
 			},
-			Logger: logger,
+			Logger:      logger,
+			SymlinkPath: bridgeSymlink,
 		},
 		progress.Callback(),
 		bridgeCallback,
