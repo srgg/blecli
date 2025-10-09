@@ -14,15 +14,30 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-// BridgeTestSuite runs tests for Bridge2 using the BridgeSuite infrastructure.
+const (
+	// testSyncWait is the delay to allow async operations to complete in tests
+	testSyncWait = 100 * time.Millisecond
+
+	// maxShutdownDuration is the maximum acceptable time for bridge shutdown
+	maxShutdownDuration = 1 * time.Second
+
+	// signalTestTimeout is the timeout for signal handling test (uses timeout to simulate Ctrl+C)
+	signalTestTimeout = 2 * time.Second
+)
+
+// BridgeTestSuite runs tests for Bridge using the BridgeSuite infrastructure.
 type BridgeTestSuite struct {
 	BridgeSuite
 }
 
 func (suite *BridgeTestSuite) TestBridgeShutdown() {
+	// GOAL: Verify bridge stops quickly after context cancellation
+	//
+	// TEST SCENARIO: Cancel context → Stop() called → completes within 1 second
+
 	// Simple test script for shutdown test
 	testScript := `
-		print("Test bridge2 script loaded for shutdown test")
+		print("Test bridge script loaded for shutdown test")
 		-- No actual subscriptions needed for shutdown test`
 
 	bridgeCtx, cancel := context.WithCancel(context.Background())
@@ -32,11 +47,11 @@ func (suite *BridgeTestSuite) TestBridgeShutdown() {
 	bridge, err := suite.createAndStartBridge(testScript, bridgeCtx)
 	suite.NoError(err)
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(testSyncWait)
 
 	// Cancel context (simulates Ctrl+C)
 	cancel()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(testSyncWait)
 
 	// Stop the bridge - should complete quickly since context is already cancelled
 	stopStart := time.Now()
@@ -45,14 +60,18 @@ func (suite *BridgeTestSuite) TestBridgeShutdown() {
 	}
 	stopDuration := time.Since(stopStart)
 
-	if stopDuration > 1*time.Second {
+	if stopDuration > maxShutdownDuration {
 		suite.Errorf(fmt.Errorf("stop took too long: %v", stopDuration), "stop exceeded threshold")
 	}
 
 	suite.T().Logf("Bridge stopped in %v", stopDuration)
 }
 
-func (suite *BridgeTestSuite) TestBridge2CtrlC() {
+func (suite *BridgeTestSuite) TestBridgeCtrlC() {
+	// GOAL: Verify signal handling triggers graceful shutdown
+	//
+	// TEST SCENARIO: Signal received or timeout → context cancelled → Stop() completes
+
 	t := suite.T()
 	if testing.Short() {
 		t.Skip("Skipping manual Ctrl+C test")
@@ -61,18 +80,20 @@ func (suite *BridgeTestSuite) TestBridge2CtrlC() {
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)
 
-	// Test script that simulates hanging behavior
+	// Test script for signal handling
 	testScript := `
-		print("Test bridge2 script loaded for Ctrl+C test")
+		print("Test bridge script loaded for Ctrl+C test")
 		-- Simple script for signal handling test`
 
-	bridgeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	bridgeCtx, cancel := context.WithTimeout(context.Background(), signalTestTimeout)
 	defer cancel()
 
 	// Start bridge
 	bridge, err := suite.createAndStartBridge(testScript, bridgeCtx)
 	suite.NoError(err)
 
+	// Buffer size = 1 allows signal.Notify to send one signal without blocking.
+	// Only one signal is needed to trigger shutdown, so buffer = 1 is sufficient.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -82,7 +103,7 @@ func (suite *BridgeTestSuite) TestBridge2CtrlC() {
 		cancel()
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(testSyncWait)
 	t.Log("Send SIGINT to test...")
 
 	<-bridgeCtx.Done()
@@ -103,8 +124,11 @@ func (suite *BridgeTestSuite) TestBridge2CtrlC() {
 	t.Logf("Stop completed in %v", duration)
 }
 
-// TestBridgeYAMLScenarios runs all Bridge test scenarios from the YAML file
 func (suite *BridgeTestSuite) TestBridgeScenarios() {
+	// GOAL: Verify bridge handles all YAML-defined test scenarios
+	//
+	// TEST SCENARIO: Load YAML scenarios → execute each test case → all assertions pass
+
 	// Read the YAML file
 	yamlContent, err := os.ReadFile("bridge-test-scenarios.yaml")
 	suite.Require().NoError(err, "Failed to read bridge-test-scenarios.yaml")

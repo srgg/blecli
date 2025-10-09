@@ -13,6 +13,12 @@ import (
 	"golang.org/x/term"
 )
 
+const (
+	// DefaultOutputBufferSize is the default buffer size for Lua output collection
+	// Increase for high-throughput scripts, decrease for memory-constrained environments
+	DefaultOutputBufferSize = 1000
+)
+
 // Bridge represents a running BLE-PTY bridge with access to the device and PTY
 type Bridge interface {
 	GetLuaAPI() *lua.BLEAPI2
@@ -22,10 +28,11 @@ type Bridge interface {
 
 // BridgeOptions contains all the configuration for running a bridge
 type BridgeOptions struct {
-	Address        string                    // BLE device address
-	ConnectTimeout time.Duration             // Connection timeout
-	Services       []device.SubscribeOptions // Services to subscribe to
-	Logger         *logrus.Logger            // Logger instance
+	Address          string                    // BLE device address
+	ConnectTimeout   time.Duration             // Connection timeout
+	Services         []device.SubscribeOptions // Services to subscribe to
+	Logger           *logrus.Logger            // Logger instance
+	OutputBufferSize int                       // Lua output buffer size (0 = use default)
 }
 
 // ProgressCallback is called when the bridge phase changes
@@ -69,10 +76,10 @@ func RunDeviceBridge[R any](
 
 	// Validate options
 	if opts == nil {
-		return zero, fmt.Errorf("bridge options are required")
+		return zero, fmt.Errorf("failed to execute bridge: options are required")
 	}
 	if opts.Address == "" {
-		return zero, fmt.Errorf("device address is required")
+		return zero, fmt.Errorf("failed to execute bridge: device address is required")
 	}
 
 	// Set defaults
@@ -85,6 +92,10 @@ func RunDeviceBridge[R any](
 	}
 	if opts.ConnectTimeout == 0 {
 		opts.ConnectTimeout = 30 * time.Second
+	}
+	outputBufferSize := opts.OutputBufferSize
+	if outputBufferSize == 0 {
+		outputBufferSize = DefaultOutputBufferSize
 	}
 
 	// Create context for cancellation
@@ -140,7 +151,7 @@ func RunDeviceBridge[R any](
 
 	if err := luaApi.GetDevice().Connect(bridgeCtx, connectOpts); err != nil {
 		progressCallback("Failed")
-		return zero, fmt.Errorf("failed to connect to device: %w", err)
+		return zero, fmt.Errorf("failed to connect to device %s: %w", opts.Address, err)
 	}
 
 	// Report phase: Connected
@@ -149,23 +160,18 @@ func RunDeviceBridge[R any](
 	// Report phase: Setting up PTY
 	progressCallback("Setting up PTY")
 
-	// Create PTY
-	master, slave, err := pty.Open()
+	// Create and configure PTY
+	// Note: createPTY() handles cleanup on error, closing any opened file descriptors
+	master, slave, err := createPTY()
 	if err != nil {
-		return zero, fmt.Errorf("failed to create PTY: %w", err)
+		return zero, err
 	}
 	ptyMaster = master
 	ptySlave = slave
 
-	// Set PTY slave to raw mode
-	if _, err := term.MakeRaw(int(slave.Fd())); err != nil {
-		return zero, fmt.Errorf("failed to set PTY to raw mode: %w", err)
-	}
-
 	logger.WithField("tty", ptySlave.Name()).Info("Created PTY device")
 
 	//// Create an output collector
-	//const outputBufferSize = 1000
 	//collector, err := lua.NewLuaOutputCollector(
 	//	luaApi.OutputChannel(),
 	//	outputBufferSize,
@@ -252,3 +258,23 @@ func RunDeviceBridge[R any](
 //		logger.WithError(err).Error("Failed to consume output records")
 //	}
 //}
+
+// createPTY creates a pseudo-terminal and configures it for raw mode.
+// Returns clear error messages for common failure scenarios including permission issues.
+func createPTY() (master *os.File, slave *os.File, err error) {
+	master, slave, err = pty.Open()
+	if err != nil {
+		// Enhance error message for common permission/resource issues
+		return nil, nil, fmt.Errorf("failed to create PTY (check permissions and available PTY devices): %w", err)
+	}
+
+	// Set PTY slave to raw mode for proper terminal behavior
+	if _, err := term.MakeRaw(int(slave.Fd())); err != nil {
+		ptyPath := slave.Name()
+		_ = master.Close()
+		_ = slave.Close()
+		return nil, nil, fmt.Errorf("failed to set PTY %s to raw mode: %w", ptyPath, err)
+	}
+
+	return master, slave, nil
+}

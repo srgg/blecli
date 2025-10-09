@@ -9,6 +9,14 @@ import (
 	"github.com/srg/blim/internal/lua"
 )
 
+const (
+	// scriptOutputTickInterval is the interval for polling script output in tests
+	scriptOutputTickInterval = 50 * time.Millisecond
+
+	// bridgeStartupWait is the delay to allow bridge initialization to complete in tests
+	bridgeStartupWait = 50 * time.Millisecond
+)
+
 // BridgeSuite provides test infrastructure for Bridge tests.
 //
 // Design: Embeds internal.LuaApiSuite to reuse all test infrastructure (YAML parsing,
@@ -17,9 +25,12 @@ import (
 //   - Bridge lifecycle management (activeBridge tracking for cleanup)
 //
 // All validation logic (stdout, stderr) is inherited from parent suite.
+//
+// Thread Safety: activeBridge field does not require synchronization because testify/suite
+// guarantees single-threaded test execution (SetupTest, test method, TearDownTest run sequentially).
 type BridgeSuite struct {
 	lua.LuaApiSuite
-	activeBridge *bridgeHandle // Track active bridge for cleanup
+	activeBridge *bridgeHandle // Track active bridge for cleanup (no sync needed - sequential test execution)
 }
 
 // SetupTest initializes the test environment
@@ -93,7 +104,7 @@ func (suite *BridgeSuite) ExecuteScriptWithCallbacks(
 			nil, // no args
 			nil, // stdout - collector handles
 			nil, // stderr - collector handles
-			50*time.Millisecond,
+			scriptOutputTickInterval,
 		)
 		scriptErr = err
 
@@ -187,7 +198,7 @@ func (suite *BridgeSuite) createAndStartBridge(script string, ctx context.Contex
 			nil, // no args
 			nil, // stdout - parent's luaOutputCapture collects from OutputChannel
 			nil, // stderr - also collected by luaOutputCapture; errors via customErrorHandler
-			50*time.Millisecond,
+			scriptOutputTickInterval,
 		)
 		if err != nil {
 			return nil, err
@@ -201,6 +212,8 @@ func (suite *BridgeSuite) createAndStartBridge(script string, ctx context.Contex
 	}
 
 	// Run bridge asynchronously for tests
+	// Buffer size = 1 allows goroutine to send error and exit without blocking,
+	// even if Stop() hasn't been called yet. Single send guarantees no overflow.
 	errCh := make(chan error, 1)
 	go func() {
 		err := func() error {
@@ -227,7 +240,7 @@ func (suite *BridgeSuite) createAndStartBridge(script string, ctx context.Contex
 	}()
 
 	// Wait a bit for the bridge to start
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(bridgeStartupWait)
 
 	handle := &bridgeHandle{
 		ctx:    bridgeCtx,
