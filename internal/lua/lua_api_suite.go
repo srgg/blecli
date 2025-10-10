@@ -109,6 +109,17 @@ type TestStep struct {
 
 	// ExpectedErrors is a list of expected error message substrings to validate after this step (optional)
 	ExpectedErrors []string `json:"expected_errors,omitempty" yaml:"expected_errors,omitempty"`
+
+	// Lua is optional Lua code to execute during this step (Bridge tests)
+	Lua string `json:"lua,omitempty" yaml:"lua,omitempty"`
+
+	// PTYSlaveWrite contains data to write to PTY slave (for Lua to read via pty_read)
+	// Can be a string or byte array
+	PTYSlaveWrite interface{} `json:"pty_slave_write,omitempty" yaml:"pty_slave_write,omitempty"`
+
+	// ExpectedPTYSlaveRead is the expected data read from PTY slave (written by Lua via pty_write)
+	// Can be a string or byte array
+	ExpectedPTYSlaveRead interface{} `json:"expected_pty_slave_read,omitempty" yaml:"expected_pty_slave_read,omitempty"`
 }
 
 // ServiceValues represents updates to all characteristics of a single service.
@@ -150,11 +161,12 @@ type LuaSubscriptionCallbackData struct {
 
 // ScriptExecutor defines the interface for executing Lua scripts with callbacks.
 // This enables polymorphic behavior for different execution contexts (e.g., standard vs bridge mode).
+// ptySlaveWrite and ptySlaveRead enable Bridge-specific PTY operations (both passed to both callbacks).
 type ScriptExecutor interface {
 	ExecuteScriptWithCallbacks(
 		script string,
-		before func(luaApi *BLEAPI2),
-		after func(luaApi *BLEAPI2),
+		before func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
+		after func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
 	) error
 }
 
@@ -789,8 +801,16 @@ func (suite *LuaApiSuite) buildScriptFromTestCase(testCase TestCase) (string, er
 // executeTestSteps executes all test steps with timing and peripheral simulation.
 // Helper method extracted for reuse in template method pattern.
 // Each step runs as a subtest for clear visibility and isolation.
-func (suite *LuaApiSuite) executeTestSteps(testCase TestCase, conn device.Connection, collector *LuaOutputCollector) {
-	// Sort steps by time to ensure correct execution order
+// Accepts PTY functions for Bridge tests (stub functions for non-bridge tests).
+func (suite *LuaApiSuite) executeTestSteps(
+	testCase TestCase,
+	conn device.Connection,
+	collector *LuaOutputCollector,
+	luaApi *BLEAPI2,
+	ptySlaveWrite func([]byte) error,
+	ptySlaveRead func() ([]byte, error),
+) {
+	// Sort steps by time to ensure the correct execution order
 	steps := make([]TestStep, len(testCase.Steps))
 	copy(steps, testCase.Steps)
 	sort.Slice(steps, func(i, j int) bool {
@@ -830,6 +850,33 @@ func (suite *LuaApiSuite) executeTestSteps(testCase TestCase, conn device.Connec
 			// Use SimulateFor with explicit connection
 			_, err := simulator.SimulateFor(conn, true)
 			suite.Require().NoError(err)
+
+			// PTY Slave Write: Write data to the PTY slave for Lua to read via pty_read()
+			if currentStep.PTYSlaveWrite != nil {
+				data, err := convertToBytes(currentStep.PTYSlaveWrite)
+				suite.Require().NoError(err, "Failed to convert PTY slave write data")
+				err = ptySlaveWrite(data)
+				suite.Require().NoError(err, "Failed to write to PTY slave")
+			}
+
+			// Execute Lua code if provided
+			if currentStep.Lua != "" {
+				err := luaApi.LoadScript(currentStep.Lua, "step")
+				suite.Require().NoError(err, "Failed to load step Lua script")
+				err = luaApi.ExecuteScript(context.Background(), "")
+				suite.Require().NoError(err, "Failed to execute step Lua script")
+			}
+
+			// Expected PTY Slave Read: Read from the PTY slave and validate (written by Lua via pty_write)
+			if currentStep.ExpectedPTYSlaveRead != nil {
+				actualData, err := ptySlaveRead()
+				suite.Require().NoError(err, "Failed to read from PTY slave")
+
+				expectedData, err := convertToBytes(currentStep.ExpectedPTYSlaveRead)
+				suite.Require().NoError(err, "Failed to convert expected PTY slave read data")
+
+				suite.Require().Equal(expectedData, actualData, "PTY slave read data mismatch")
+			}
 
 			// Wait after step execution
 			if waitAfter := currentStep.WaitAfter; waitAfter > 0 {
@@ -874,14 +921,21 @@ func (suite *LuaApiSuite) validateFinalOutput(testCase TestCase, collector *LuaO
 
 // ExecuteScriptWithCallbacks is a template method that executes a Lua script with before/after callbacks.
 // The default implementation uses suite.LuaApi. BridgeSuite can override to use Bridge's LuaAPI.
-// The 'before' callback is used for setup (e.g., starting the output collector).
-// The 'after' callback executes test steps and validation (blocks until complete).
+// Both callbacks receive both PTY functions (write and read) for maximum flexibility.
 func (suite *LuaApiSuite) ExecuteScriptWithCallbacks(
 	script string,
-	before func(luaApi *BLEAPI2),
-	after func(luaApi *BLEAPI2),
+	before func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
+	after func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
 ) error {
-	before(suite.LuaApi)
+	// Stub functions for non-bridge tests - return clear errors if called
+	stubPTYSlaveWrite := func(data []byte) error {
+		return fmt.Errorf("PTY operations not supported in non-bridge tests (attempted pty_slave_write)")
+	}
+	stubPTYSlaveRead := func() ([]byte, error) {
+		return nil, fmt.Errorf("PTY operations not supported in non-bridge tests (attempted expected_pty_slave_read)")
+	}
+
+	before(suite.LuaApi, stubPTYSlaveWrite, stubPTYSlaveRead)
 
 	var err error
 	if script != "" {
@@ -892,7 +946,7 @@ func (suite *LuaApiSuite) ExecuteScriptWithCallbacks(
 		}
 	}
 
-	after(suite.LuaApi)
+	after(suite.LuaApi, stubPTYSlaveWrite, stubPTYSlaveRead)
 	return err
 }
 
@@ -922,8 +976,8 @@ func (suite *LuaApiSuite) RunTestCase(testCase TestCase) {
 	// Execute via executor interface for polymorphic dispatch
 	scriptErr := suite.Executor.ExecuteScriptWithCallbacks(
 		script,
-		// Before: setup output collector
-		func(luaApi *BLEAPI2) {
+		// Before: setup output collector (both PTY functions available)
+		func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)) {
 			var err error
 			collector, err = NewLuaOutputCollector(luaApi.OutputChannel(), 1024, func(err error) {
 				suite.T().Errorf("Output collector error: %v", err)
@@ -934,8 +988,9 @@ func (suite *LuaApiSuite) RunTestCase(testCase TestCase) {
 			// Get connection for test steps
 			conn = luaApi.GetDevice().GetConnection()
 		},
-		// After: execute steps and validate (blocks until complete)
-		func(luaApi *BLEAPI2) {
+
+		// After: execute steps and validate (both PTY functions available)
+		func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)) {
 			defer func() {
 				if err := collector.Stop(); err != nil {
 					suite.T().Logf("Warning: failed to stop test collector: %v", err)
@@ -948,7 +1003,7 @@ func (suite *LuaApiSuite) RunTestCase(testCase TestCase) {
 			}
 
 			// Execute test steps
-			suite.executeTestSteps(testCase, conn, collector)
+			suite.executeTestSteps(testCase, conn, collector, luaApi, ptySlaveWrite, ptySlaveRead)
 
 			// Final validation
 			suite.validateFinalOutput(testCase, collector)
@@ -1022,10 +1077,10 @@ func (suite *LuaApiSuite) ValidateOutput2(collector *LuaOutputCollector, expecte
 			// Try single JSON object first
 			var singleData LuaSubscriptionCallbackData
 			if err := json.Unmarshal([]byte(stdout), &singleData); err == nil {
-				// Successfully parsed as single JSON - convert to generic format
+				// Successfully parsed as a single JSON-convert to a generic format
 				actualJson = []LuaSubscriptionCallbackData{singleData}
 			} else {
-				// Failed as single JSON, try JSONL (multiple lines)
+				// Failed as a single JSON, try JSONL (multiple lines)
 				lines := strings.Split(stdout, "\n")
 				var arrayData []LuaSubscriptionCallbackData
 				for _, line := range lines {
@@ -1317,6 +1372,33 @@ func toNumber(v interface{}) (int, bool) {
 		return int(n), true
 	default:
 		return 0, false
+	}
+}
+
+// convertToBytes converts interface{} (string or byte array from YAML) to []byte.
+// Supports both string values and arrays of integers (0-255).
+func convertToBytes(v interface{}) ([]byte, error) {
+	switch val := v.(type) {
+	case string:
+		return []byte(val), nil
+	case []interface{}:
+		// Handle byte array from YAML (array of integers)
+		bytes := make([]byte, len(val))
+		for i, item := range val {
+			if num, ok := toNumber(item); ok {
+				if num < 0 || num > 255 {
+					return nil, fmt.Errorf("byte value out of range: %d (must be 0-255)", num)
+				}
+				bytes[i] = byte(num)
+			} else {
+				return nil, fmt.Errorf("expected number at index %d, got %T", i, item)
+			}
+		}
+		return bytes, nil
+	case []byte:
+		return val, nil
+	default:
+		return nil, fmt.Errorf("unsupported type %T for byte conversion (expected string or array)", v)
 	}
 }
 

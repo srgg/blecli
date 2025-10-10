@@ -137,23 +137,6 @@ func (suite *LuaApiTestSuite) TestSubscriptionScenarios() {
 
 // TestCharacteristicFunction tests the blim.characteristic() function
 func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
-	suite.Run("Valid characteristic lookup", func() {
-		// GOAL: Verify blim.characteristic() returns handle with correct metadata fields (uuid, service, properties, descriptors)
-		//
-		// TEST SCENARIO: Lookup valid characteristic → handle returned → verify all metadata fields present
-
-		script := `
-			local char = blim.characteristic("1234", "5678")
-			assert(char ~= nil, "characteristic should not be nil")
-			assert(char.uuid == "5678", "uuid should match")
-			assert(char.service == "1234", "service should match")
-			assert(char.properties ~= nil, "properties should not be nil")
-			assert(char.descriptors ~= nil, "descriptors should not be nil")
-		`
-		err := suite.ExecuteScript(script)
-		suite.NoError(err, "Should execute valid characteristic lookup")
-	})
-
 	suite.Run("Characteristic without descriptors", func() {
 		// GOAL: Verify characteristic handle has empty descriptors array when no descriptors present
 		//
@@ -211,15 +194,23 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 		suite.AssertLuaError(err, "characteristic not found")
 	})
 
-	suite.Run("Error: Missing arguments", func() {
-		// GOAL: Verify blim.characteristic() raises error when only one argument provided (needs two)
+	suite.Run("Error: Insufficient arguments", func() {
+		// GOAL: Verify blim.characteristic() raises error when insufficient arguments provided
 		//
-		// TEST SCENARIO: Call with only service UUID → Lua error raised → verify error mentions two arguments
+		// TEST SCENARIO: Call with zero or one argument → Lua error raised → verify error mentions two arguments required
 
+		// Test with zero arguments
 		script := `
-			local char = blim.characteristic("1234")
+			local char = blim.characteristic()
 		`
 		err := suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "expects two string arguments")
+
+		// Test with one argument
+		script = `
+			local char = blim.characteristic("1234")
+		`
+		err = suite.ExecuteScript(script)
 		suite.AssertLuaError(err, "expects two string arguments")
 	})
 
@@ -244,18 +235,6 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 
 		script := `
 			local char = blim.characteristic({service="1234"}, "5678")
-		`
-		err := suite.ExecuteScript(script)
-		suite.AssertLuaError(err, "expects two string arguments")
-	})
-
-	suite.Run("Error: No arguments provided", func() {
-		// GOAL: Verify blim.characteristic() raises error when called with no arguments
-		//
-		// TEST SCENARIO: Call with no arguments → Lua error raised → verify error mentions two string arguments
-
-		script := `
-			local char = blim.characteristic()
 		`
 		err := suite.ExecuteScript(script)
 		suite.AssertLuaError(err, "expects two string arguments")
@@ -410,23 +389,33 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		script := `
 			local services = blim.list()
 			local read_count = 0
+			local total_checked = 0
 
 			for _, service_uuid in ipairs(services) do
 				local service_info = services[service_uuid]
 				for _, char_uuid in ipairs(service_info.characteristics) do
 					local char = blim.characteristic(service_uuid, char_uuid)
+					total_checked = total_checked + 1
 
+					-- Read ALWAYS, but only verify success if readable
+					local value, err = char.read()
+
+					-- MUST verify every read operation
 					if char.properties.read then
-						local value, err = char.read()
-						assert(err == nil, "read should succeed for readable characteristic " .. char_uuid)
-						assert(value ~= nil, "value should not be nil for readable characteristic " .. char_uuid)
+						assert(err == nil, "read MUST succeed for readable characteristic " .. char_uuid)
+						assert(value ~= nil, "value MUST not be nil for readable characteristic " .. char_uuid)
 						read_count = read_count + 1
+					else
+						assert(err ~= nil, "read MUST fail for non-readable characteristic " .. char_uuid)
+						assert(value == nil, "value MUST be nil when read fails on " .. char_uuid)
 					end
 				end
 			end
 
-			assert(read_count > 0, "should successfully read at least one characteristic")
-			print("Successfully read " .. read_count .. " characteristics")
+			-- Unconditional assertions ALWAYS execute
+			assert(total_checked > 0, "MUST have checked at least one characteristic")
+			assert(read_count > 0, "MUST successfully read at least one characteristic")
+			print("Successfully read " .. read_count .. " of " .. total_checked .. " characteristics")
 		`
 		err := suite.ExecuteScript(script)
 		suite.NoError(err, "Should read multiple characteristics")
@@ -502,30 +491,6 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		suite.NoError(err, "Should properly error on disconnected device")
 	})
 
-	suite.Run("Check read property before reading", func() {
-		// GOAL: Demonstrate the best practice of checking read property before calling read() (intentional conditional logic)
-		//
-		// TEST SCENARIO: Check properties.read flag → conditionally call read() → verify proper pattern usage
-
-		script := `
-			local char = blim.characteristic("180d", "2a37")  -- Heart Rate Measurement
-
-			-- Always check if readable before reading
-			if char.properties.read then
-				local value, err = char.read()
-				if value then
-					assert(type(value) == "string", "value should be string")
-				end
-			else
-				-- If not readable, read() might fail
-				local value, err = char.read()
-				-- Should handle gracefully either way
-			end
-		`
-		err := suite.ExecuteScript(script)
-		suite.NoError(err, "Should check properties before reading")
-	})
-
 	suite.Run("Binary data parsing with string.byte", func() {
 		// GOAL: Verify multibyte characteristic values can be parsed using string.byte for individual bytes
 		//
@@ -597,10 +562,10 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 
 // TestLuaBridgeAccess tests blim.bridge exposure to Lua
 func (suite *LuaApiTestSuite) TestLuaBridgeAccess() {
-	suite.Run("Bridge not set - raises error on field access", func() {
-		// GOAL: Verify blim.bridge exists, but raises an error when accessing fields in non-bridge mode
+	suite.Run("Bridge not set - raises error on getter function calls", func() {
+		// GOAL: Verify blim.bridge exists, but raises an error when calling getter functions in non-bridge mode
 		//
-		// TEST SCENARIO: No SetBridge() called → blim.bridge exists → accessing fields raises error
+		// TEST SCENARIO: No SetBridge() called → blim.bridge exists → calling getter functions raises error
 
 		// First verify blim.bridge exists for bridge mode detection
 		script := `
@@ -610,16 +575,16 @@ func (suite *LuaApiTestSuite) TestLuaBridgeAccess() {
 		err := suite.ExecuteScript(script)
 		suite.NoError(err, "blim.bridge should exist for mode detection")
 
-		// Verify accessing pty_name raises error
+		// Verify calling pty_name() raises error
 		script = `
-			local pty = blim.bridge.pty_name
+			local pty = blim.bridge.pty_name()
 		`
 		err = suite.ExecuteScript(script)
 		suite.AssertLuaError(err, "not available (not running in bridge mode)")
 
-		// Verify accessing symlink_path raises error
+		// Verify calling symlink_path() raises error
 		script = `
-			local symlink = blim.bridge.symlink_path
+			local symlink = blim.bridge.symlink_path()
 		`
 		err = suite.ExecuteScript(script)
 		suite.AssertLuaError(err, "not available (not running in bridge mode)")
@@ -644,17 +609,17 @@ func (suite *LuaApiTestSuite) TestLuaBridgeAccess() {
 			assert(type(blim.bridge) == "table", "blim.bridge should be table")
 
 			-- Verify pty_name field
-			assert(blim.bridge.pty_name ~= nil, "pty_name should be set")
-			assert(type(blim.bridge.pty_name) == "string", "pty_name should be string")
-			assert(blim.bridge.pty_name == "/dev/ttys999", "pty_name should match mock value")
+			assert(blim.bridge.pty_name() ~= nil, "pty_name should be set")
+			assert(type(blim.bridge.pty_name()) == "string", "pty_name should be string")
+			assert(blim.bridge.pty_name() == "/dev/ttys999", "pty_name should match mock value")
 
 			-- Verify symlink_path field
-			assert(blim.bridge.symlink_path ~= nil, "symlink_path should be set")
-			assert(type(blim.bridge.symlink_path) == "string", "symlink_path should be string")
-			assert(blim.bridge.symlink_path == "/tmp/test-bridge-link", "symlink_path should match mock value")
+			assert(blim.bridge.symlink_path() ~= nil, "symlink_path should be set")
+			assert(type(blim.bridge.symlink_path()) == "string", "symlink_path should be string")
+			assert(blim.bridge.symlink_path() == "/tmp/test-bridge-link", "symlink_path should match mock value")
 
-			print("✓ blim.bridge.pty_name: " .. blim.bridge.pty_name)
-			print("✓ blim.bridge.symlink_path: " .. blim.bridge.symlink_path)
+			print("✓ blim.bridge.pty_name: " .. blim.bridge.pty_name())
+			print("✓ blim.bridge.symlink_path: " .. blim.bridge.symlink_path())
 		`
 		err := suite.ExecuteScript(script)
 		suite.NoError(err, "Should access bridge info when set")

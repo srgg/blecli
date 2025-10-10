@@ -134,6 +134,22 @@ func (suite *BridgeTestSuite) TestBridgeScenarios() {
 	//suite.RunTestCasesFromYAML(string(yamlContent))
 }
 
+func (suite *BridgeTestSuite) TestPTYWriteYAML() {
+	// GOAL: Verify pty_write() function works correctly with various data types and scenarios
+	//
+	// TEST SCENARIO: Load YAML test cases for pty_write → execute each test → all pass
+
+	suite.RunTestCasesFromFile("./bridge-pty-write-tests.yaml")
+}
+
+func (suite *BridgeTestSuite) TestPTYReadYAML() {
+	// GOAL: Verify pty_read() function works correctly with various scenarios
+	//
+	// TEST SCENARIO: Load YAML test cases for pty_read → execute each test → all pass
+
+	suite.RunTestCasesFromFile("./bridge-pty-read-tests.yaml")
+}
+
 func (suite *BridgeTestSuite) TestSymlinkCreation() {
 	// GOAL: Verify symlink is created pointing to PTY slave device
 	//

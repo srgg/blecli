@@ -19,6 +19,17 @@ io.write("Hello")         -- Output: Hello
 io.write("Line\n")        -- Output: Line\n
 ```
 
+### `io.stderr:write(...)`
+Writes values to stderr without separators or automatic newline.
+
+```lua
+io.stderr:write("Error: ")       -- Output to stderr: Error:
+io.stderr:write("failed\n")      -- Output to stderr: failed\n
+
+-- Combined error message
+io.stderr:write("Error: ", "connection failed\n")  -- Output to stderr: Error: connection failed\n
+```
+
 ## JSON Library
 
 ### `json.encode(table)`
@@ -78,9 +89,9 @@ end
 ### `blim.bridge`
 Read-only table containing bridge information (only available when running in bridge mode).
 
-**Fields:**
-- `pty_name` (string) - PTY device path (e.g., "/dev/ttys010")
-- `symlink_path` (string) - Symlink path to PTY (empty if not created)
+**Getter Functions:**
+- `pty_name` - Returns PTY device path (e.g., "/dev/ttys010")
+- `symlink_path` - Returns symlink path to PTY (empty if not created)
 
 **Example:**
 ```lua
@@ -93,6 +104,100 @@ if blim.bridge.pty_name and blim.bridge.pty_name ~= "" then
     end
 else
     print("Not running in bridge mode")
+end
+```
+
+### `blim.bridge.pty_write(data)`
+Writes data to the PTY master (only available in bridge mode).
+
+**Parameters:**
+- `data` (string) - Data to write to the PTY
+
+**Returns:** `(bytes_written, nil)` on success or `(nil, error_message)` on failure
+
+**Example:**
+```lua
+-- Write data to PTY
+local bytes, err = blim.bridge.pty_write("Hello from Lua\n")
+if err then
+    print("Write failed:", err)
+else
+    print("Wrote", bytes, "bytes to PTY")
+end
+
+-- Write binary data
+local binary_data = "\x01\x02\x03\xFF"
+local bytes, err = blim.bridge.pty_write(binary_data)
+if err then
+    print("Write failed:", err)
+else
+    print("Wrote", bytes, "bytes of binary data")
+end
+```
+
+### `blim.bridge.pty_read([max_bytes])`
+Reads data from the PTY master in non-blocking mode (only available in bridge mode).
+
+**Parameters:**
+- `max_bytes` (number, optional) - Maximum bytes to read (default: 4096, must be positive)
+
+**Returns:**
+- `(data, nil)` on success - `data` contains the bytes read
+- `("", nil)` if no data available (non-blocking)
+- `(nil, error_message)` on failure
+
+**Example:**
+```lua
+-- Read available data (up to 4096 bytes)
+local data, err = blim.bridge.pty_read()
+if err then
+    print("Read failed:", err)
+elseif data == "" then
+    print("No data available")
+else
+    print("Read", #data, "bytes:", data)
+end
+
+-- Read with custom buffer size
+local data, err = blim.bridge.pty_read(128)
+if err then
+    print("Read failed:", err)
+elseif data == "" then
+    print("No data available")
+else
+    print("Read", #data, "bytes (max 128):", data)
+end
+
+-- Process binary data
+local data, err = blim.bridge.pty_read()
+if err then
+    print("Read failed:", err)
+elseif data ~= "" then
+    -- Convert to hex for display
+    for i = 1, #data do
+        io.write(string.format("%02X ", string.byte(data, i)))
+    end
+    print()
+end
+```
+
+**Example: Bidirectional PTY Communication**
+```lua
+-- Write a command to PTY
+local bytes, err = blim.bridge.pty_write("ping\n")
+if err then
+    print("Write failed:", err)
+    return
+end
+
+-- Read response (non-blocking, may need to poll)
+local data, err = blim.bridge.pty_read()
+if err then
+    print("Read failed:", err)
+elseif data == "" then
+    print("No response yet")
+else
+    print("Response:", data)
 end
 ```
 
@@ -262,18 +367,34 @@ Callback = function(record)
 end
 ```
 
-## Error Handling
+## Output Capture and Error Handling
 
-Errors in Lua scripts are sent to stderr and logged.
+All Lua script output is captured and logged:
+
+- **`print()` output** → Captured to stdout channel
+- **`io.write()` output** → Captured to stdout channel
+- **`io.stderr:write()` output** → Captured to stderr channel
+- **Lua errors (including `error()` function)** → Sent to stderr channel and logged
+
+**Note:** Output is captured in real-time and can be accessed programmatically via the output channel.
+
+**Error Capture:** When Lua's `error()` function is called or any runtime error occurs, the error message is automatically captured to the stderr channel.
 
 ```lua
--- This will raise an error
+-- Standard output (captured to stdout)
+print("Status: OK")
+io.write("Progress: 50%\n")
+
+-- Error output (captured to stderr)
+io.stderr:write("Warning: Low battery\n")
+
+-- Lua errors (captured to stderr)
 blim.subscribe{
     services = {},  -- ERROR: empty services array
     Callback = function(record) end
 }
 
--- This will raise an error
+-- This will also raise an error
 blim.subscribe("invalid")  -- ERROR: expects table
 ```
 
@@ -535,10 +656,13 @@ All Go functions exposed to Lua are wrapped:
 - ✅ `blim.list()`
 - ✅ `blim.characteristic()`
 - ✅ `char.read()` (characteristic handle method)
+- ✅ `blim.bridge.pty_write()` (bridge PTY write)
+- ✅ `blim.bridge.pty_read()` (bridge PTY read)
 
 **Engine Functions (`lua_engine.go`):**
 - ✅ `print()` (overridden for output capture)
-- ✅ `io.write()` (overridden for output capture)
+- ✅ `io.write()` (overridden for stdout capture)
+- ✅ `io.stderr:write()` (overridden for stderr capture)
 
 **Blocked Functions:**
 - Stub functions that call `L.RaiseError()` are simple and less critical

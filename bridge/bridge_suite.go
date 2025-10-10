@@ -2,7 +2,10 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"syscall"
 	"time"
 
 	"github.com/srg/blim/internal/device"
@@ -72,10 +75,11 @@ func (suite *BridgeSuite) RunBridgeTestCasesFromYAML(yamlContent string) {
 
 // ExecuteScriptWithCallbacks overrides the parent's template method to use Bridge's LuaAPI.
 // Manages full bridge lifecycle: start bridge, execute callbacks, stop bridge.
+// Provides real PTY slave operations via ptySlaveWrite and ptySlaveRead functions.
 func (suite *BridgeSuite) ExecuteScriptWithCallbacks(
 	script string,
-	before func(luaApi *lua.BLEAPI2),
-	after func(luaApi *lua.BLEAPI2),
+	before func(luaApi *lua.BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
+	after func(luaApi *lua.BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
 ) error {
 	bridgeCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -108,8 +112,36 @@ func (suite *BridgeSuite) ExecuteScriptWithCallbacks(
 
 		suite.Logger.WithField("lua_api_ptr", fmt.Sprintf("%p", bridgeLuaApi)).Debug("BridgeSuite.ExecuteScriptWithCallbacks: SetBridge called")
 
+		// Open PTY slave for test operations in non-blocking mode
+		ptySlavePath := b.GetPTYName()
+		ptySlave, err := os.OpenFile(ptySlavePath, os.O_RDWR|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open PTY slave: %w", err)
+		}
+		defer ptySlave.Close()
+
+		// Create a real ptySlaveWrite function that writes to a PTY slave
+		ptySlaveWrite := func(data []byte) error {
+			_, err := ptySlave.Write(data)
+			return err
+		}
+
+		// Create a real ptySlaveRead function that reads from the PTY slave (non-blocking)
+		ptySlaveRead := func() ([]byte, error) {
+			buffer := make([]byte, 4096)
+			n, err := ptySlave.Read(buffer)
+			if err != nil {
+				// Non-blocking read with no data available returns EAGAIN/EWOULDBLOCK - not an error
+				if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK) {
+					return []byte{}, nil
+				}
+				return nil, err
+			}
+			return buffer[:n], nil
+		}
+
 		// Setup: output collector, connection
-		before(bridgeLuaApi)
+		before(bridgeLuaApi, ptySlaveWrite, ptySlaveRead)
 
 		// SetTemplateData sets template variables for text assertion
 		// Provides bridge-specific data like PTY path and device address
@@ -122,7 +154,7 @@ func (suite *BridgeSuite) ExecuteScriptWithCallbacks(
 		suite.SetTemplateData(data)
 
 		// Execute script
-		err := lua.ExecuteDeviceScriptWithOutput(
+		err = lua.ExecuteDeviceScriptWithOutput(
 			bridgeCtx,
 			nil,
 			bridgeLuaApi,
@@ -136,7 +168,7 @@ func (suite *BridgeSuite) ExecuteScriptWithCallbacks(
 		scriptErr = err
 
 		// Execute test steps and validate (blocks until complete)
-		after(bridgeLuaApi)
+		after(bridgeLuaApi, ptySlaveWrite, ptySlaveRead)
 
 		return nil, nil
 	}

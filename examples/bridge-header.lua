@@ -47,10 +47,10 @@ print("=== BLE-PTY Bridge is Active ===")
 print(string.format("Device: %s", blim.device.address))
 
 -- Display bridge information if available
-if blim.bridge.pty_name and blim.bridge.pty_name ~= "" then
-    print(string.format("PTY: %s", blim.bridge.pty_name))
-    if blim.bridge.symlink_path and blim.bridge.symlink_path ~= "" then
-        print(string.format("Symlink: %s", blim.bridge.symlink_path))
+if blim.bridge.pty_name() and blim.bridge.pty_name() ~= "" then
+    print(string.format("PTY: %s", blim.bridge.pty_name()))
+    if blim.bridge.symlink_path() and blim.bridge.symlink_path() ~= "" then
+        print(string.format("Symlink: %s", blim.bridge.symlink_path()))
     end
     print("")
 end

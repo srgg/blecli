@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -296,6 +297,13 @@ func createPTY() (master *os.File, slave *os.File, err error) {
 	if err != nil {
 		// Enhance error message for common permission/resource issues
 		return nil, nil, fmt.Errorf("failed to create PTY (check permissions and available PTY devices): %w", err)
+	}
+
+	// Set PTY master to non-blocking mode for pty_read() in Lua
+	if err := syscall.SetNonblock(int(master.Fd()), true); err != nil {
+		_ = master.Close()
+		_ = slave.Close()
+		return nil, nil, fmt.Errorf("failed to set PTY master to non-blocking mode: %w", err)
 	}
 
 	// Set PTY slave to raw mode for proper terminal behavior

@@ -3,6 +3,7 @@ package lua
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 type BridgeInfo interface {
 	GetPTYName() string     // PTY device name for display
 	GetSymlinkPath() string // Symlink path (empty if not created)
+	GetPTYMaster() *os.File // PTY master for script I/O
 }
 
 // LuaSubscriptionTable Lua subscription configuration
@@ -92,6 +94,98 @@ func (api *BLEAPI2) registerBridgeInfo(L *lua.State) {
 		}
 		L.PushString(api.bridge.GetSymlinkPath())
 		return 1
+	}))
+	L.SetTable(-3)
+
+	// Add pty_write function - writes data to the PTY master
+	// Usage: blim.bridge.pty_write(data)
+	// Returns: (bytes_written, nil) on success or (nil, error_message) on failure
+	L.PushString("pty_write")
+	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.pty_write", func(L *lua.State) int {
+		if api.bridge == nil {
+			L.RaiseError("bridge.pty_write() is not available (not running in bridge mode)")
+			return 0
+		}
+
+		// Validate argument - check actual type (IsString returns true for numbers too)
+		if L.Type(1) != lua.LUA_TSTRING {
+			L.PushNil()
+			L.PushString("pty_write(data) expects a string argument")
+			return 2
+		}
+
+		data := L.ToString(1)
+		ptyMaster := api.bridge.GetPTYMaster()
+		if ptyMaster == nil {
+			L.PushNil()
+			L.PushString("PTY master not available")
+			return 2
+		}
+
+		// Write to PTY master
+		n, err := ptyMaster.Write([]byte(data))
+		if err != nil {
+			L.PushNil()
+			L.PushString(fmt.Sprintf("pty_write() failed: %v", err))
+			return 2
+		}
+
+		// Return (bytes_written, nil) on success
+		L.PushInteger(int64(n))
+		L.PushNil()
+		return 2
+	}))
+	L.SetTable(-3)
+
+	// Add pty_read function - reads data from the PTY master (non-blocking)
+	// Usage: blim.bridge.pty_read([max_bytes])
+	// Returns: (data, nil) on success, ("", nil) if no data available, or (nil, error_message) on failure
+	// max_bytes defaults to 4096 if not specified
+	L.PushString("pty_read")
+	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.pty_read", func(L *lua.State) int {
+		if api.bridge == nil {
+			L.RaiseError("bridge.pty_read() is not available (not running in bridge mode)")
+			return 0
+		}
+
+		// Parse optional max_bytes argument (default: 4096)
+		maxBytes := 4096
+		if L.GetTop() >= 1 && L.IsNumber(1) {
+			maxBytes = L.ToInteger(1)
+			if maxBytes <= 0 {
+				L.PushNil()
+				L.PushString("pty_read(max_bytes) expects a positive integer")
+				return 2
+			}
+		}
+
+		ptyMaster := api.bridge.GetPTYMaster()
+		if ptyMaster == nil {
+			L.PushNil()
+			L.PushString("PTY master not available")
+			return 2
+		}
+
+		// Read from PTY master (non-blocking)
+		buffer := make([]byte, maxBytes)
+		n, err := ptyMaster.Read(buffer)
+		if err != nil {
+			// Check for common non-error conditions
+			if err.Error() == "EOF" || strings.Contains(err.Error(), "resource temporarily unavailable") {
+				// No data available (non-blocking read)
+				L.PushString("")
+				L.PushNil()
+				return 2
+			}
+			L.PushNil()
+			L.PushString(fmt.Sprintf("pty_read() failed: %v", err))
+			return 2
+		}
+
+		// Return (data, nil) on success
+		L.PushString(string(buffer[:n]))
+		L.PushNil()
+		return 2
 	}))
 	L.SetTable(-3)
 
