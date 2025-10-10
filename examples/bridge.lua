@@ -57,15 +57,42 @@ blim.subscribe{
     Mode = "EveryUpdate",
     MaxRate = 0,
     Callback = function(record)
-        -- Print compact notification for each characteristic
+        -- Write compact notification for each characteristic to PTY
         for uuid, data in pairs(record.Values) do
             local hex = blim.to_hex(data)
             local ascii = blim.to_ascii(data)
             local short = blim.short_uuid(uuid)
 
             -- Compact format: [seq] UUID: hex | ascii (len bytes)
-            print(string.format("[%d] %s: %s | %s (%db)",
-                record.Seq, short, hex, ascii, #data))
+            local output = string.format("[%d] %s: %s | %s (%db)\n",
+                record.Seq, short, hex, ascii, #data)
+            blim.bridge.pty_write(output)
         end
     end
 }
+
+-- Print header information after successful subscription
+print("")
+print("=== BLE-PTY Bridge is Active ===")
+print(string.format("Device: %s", blim.device.address))
+
+-- Display bridge information if available
+if blim.bridge.pty_name() and blim.bridge.pty_name() ~= "" then
+    print(string.format("PTY: %s", blim.bridge.pty_name()))
+    if blim.bridge.symlink_path() and blim.bridge.symlink_path() ~= "" then
+        print(string.format("Symlink: %s", blim.bridge.symlink_path()))
+    end
+    print("")
+end
+
+-- Print only services with notifiable characteristics
+for _, svc in ipairs(services) do
+    print(string.format("Service: %s", svc.service))
+    print(string.format("Characteristics: %d", #svc.chars))
+    for i, char_uuid in ipairs(svc.chars) do
+        print(string.format("  - %s", char_uuid))
+    end
+    print("")
+end
+
+io.write("Bridge is running. Press Ctrl+C to stop the bridge.")

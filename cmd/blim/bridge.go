@@ -137,7 +137,7 @@ func runBridge(cmd *cobra.Command, args []string) error {
 			nil,
 			b.GetLuaAPI(),
 			logger,
-			blecli.BridgeHeaderLuaScript,
+			blecli.DefaultBridgeLuaScript,
 			scriptArgs,
 			os.Stdout,
 			os.Stderr,

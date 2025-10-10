@@ -63,6 +63,11 @@ type TestCase struct {
 	// ExpectedErrors is a list of expected error message substrings (Bridge tests only)
 	ExpectedErrors []string `json:"expected_errors,omitempty" yaml:"expected_errors,omitempty"`
 
+	// ExpectedPTYSlaveRead is the expected data read from PTY slave after all steps complete (Bridge tests only)
+	// Written by Lua via pty_write, validated at TestCase level after all steps execute
+	// Can be a string or byte array
+	ExpectedPTYSlaveRead interface{} `json:"expected_pty_slave_read,omitempty" yaml:"expected_pty_slave_read,omitempty"`
+
 	// Skip marks this test case as skipped with the provided reason.
 	// When set, the test will be skipped and the skip reason will be logged.
 	// Useful for tests that cannot be programmatically validated or have known issues.
@@ -1007,6 +1012,17 @@ func (suite *LuaApiSuite) RunTestCase(testCase TestCase) {
 
 			// Final validation
 			suite.validateFinalOutput(testCase, collector)
+
+			// TestCase-level PTY slave read validation (after all steps complete)
+			if testCase.ExpectedPTYSlaveRead != nil {
+				actualData, err := ptySlaveRead()
+				suite.Require().NoError(err, "Failed to read from PTY slave at TestCase level")
+
+				expectedData, err := convertToBytes(testCase.ExpectedPTYSlaveRead)
+				suite.Require().NoError(err, "Failed to convert expected PTY slave read data at TestCase level")
+
+				suite.Require().Equal(expectedData, actualData, "PTY slave read data mismatch at TestCase level")
+			}
 		},
 	)
 

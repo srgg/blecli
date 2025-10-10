@@ -7,11 +7,6 @@ import _ "embed"
 //go:embed examples/inspect.lua
 var DefaultInspectLuaScript string
 
-// BridgeHeaderLuaScript contains the embedded bridge-header.lua script
-//
-//go:embed examples/bridge-header.lua
-var BridgeHeaderLuaScript string
-
 // DefaultBridgeLuaScript contains the embedded bridge.lua script
 //
 //go:embed examples/bridge.lua
