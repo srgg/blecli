@@ -18,9 +18,3 @@ packages:
         config:
           dir: "internal/testutils/mocks"
           outpkg: "mocks"
-  github.com/srg/blim/internal/lua:
-    interfaces:
-      BridgeInfo:
-        config:
-          dir: "internal/testutils/mocks"
-          outpkg: mocks

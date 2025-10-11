@@ -18,8 +18,10 @@ require (
 
 require (
 	github.com/hedzr/go-ringbuf/v2 v2.2.2
+	github.com/smallnest/ringbuffer v0.0.0-20250317021400-0da97b586904
 	github.com/wk8/go-ordered-map/v2 v2.1.8
 	github.com/yudai/gojsondiff v1.0.0
+	golang.org/x/sys v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -46,7 +48,6 @@ require (
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/yudai/golcs v0.0.0-20170316035057-ecda9a501e82 // indirect
 	github.com/yudai/pp v2.0.1+incompatible // indirect
-	golang.org/x/sys v0.36.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
 

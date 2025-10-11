@@ -130,24 +130,7 @@ func runBridge(cmd *cobra.Command, args []string) error {
 
 	// Bridge callback - executes the Lua script with output streaming
 	bridgeCallback := func(b bridge.Bridge) (error, error) {
-
-		// Execute the Lua script to print the header
-		err := lua.ExecuteDeviceScriptWithOutput(
-			ctx,
-			nil,
-			b.GetLuaAPI(),
-			logger,
-			blecli.DefaultBridgeLuaScript,
-			scriptArgs,
-			os.Stdout,
-			os.Stderr,
-			50*time.Millisecond,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		// Execute the Lua script to set up subscriptions
+		// Execute the Lua script
 		err = lua.ExecuteDeviceScriptWithOutput(
 			ctx,
 			nil,
@@ -155,7 +138,7 @@ func runBridge(cmd *cobra.Command, args []string) error {
 			logger,
 			scriptContent,
 			scriptArgs,
-			b.GetPTYMaster(),
+			os.Stdout,
 			os.Stderr,
 			50*time.Millisecond,
 		)
@@ -175,15 +158,15 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	_, err = bridge.RunDeviceBridge(
 		ctx,
 		&bridge.BridgeOptions{
-			Address:        deviceAddress,
-			ConnectTimeout: bridgeConnectTimeout,
-			Services: []device.SubscribeOptions{
+			BleAddress:        deviceAddress,
+			BleConnectTimeout: bridgeConnectTimeout,
+			BleSubscribeOptions: []device.SubscribeOptions{
 				{
 					Service: serviceUUID.String(),
 				},
 			},
-			Logger:      logger,
-			SymlinkPath: bridgeSymlink,
+			Logger:         logger,
+			TTYSymlinkPath: bridgeSymlink,
 		},
 		progress.Callback(),
 		bridgeCallback,

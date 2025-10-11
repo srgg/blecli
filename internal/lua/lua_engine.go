@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
+	_ "embed"
+
 	"github.com/aarzilli/golua/lua"
 	"github.com/sirupsen/logrus"
-
-	_ "embed"
 )
 
 //go:embed lua-libs/json.lua

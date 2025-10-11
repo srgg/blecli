@@ -90,17 +90,17 @@ end
 Read-only table containing bridge information (only available when running in bridge mode).
 
 **Getter Functions:**
-- `pty_name` - Returns PTY device path (e.g., "/dev/ttys010")
-- `symlink_path` - Returns symlink path to PTY (empty if not created)
+- `tty_name` - Returns TTY device path (e.g., "/dev/ttys010")
+- `tty_symlink` - Returns tty symlink (empty if not created)
 
 **Example:**
 ```lua
 -- Check if running in bridge mode
-if blim.bridge.pty_name and blim.bridge.pty_name ~= "" then
-    print("Bridge PTY:", blim.bridge.pty_name)
+if blim.bridge.tty_name and blim.bridge.tty_name ~= "" then
+    print("Bridge PTY:", blim.bridge.tty_name)
 
-    if blim.bridge.symlink_path ~= "" then
-        print("Symlink:", blim.bridge.symlink_path)
+    if blim.bridge.tty_symlink ~= "" then
+        print("TTY Symlink:", blim.bridge.tty_symlink)
     end
 else
     print("Not running in bridge mode")
@@ -510,6 +510,60 @@ Service: 180f
     Value: 85
 ```
 
+### `blim.sleep(milliseconds)`
+Pauses execution for the specified duration.
+
+**Parameters:**
+- `milliseconds` (number) - Duration to sleep (must be non-negative)
+
+**Returns:** Nothing
+
+**Example: Simple delay**
+```lua
+print("Starting...")
+blim.sleep(1000)  -- Sleep for 1 second
+print("Done!")
+```
+
+**Example: Rate-limited data collection**
+```lua
+-- Read battery level every 5 seconds
+for i = 1, 10 do
+    local char = blim.characteristic("180f", "2a19")
+    local value, err = char.read()
+    if value then
+        local battery = string.byte(value, 1)
+        print("Battery level:", battery, "%")
+    end
+
+    if i < 10 then
+        blim.sleep(5000)  -- Wait 5 seconds before next read
+    end
+end
+```
+
+**Example: Polling with timeout**
+```lua
+-- Poll for data with timeout
+local max_attempts = 10
+local attempt = 0
+
+while attempt < max_attempts do
+    local data, err = blim.bridge.pty_read()
+    if data and data ~= "" then
+        print("Received:", data)
+        break
+    end
+
+    attempt = attempt + 1
+    blim.sleep(100)  -- Poll every 100ms
+end
+
+if attempt >= max_attempts then
+    print("Timeout waiting for data")
+end
+```
+
 ---
 
 ## TODO: Upcoming API Extensions
@@ -539,7 +593,7 @@ ble.write("1234", "5678", "\x01\x00")
 ```
 
 #### `ble.write_with_response(service_uuid, char_uuid, data)`
-Writes data to a characteristic and waits for response.
+Writes data to a characteristic and waits for a response.
 
 ```lua
 -- Write with acknowledgment
@@ -658,6 +712,7 @@ All Go functions exposed to Lua are wrapped:
 - ✅ `char.read()` (characteristic handle method)
 - ✅ `blim.bridge.pty_write()` (bridge PTY write)
 - ✅ `blim.bridge.pty_read()` (bridge PTY read)
+- ✅ `blim.sleep()` (utility function for delays)
 
 **Engine Functions (`lua_engine.go`):**
 - ✅ `print()` (overridden for output capture)

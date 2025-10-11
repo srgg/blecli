@@ -2,10 +2,12 @@ package lua
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
+	"io"
 	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/aarzilli/golua/lua"
@@ -14,11 +16,11 @@ import (
 	"github.com/srg/blim/internal/device"
 )
 
-// BridgeInfo contains bridge information to expose to Lua
+// BridgeInfo bridge information exposed to Lua
 type BridgeInfo interface {
-	GetPTYName() string     // PTY device name for display
-	GetSymlinkPath() string // Symlink path (empty if not created)
-	GetPTYMaster() *os.File // PTY master for script I/O
+	GetTTYName() string    // TTY device name if created
+	GetTTYSymlink() string // Symlink path (empty if not created)
+	GetPTY() io.ReadWriter // PTY I/O as a standard Go interface (non-blocking reads /writes via ring buffers)
 }
 
 // LuaSubscriptionTable Lua subscription configuration
@@ -54,7 +56,9 @@ func (api *BLEAPI2) GetDevice() device.Device {
 	return api.device
 }
 
-// SetBridge sets the bridge information (accessed at runtime via metatable)
+// SetBridge sets the bridge information and updates the PTY strategy.
+// When a bridge is set, the ptyio field is updated to use the bridge's PTY I/O strategy.
+// When the bridge is nil, the ptyio field reverts to NilPTYIO.
 func (api *BLEAPI2) SetBridge(bridge BridgeInfo) {
 	api.logger.WithFields(logrus.Fields{
 		"bridge_set": bridge != nil,
@@ -69,43 +73,41 @@ func (api *BLEAPI2) SetBridge(bridge BridgeInfo) {
 func (api *BLEAPI2) registerBridgeInfo(L *lua.State) {
 	L.PushString("bridge")
 
-	// Create bridge table with getter functions that check at runtime
+	// Create a bridge table with getter functions that check at runtime
 	L.NewTable() // Stack: _blim_internal, "bridge", {}
 
-	// Add pty_name as a getter function
-	L.PushString("pty_name")
-	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.pty_name", func(L *lua.State) int {
+	// Add tty_name as a getter function
+	L.PushString("tty_name")
+	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.tty_name", func(L *lua.State) int {
 		if api.bridge == nil {
-			api.logger.WithField("api_ptr", fmt.Sprintf("%p", api)).Error("bridge.pty_name accessed but api.bridge is nil")
-			L.RaiseError("bridge field 'pty_name' is not available (not running in bridge mode)")
+			api.logger.WithField("api_ptr", fmt.Sprintf("%p", api)).Error("bridge.tty_name accessed but api.bridge is nil")
+			L.RaiseError("bridge field 'tty_name' is not available (not running in bridge mode)")
 			return 0
 		}
-		L.PushString(api.bridge.GetPTYName())
+		L.PushString(api.bridge.GetTTYName())
 		return 1
 	}))
 	L.SetTable(-3)
 
 	// Add symlink_path as a getter function
-	L.PushString("symlink_path")
-	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.symlink_path", func(L *lua.State) int {
+	L.PushString("tty_symlink")
+	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.tty_symlink", func(L *lua.State) int {
 		if api.bridge == nil {
-			L.RaiseError("bridge field 'symlink_path' is not available (not running in bridge mode)")
+			L.RaiseError("bridge field 'tty_symlink' is not available (not running in bridge mode)")
 			return 0
 		}
-		L.PushString(api.bridge.GetSymlinkPath())
+		L.PushString(api.bridge.GetTTYSymlink())
 		return 1
 	}))
 	L.SetTable(-3)
 
-	// Add pty_write function - writes data to the PTY master
+	// Add pty_write function - writes data to PTY via strategy pattern
 	// Usage: blim.bridge.pty_write(data)
 	// Returns: (bytes_written, nil) on success or (nil, error_message) on failure
 	L.PushString("pty_write")
 	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.pty_write", func(L *lua.State) int {
-		if api.bridge == nil {
-			L.RaiseError("bridge.pty_write() is not available (not running in bridge mode)")
-			return 0
-		}
+		// Get PTY I/O strategy (minimal LuaPTY interface - no Close/TTYName exposed)
+		ptyIO := api.bridge.GetPTY()
 
 		// Validate argument - check actual type (IsString returns true for numbers too)
 		if L.Type(1) != lua.LUA_TSTRING {
@@ -115,20 +117,21 @@ func (api *BLEAPI2) registerBridgeInfo(L *lua.State) {
 		}
 
 		data := L.ToString(1)
-		ptyMaster := api.bridge.GetPTYMaster()
-		if ptyMaster == nil {
-			L.PushNil()
-			L.PushString("PTY master not available")
-			return 2
-		}
 
-		// Write to PTY master
-		n, err := ptyMaster.Write([]byte(data))
+		// DEBUG: Log the write attempt
+		api.logger.Debugf("[pty_write] Writing %d bytes to PTY", len(data))
+
+		// Write via strategy
+		n, err := ptyIO.Write([]byte(data))
 		if err != nil {
+			api.logger.Warnf("[pty_write] Write failed: %v", err)
 			L.PushNil()
 			L.PushString(fmt.Sprintf("pty_write() failed: %v", err))
 			return 2
 		}
+
+		// DEBUG: Log successful write
+		api.logger.Debugf("[pty_write] Successfully wrote %d bytes", n)
 
 		// Return (bytes_written, nil) on success
 		L.PushInteger(int64(n))
@@ -137,16 +140,14 @@ func (api *BLEAPI2) registerBridgeInfo(L *lua.State) {
 	}))
 	L.SetTable(-3)
 
-	// Add pty_read function - reads data from the PTY master (non-blocking)
+	// Add pty_read function - reads buffered data via io.Reader interface
 	// Usage: blim.bridge.pty_read([max_bytes])
 	// Returns: (data, nil) on success, ("", nil) if no data available, or (nil, error_message) on failure
 	// max_bytes defaults to 4096 if not specified
 	L.PushString("pty_read")
 	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.pty_read", func(L *lua.State) int {
-		if api.bridge == nil {
-			L.RaiseError("bridge.pty_read() is not available (not running in bridge mode)")
-			return 0
-		}
+		// Get PTY I/O (io.ReadWriter interface)
+		ptyIO := api.bridge.GetPTY()
 
 		// Parse optional max_bytes argument (default: 4096)
 		maxBytes := 4096
@@ -159,31 +160,27 @@ func (api *BLEAPI2) registerBridgeInfo(L *lua.State) {
 			}
 		}
 
-		ptyMaster := api.bridge.GetPTYMaster()
-		if ptyMaster == nil {
-			L.PushNil()
-			L.PushString("PTY master not available")
-			return 2
-		}
+		// Allocate buffer for io.Reader
+		buf := make([]byte, maxBytes)
 
-		// Read from PTY master (non-blocking)
-		buffer := make([]byte, maxBytes)
-		n, err := ptyMaster.Read(buffer)
+		// Read via io.Reader (non-blocking, returns buffered data)
+		n, err := ptyIO.Read(buf)
 		if err != nil {
-			// Check for common non-error conditions
-			if err.Error() == "EOF" || strings.Contains(err.Error(), "resource temporarily unavailable") {
-				// No data available (non-blocking read)
+			// Handle expected non-blocking I/O errors
+			if errors.Is(err, syscall.EAGAIN) || err == io.EOF {
+				// No data available (EAGAIN) or EOF - return empty string, no error
 				L.PushString("")
 				L.PushNil()
 				return 2
 			}
+			// Unexpected error - return error
 			L.PushNil()
 			L.PushString(fmt.Sprintf("pty_read() failed: %v", err))
 			return 2
 		}
 
 		// Return (data, nil) on success
-		L.PushString(string(buffer[:n]))
+		L.PushString(string(buf[:n]))
 		L.PushNil()
 		return 2
 	}))
@@ -226,23 +223,6 @@ func (api *BLEAPI2) ExecuteScript(ctx context.Context, script string) error {
 	return api.LuaEngine.ExecuteScript(ctx, script)
 }
 
-//func (api *BLEAPI2) ExecuteScript2(ctx context.Context, script string) error {
-//	return api.LuaEngine.ExecuteScript2(ctx, script, func(L *lua.State) {
-//		// Register API
-//		// Create ble table
-//		L.NewTable()
-//
-//		// Register API functions
-//		api.registerSubscribeFunction(L)
-//		api.registerListFunction(L)
-//		api.registerDeviceInfo(L)
-//		api.registerCharacteristicFunction(L)
-//
-//		// Set global 'ble' variable
-//		L.SetGlobal("ble")
-//	})
-//}
-
 func (api *BLEAPI2) LoadScriptFile(filename string) error {
 	return api.LuaEngine.LoadScriptFile(filename)
 }
@@ -272,6 +252,9 @@ func (api *BLEAPI2) registerBlimAPI() {
 		api.registerListFunction(L)
 		api.registerDeviceInfo(L)
 		api.registerCharacteristicFunction(L)
+
+		// Register utility functions
+		api.registerSleepFunction(L)
 
 		// Register bridge info if set
 		api.registerBridgeInfo(L)
@@ -405,7 +388,7 @@ func (api *BLEAPI2) registerDeviceInfo(L *lua.State) {
 		L.PushString(dev.GetID())
 		L.SetTable(-3)
 
-		// Device Address
+		// Device BleAddress
 		L.PushString("address")
 		L.PushString(dev.GetAddress())
 		L.SetTable(-3)
@@ -842,13 +825,38 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 	L.SetTable(-3)
 }
 
+// registerSleepFunction registers the blim.sleep() utility function
+// Usage: blim.sleep(milliseconds)
+// Sleeps for the specified number of milliseconds
+func (api *BLEAPI2) registerSleepFunction(L *lua.State) {
+	api.SafePushGoFunction(L, "sleep", func(L *lua.State) int {
+		// Validate argument
+		if !L.IsNumber(1) {
+			L.RaiseError("sleep(milliseconds) expects a number argument")
+			return 0
+		}
+
+		ms := L.ToInteger(1)
+		if ms < 0 {
+			L.RaiseError("sleep(milliseconds) expects a non-negative number")
+			return 0
+		}
+
+		// Sleep for the specified duration
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+
+		return 0
+	})
+	L.SetTable(-3)
+}
+
 // Close cleans up the API resources
 func (api *BLEAPI2) Close() {
 	if api.logger != nil {
-		api.logger.WithField("lua_api_ptr", fmt.Sprintf("%p", api)).Debug("Closing BLEAPI2...")
+		api.logger.WithField("lua_api_ptr", fmt.Sprintf("%p", api)).Debug("Closing lua api...")
 	}
 	api.LuaEngine.Close()
 	if api.logger != nil {
-		api.logger.WithField("lua_api_ptr", fmt.Sprintf("%p", api)).Debug("BLEAPI2 closed")
+		api.logger.WithField("lua_api_ptr", fmt.Sprintf("%p", api)).Debug("Lua api closed")
 	}
 }

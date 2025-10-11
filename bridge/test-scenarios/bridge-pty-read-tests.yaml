@@ -6,12 +6,13 @@ test_cases:
     steps:
       - pty_slave_write: "hello from slave"
         lua: |
+          blim.sleep(50)  -- Wait for data to be available
           local data, err = blim.bridge.pty_read()
           assert(err == nil, "pty_read MUST succeed, got error: " .. tostring(err))
           assert(data == "hello from slave", "Expected 'hello from slave', got '" .. data .. "'")
 
   - name: "PTY Read: Non-Blocking Empty Read"
-    # GOAL: Verify pty_read() returns an empty string when no data available
+    # GOAL: Verify pty_read() returns an empty string when no data is available
     #
     # TEST SCENARIO: Don't write anything → pty_read() returns ("", nil)
     steps:
@@ -27,6 +28,7 @@ test_cases:
     steps:
       - pty_slave_write: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
         lua: |
+          blim.sleep(100)  -- Wait for data to be available
           local expected = string.rep("B", 64)
           local data, err = blim.bridge.pty_read(64)
           assert(err == nil, "pty_read MUST succeed, got error: " .. tostring(err))
@@ -41,6 +43,7 @@ test_cases:
     steps:
       - pty_slave_write: "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
         lua: |
+          blim.sleep(100)  -- Wait for data to be available
           local expected = string.rep("Z", 32)
           local data, err = blim.bridge.pty_read(100)
           assert(err == nil, "pty_read MUST succeed, got error: " .. tostring(err))
@@ -54,6 +57,7 @@ test_cases:
     steps:
       - pty_slave_write: [0x01, 0x02, 0x03, 0xFF, 0xFE, 0xFD]
         lua: |
+          blim.sleep(100)  -- Wait for data to be available
           local data, err = blim.bridge.pty_read()
           assert(err == nil, "pty_read MUST succeed, got error: " .. tostring(err))
           assert(#data == 6, "Expected 6 bytes, got " .. #data)
@@ -91,6 +95,7 @@ test_cases:
     steps:
       - pty_slave_write: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
         lua: |
+          blim.sleep(200)  -- Wait for data to be available (larger data needs more time)
           local expected = string.rep("X", 128)
           local data, err = blim.bridge.pty_read()
           assert(err == nil, "pty_read MUST succeed, got error: " .. tostring(err))
@@ -108,6 +113,7 @@ test_cases:
         expected_pty_slave_read: "ping"
       - pty_slave_write: "pong"
         lua: |
+          blim.sleep(100)  -- Wait for data to be available
           local data, err = blim.bridge.pty_read()
           assert(err == nil, "pty_read MUST succeed, got error: " .. tostring(err))
           assert(data == "pong", "Expected 'pong', got '" .. data .. "'")
@@ -119,11 +125,13 @@ test_cases:
     steps:
       - pty_slave_write: "Hello"
         lua: |
+          blim.sleep(100)  -- Wait for data to be available
           local data, err = blim.bridge.pty_read()
           assert(err == nil, "pty_read MUST succeed, got error: " .. tostring(err))
           assert(data == "Hello", "Expected 'Hello', got '" .. data .. "'")
       - pty_slave_write: "World"
         lua: |
+          blim.sleep(100)  -- Wait for data to be available
           local data, err = blim.bridge.pty_read()
           assert(err == nil, "pty_read MUST succeed, got error: " .. tostring(err))
           assert(data == "World", "Expected 'World', got '" .. data .. "'")

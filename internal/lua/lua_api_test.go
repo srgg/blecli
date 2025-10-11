@@ -2,14 +2,62 @@ package lua
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"testing"
 	"time"
 
 	_ "embed"
 
-	"github.com/srg/blim/internal/testutils/mocks"
 	suitelib "github.com/stretchr/testify/suite"
 )
+
+// MockStrategy implements io.ReadWriter for testing
+type MockStrategy struct {
+	WriteFunc func(data []byte) (int, error)
+	ReadFunc  func(p []byte) (n int, err error)
+	CloseFunc func() error
+}
+
+func (m *MockStrategy) Write(data []byte) (int, error) {
+	if m.WriteFunc != nil {
+		return m.WriteFunc(data)
+	}
+	return 0, fmt.Errorf("PTY operations not available (not running in bridge mode)")
+}
+
+func (m *MockStrategy) Read(p []byte) (int, error) {
+	if m.ReadFunc != nil {
+		return m.ReadFunc(p)
+	}
+	return 0, fmt.Errorf("PTY operations not available (not running in bridge mode)")
+}
+
+func (m *MockStrategy) Close() error {
+	if m.CloseFunc != nil {
+		return m.CloseFunc()
+	}
+	return nil
+}
+
+// testBridgeInfo implements BridgeInfo for testing
+type testBridgeInfo struct {
+	ttyName        string
+	ttySymlinkPath string
+	ptyIO          *MockStrategy
+}
+
+func (t *testBridgeInfo) GetTTYName() string {
+	return t.ttyName
+}
+
+func (t *testBridgeInfo) GetTTYSymlink() string {
+	return t.ttySymlinkPath
+}
+
+func (t *testBridgeInfo) GetPTY() io.ReadWriter {
+	return t.ptyIO
+}
 
 // BLEAPI2TestSuite
 type LuaApiTestSuite struct {
@@ -575,51 +623,54 @@ func (suite *LuaApiTestSuite) TestLuaBridgeAccess() {
 		err := suite.ExecuteScript(script)
 		suite.NoError(err, "blim.bridge should exist for mode detection")
 
-		// Verify calling pty_name() raises error
+		// Verify calling tty_name() raises error
 		script = `
-			local pty = blim.bridge.pty_name()
+			local pty = blim.bridge.tty_name()
 		`
 		err = suite.ExecuteScript(script)
 		suite.AssertLuaError(err, "not available (not running in bridge mode)")
 
-		// Verify calling symlink_path() raises error
+		// Verify calling tty_symlink() raises error
 		script = `
-			local symlink = blim.bridge.symlink_path()
+			local symlink = blim.bridge.tty_symlink()
 		`
 		err = suite.ExecuteScript(script)
 		suite.AssertLuaError(err, "not available (not running in bridge mode)")
 	})
 
 	suite.Run("Bridge is set - PTY and symlink info accessible", func() {
-		// GOAL: Verify blim.bridge contains pty_name and symlink_path when bridge is set
+		// GOAL: Verify blim.bridge contains tty_name and tty_symlink when bridge is set
 		//
-		// TEST SCENARIO: SetBridge() called with mock bridge → blim.bridge populated → verify fields accessible
+		// TEST SCENARIO: SetBridge() called with test bridge → blim.bridge populated → verify fields accessible
 
-		// Create mock bridge using mockery-generated mock
-		mockBridge := mocks.NewMockBridgeInfo(suite.T())
-		mockBridge.On("GetPTYName").Return("/dev/ttys999")
-		mockBridge.On("GetSymlinkPath").Return("/tmp/test-bridge-link")
+		// Create test bridge with mock strategy
+		mockStrategy := &MockStrategy{}
+		testBridge := &testBridgeInfo{
+			ttyName:        "/dev/ttys999",
+			ttySymlinkPath: "/tmp/test-bridge-link",
+			ptyIO:          mockStrategy,
+		}
 
 		// Set bridge info in Lua API
-		suite.LuaApi.SetBridge(mockBridge)
+		suite.LuaApi.SetBridge(testBridge)
 
 		script := `
 			-- Verify blim.bridge table exists
 			assert(blim.bridge ~= nil, "blim.bridge should exist")
 			assert(type(blim.bridge) == "table", "blim.bridge should be table")
 
-			-- Verify pty_name field
-			assert(blim.bridge.pty_name() ~= nil, "pty_name should be set")
-			assert(type(blim.bridge.pty_name()) == "string", "pty_name should be string")
-			assert(blim.bridge.pty_name() == "/dev/ttys999", "pty_name should match mock value")
+			-- Verify tty_name field
+			assert(blim.bridge.tty_name() ~= nil, "tty_name should be set")
+			assert(type(blim.bridge.tty_name()) == "string", "tty_name should be string")
+			assert(blim.bridge.tty_name() == "/dev/ttys999", "tty_name should match mock value")
 
-			-- Verify symlink_path field
-			assert(blim.bridge.symlink_path() ~= nil, "symlink_path should be set")
-			assert(type(blim.bridge.symlink_path()) == "string", "symlink_path should be string")
-			assert(blim.bridge.symlink_path() == "/tmp/test-bridge-link", "symlink_path should match mock value")
+			-- Verify tty_symlink field
+			assert(blim.bridge.tty_symlink() ~= nil, "tty_symlink should be set")
+			assert(type(blim.bridge.tty_symlink()) == "string", "tty_symlink should be string")
+			assert(blim.bridge.tty_symlink() == "/tmp/test-bridge-link", "tty_symlink should match mock value")
 
-			print("✓ blim.bridge.pty_name: " .. blim.bridge.pty_name())
-			print("✓ blim.bridge.symlink_path: " .. blim.bridge.symlink_path())
+			print("✓ blim.bridge.tty_name: " .. blim.bridge.tty_name())
+			print("✓ blim.bridge.tty_symlink: " .. blim.bridge.tty_symlink())
 		`
 		err := suite.ExecuteScript(script)
 		suite.NoError(err, "Should access bridge info when set")

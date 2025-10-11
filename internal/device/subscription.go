@@ -137,10 +137,10 @@ func (c *BLEConnection) Subscribe(opts []*SubscribeOptions, mode StreamMode, max
 	}).Debug("Subscribe called - about to create goroutine")
 
 	c.connMutex.Lock()
-	defer c.connMutex.Unlock()
 
 	// Check if connected (we already hold the lock, so use safe version)
 	if !c.isConnectedInternal() {
+		c.connMutex.Unlock()
 		return fmt.Errorf("device disconnected - reconnect before subscribing to Lua notifications")
 	}
 
@@ -149,6 +149,7 @@ func (c *BLEConnection) Subscribe(opts []*SubscribeOptions, mode StreamMode, max
 	for _, opt := range opts {
 		characteristicsToSubscribe, err := c.validateSubscribeOptions(opt, true)
 		if err != nil {
+			c.connMutex.Unlock()
 			return fmt.Errorf("lua subscription %w", err)
 		}
 
@@ -160,8 +161,26 @@ func (c *BLEConnection) Subscribe(opts []*SubscribeOptions, mode StreamMode, max
 
 	// If no characteristics support notifications after validation
 	if len(allCharacteristics) == 0 {
+		c.connMutex.Unlock()
 		return fmt.Errorf("no characteristics available for Lua subscription across all specified services")
 	}
+
+	// Release lock before calling BLESubscribe (which acquires its own locks)
+	c.connMutex.Unlock()
+
+	// CRITICAL: Enable BLE notifications by calling BLESubscribe for each service
+	// This must be done outside the lock to avoid deadlock (BLESubscribe acquires its own locks)
+	for _, opt := range opts {
+		// BLESubscribe will validate again and call client.Subscribe() to enable CCCD (Client Characteristic Configuration Descriptor)
+		err := c.BLESubscribe(opt)
+		if err != nil {
+			return fmt.Errorf("failed to enable BLE notifications: %w", err)
+		}
+	}
+
+	// Re-acquire lock for creating subscription
+	c.connMutex.Lock()
+	defer c.connMutex.Unlock()
 
 	sub := &Subscription{
 		Chars:    allCharacteristics,

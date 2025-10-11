@@ -171,7 +171,7 @@ test_cases:
 
       === BLE-PTY Bridge is Active ===
       Device: {{.DeviceAddress}}
-      PTY: {{.PTY}}
+      TTY: {{.TTY}}
 
       Service: 1234
       Characteristics: 1

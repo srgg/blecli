@@ -10,6 +10,7 @@ blim.list = native.list
 blim.characteristic = native.characteristic
 blim.device = native.device
 blim.bridge = native.bridge
+blim.sleep = native.sleep
 
 
 
