@@ -151,7 +151,7 @@ func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection) *
 
 func (c *BLECharacteristic) EnqueueValue(v *BLEValue) {
 	// Check if channel is closed before attempting to send
-	// This prevents panic from send on closed channel if BLE callbacks fire after shutdown
+	// This prevents panic from sending on a closed channel if BLE callbacks fire after shutdown
 	if c.closed.Load() {
 		releaseBLEValue(v)
 		return

@@ -342,6 +342,13 @@ func (api *BLEAPI2) registerListFunction(L *lua.State) {
 			// Create service info table
 			L.NewTable()
 
+			// Add name field (only if known)
+			if knownName := service.KnownName(); knownName != "" {
+				L.PushString("name")
+				L.PushString(knownName)
+				L.SetTable(-3)
+			}
+
 			// Add characteristics array
 			L.PushString("characteristics")
 			L.NewTable()
@@ -756,6 +763,13 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 		L.PushString(char.GetUUID())
 		L.SetTable(-3)
 
+		// Field: name (only if known)
+		if knownName := char.KnownName(); knownName != "" {
+			L.PushString("name")
+			L.PushString(knownName)
+			L.SetTable(-3)
+		}
+
 		// Field: service_uuid
 		L.PushString("service")
 		L.PushString(serviceUUID)
@@ -790,13 +804,24 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 
 		L.SetTable(-3)
 
-		// Field: descriptors (array)
+		// Field: descriptors (array of objects with uuid and name)
 		L.PushString("descriptors")
 		L.NewTable()
 		descriptors := char.GetDescriptors()
 		for i, desc := range descriptors {
 			L.PushInteger(int64(i + 1))
+			// Create descriptor object
+			L.NewTable()
+			// Add uuid
+			L.PushString("uuid")
 			L.PushString(desc.GetUUID())
+			L.SetTable(-3)
+			// Add name (only if known)
+			if knownName := desc.KnownName(); knownName != "" {
+				L.PushString("name")
+				L.PushString(knownName)
+				L.SetTable(-3)
+			}
 			L.SetTable(-3)
 		}
 		L.SetTable(-3)

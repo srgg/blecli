@@ -223,15 +223,15 @@ test_cases:
         Service Data: none
         GATT Services: 3
 
-      [1] Service: 0x1234
-        [1.1] Characteristic: 0x5678 (props: 0x12)
+      [1] Service: 1234
+        [1.1] Characteristic: 5678 (props: 0x12)
 
-      [2] Service: 0x180d
-        [2.1] Characteristic: 0x2a37 (props: 0x12)
-        [2.2] Characteristic: 0x2a38 (props: 0x12)
+      [2] Service: Heart Rate (180d)
+        [2.1] Characteristic: Heart Rate Measurement (2a37) (props: 0x12)
+        [2.2] Characteristic: Body Sensor Location (2a38) (props: 0x12)
 
-      [3] Service: 0x180f
-        [3.1] Characteristic: 0x2a19 (props: 0x12)
+      [3] Service: Battery Service (180f)
+        [3.1] Characteristic: Battery Level (2a19) (props: 0x12)
 
 # GOAL: Verify that inspect.lua produce expected JSON output format
 #
@@ -267,8 +267,10 @@ test_cases:
                   indicate: false
                 descriptors: []
           - uuid: "180d"
+            name: "Heart Rate"
             characteristics:
               - uuid: "2a37"
+                name: "Heart Rate Measurement"
                 properties:
                   read: true
                   write: false
@@ -276,6 +278,7 @@ test_cases:
                   indicate: false
                 descriptors: []
               - uuid: "2a38"
+                name: "Body Sensor Location"
                 properties:
                   read: true
                   write: false
@@ -283,8 +286,10 @@ test_cases:
                   indicate: false
                 descriptors: []
           - uuid: "180f"
+            name: "Battery Service"
             characteristics:
               - uuid: "2a19"
+                name: "Battery Level"
                 properties:
                   read: true
                   write: false

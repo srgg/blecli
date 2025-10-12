@@ -16,13 +16,13 @@ all: build test
 
 # Build the application with LuaJIT
 .PHONY: build
-build:
+build: generate-bledb
 	@echo "Building $(BINARY_NAME) with LuaJIT for maximum performance..."
 	go build $(BUILD_FLAGS) -o $(BINARY_NAME) ./cmd/${BINARY_NAME}
 
 # Clean everything
 .PHONY: clean
-clean: clean-mocks clean-docs
+clean: clean-mocks clean-docs clean-bledb
 	@echo "Cleaning build artifacts..."
 	rm -f $(BINARY_NAME)
 	rm -rf $(COVERAGE_DIR)
@@ -38,7 +38,7 @@ generate-bledb:
 
 # Run all tests or a specific test by name
 .PHONY: test
-test: generate-bledb generate-mocks
+test: generate
 	@if [ -z "$(TEST)" ]; then \
 		echo "Running all tests..."; \
 		go test $(BUILD_FLAGS) -v ./...; \
@@ -192,6 +192,13 @@ clean-mocks:
 	rm -rf pkg/mocks/mock_*.go
 	@echo "Generated mocks cleaned"
 
+# Clean generated BLE database
+.PHONY: clean-bledb
+clean-bledb:
+	@echo "Cleaning generated BLE database..."
+	rm -f internal/bledb/bledb_generated.go
+	@echo "Generated BLE database cleaned"
+
 # Generate all code (BLE database, mocks, etc.)
 .PHONY: generate
 generate: generate-bledb generate-mocks
@@ -261,9 +268,10 @@ help:
 	@echo "  generate-mocks   - Generate mocks using mockery"
 	@echo ""
 	@echo "Maintenance:"
-	@echo "  clean            - Clean everything (build, mocks, docs)"
+	@echo "  clean            - Clean everything (build, mocks, docs, bledb)"
 	@echo "  clean-mocks      - Clean generated mocks only"
 	@echo "  clean-docs       - Clean generated docs only"
+	@echo "  clean-bledb      - Clean generated BLE database only"
 	@echo "  tidy             - Tidy dependencies"
 	@echo "  verify           - Verify dependencies"
 	@echo "  install-tools    - Install development tools"

@@ -1,18 +1,6 @@
 -- BLE Inspect: Device Inspection
 -- This script replicates the output format of the Go outputInspectText function
 
--- Device Information Service (DIS) characteristic mapping
-local DIS_CHARACTERISTICS = {
-    ["2A29"] = "Manufacturer Name",
-    ["2A24"] = "Model Number",
-    ["2A25"] = "Serial Number",
-    ["2A26"] = "Firmware Revision",
-    ["2A27"] = "Hardware Revision",
-    ["2A28"] = "Software Revision",
-    ["2A23"] = "System ID",
-    ["2A50"] = "PnP ID"
-}
-
 -- Extract Device Information Service data
 local function extract_dis_info(services)
     for _, service in ipairs(services) do
@@ -20,18 +8,8 @@ local function extract_dis_info(services)
         if string.upper(service.uuid) == "180A" then
             local dis_data = {}
             for _, char in ipairs(service.characteristics) do
-                local char_uuid_upper = string.upper(char.uuid)
-                local char_name = DIS_CHARACTERISTICS[char_uuid_upper]
-                if char_name and char.value and char.value ~= "" then
-                    -- For string characteristics, use ASCII representation
-                    if char_uuid_upper == "2A29" or char_uuid_upper == "2A24" or char_uuid_upper == "2A25" or
-                       char_uuid_upper == "2A26" or char_uuid_upper == "2A27" or char_uuid_upper == "2A28" then
-                        dis_data[char_name] = blim.to_ascii(char.value)
-                    else
-                        -- For other characteristics (System ID, PnP ID), keep as hex
-                        dis_data[char_name] = blim.bytes_to_hex(char.value)
-                    end
-                end
+                local char_name = blim.format_named(char)
+                dis_data[char_name] = blim.bytes_to_hex(char.value)
             end
             return dis_data
         end
@@ -66,6 +44,7 @@ local function collect_device_data()
         local service_info = services[service_uuid]  -- Lookup service info by UUID
         local service_data = {
             uuid = service_uuid,
+            name = service_info.name,  -- Copy optional name field
             characteristics = {}
         }
 
@@ -94,6 +73,7 @@ local function collect_device_data()
 
                 table.insert(service_data.characteristics, {
                     uuid = char_uuid,
+                    name = char_info.name,  -- Copy optional name field
                     properties = props,
                     value = value,
                     descriptors = char_info.descriptors or {}
@@ -187,13 +167,15 @@ local function output_text(data)
 
     -- List services with characteristics
     for service_index, service in ipairs(data.services) do
-        -- Show service name if it's DIS
-        local service_name = service.uuid
-        if string.upper(service.uuid) == "180A" then
-            service_name = "Device Information Service (0x180A)"
-        else
-            service_name = string.format("0x%s", service.uuid)
-        end
+        ---- Show service name if it's DIS
+        --local service_name = service.uuid
+        --if string.upper(service.uuid) == "180A" then
+        --    service_name = "Device Information Service (0x180A)"
+        --else
+        --    service_name = string.format("0x%s", service.uuid)
+        --end
+
+        local service_name = blim.format_named(service)
         io.write(string.format("\n[%d] Service: %s\n", service_index, service_name))
 
         for char_index, char in ipairs(service.characteristics) do
@@ -205,8 +187,9 @@ local function output_text(data)
             if char.properties.indicate then props = props + 0x20 end
 
             -- Show characteristic name if it's a known DIS characteristic
-            local char_name = DIS_CHARACTERISTICS[string.upper(char.uuid)]
-            local char_display = char_name and string.format("%s (0x%s)", char_name, char.uuid) or string.format("0x%s", char.uuid)
+            local char_display = blim.format_named(char)
+            --local char_name = DIS_CHARACTERISTICS[string.upper(char.uuid)]
+            --local char_display = char_name and string.format("%s (0x%s)", char_name, char.uuid) or string.format("0x%s", char.uuid)
 
             io.write(string.format("  [%d.%d] Characteristic: %s (props: 0x%02X)\n",
                 service_index, char_index, char_display, props))
@@ -226,8 +209,9 @@ local function output_text(data)
 
             -- Show descriptors if available
             if #char.descriptors > 0 then
-                for _, descriptor_uuid in ipairs(char.descriptors) do
-                    io.write(string.format("      descriptor: %s\n", descriptor_uuid))
+                for _, descriptor in ipairs(char.descriptors) do
+                    local descriptor_display = blim.format_named(descriptor)
+                    io.write(string.format("      descriptor: %s\n", descriptor_display))
                 end
             end
         end

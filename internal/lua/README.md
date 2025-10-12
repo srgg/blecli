@@ -204,7 +204,11 @@ end
 ### `blim.list()`
 Returns a table mapping service UUIDs to service info.
 
-**Returns:** `{ [service_uuid] = { characteristics = {char_uuid, ...} } }`
+**Returns:** `{ [service_uuid] = { name = "...", characteristics = {char_uuid, ...} } }`
+
+**Service info fields:**
+- `name` (string, optional) - Human-readable service name (e.g., "Heart Rate" for UUID "180d"). Only present for standard BLE services.
+- `characteristics` (array) - Array of characteristic UUIDs
 
 **Example:**
 ```lua
@@ -447,12 +451,15 @@ Returns a characteristic handle with metadata and methods.
 **Handle fields:**
 - `uuid` (string) - Characteristic UUID
 - `service` (string) - Parent service UUID
+- `name` (string, optional) - Human-readable characteristic name (e.g., "Heart Rate Measurement" for UUID "2a37"). Only present for standard BLE characteristics.
 - `properties` (table) - Boolean flags for each property:
   - `read` (boolean) - Supports read operations
   - `write` (boolean) - Supports write operations
   - `notify` (boolean) - Supports notifications
   - `indicate` (boolean) - Supports indications
-- `descriptors` (array) - Array of descriptor UUIDs (1-indexed)
+- `descriptors` (array) - Array of descriptor objects (1-indexed), each containing:
+  - `uuid` (string) - Descriptor UUID
+  - `name` (string, optional) - Human-readable descriptor name. Only present for standard BLE descriptors.
 
 **Handle methods:**
 - `read()` → `data, error` - Reads characteristic value from device

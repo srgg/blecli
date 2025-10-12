@@ -16,6 +16,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -25,6 +27,17 @@ const (
 	characteristicURL = "https://raw.githubusercontent.com/NordicSemiconductor/bluetooth-numbers-database/master/v1/characteristic_uuids.json"
 	descriptorURL     = "https://raw.githubusercontent.com/NordicSemiconductor/bluetooth-numbers-database/master/v1/descriptor_uuids.json"
 	vendorURL         = "https://raw.githubusercontent.com/NordicSemiconductor/bluetooth-numbers-database/master/v1/company_ids.json"
+
+	bsigServiceURL        = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/service_uuids.yaml"
+	bsigSdoURL            = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/sdo_uuids.yaml"
+	bsigCharacteristicURL = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/characteristic_uuids.yaml"
+	bsigDescriptorURL     = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/descriptors.yaml"
+	bsigDeclarationURL    = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/declarations.yaml"
+	bsigVendorURL         = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/company_identifiers/company_identifiers.yaml"
+	bsigUnitURL           = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/units.yaml"
+	bsigMemberUUIDsURL    = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/member_uuids.yaml"
+
+	bleakURL = "https://raw.githubusercontent.com/hbldh/bleak/refs/heads/develop/bleak/uuids.py"
 )
 
 //go:embed bledb.go.tmpl
@@ -44,10 +57,13 @@ type templateData struct {
 	CharacteristicURL     string
 	DescriptorURL         string
 	VendorURL             string
+	BleakURL              string
 	ServiceEntries        []templateEntry
 	CharacteristicEntries []templateEntry
 	DescriptorEntries     []templateEntry
 	VendorEntries         []templateEntry
+	UnitEntries           []templateEntry
+	BleakEntries          []templateEntry
 }
 
 // templateEntry represents a UUID entry in the template.
@@ -64,6 +80,7 @@ const (
 	Characteristic BLEType = "Characteristic"
 	Descriptor     BLEType = "Descriptor"
 	Vendor         BLEType = "Vendor"
+	Unit           BLEType = "Unit"
 	Other          BLEType = "Other"
 )
 
@@ -114,6 +131,116 @@ func run() error {
 		return err
 	}
 
+	// -- Merge Bluetooth SIG data
+
+	// BSIG Services
+	bsigServicesPath, err := ensureCached("service_uuids.yaml", bsigServiceURL)
+	if err != nil {
+		return err
+	}
+
+	bsigServices, err := parseBluetoothSIGYAML(bsigServicesPath, Service)
+	if err != nil {
+		return err
+	}
+
+	services = append(services, bsigServices...)
+
+	bsigSDOPath, err := ensureCached("sdo_uuids.yaml", bsigSdoURL)
+	if err != nil {
+		return err
+	}
+
+	bsigSDOs, err := parseBluetoothSIGYAML(bsigSDOPath, Service)
+	if err != nil {
+		return err
+	}
+
+	services = append(services, bsigSDOs...)
+
+	// BSIG Characteristics
+	bsigCharacteristicsPath, err := ensureCached("characteristic_uuids.yaml", bsigCharacteristicURL)
+	if err != nil {
+		return err
+	}
+	bsigCharacteristics, err := parseBluetoothSIGYAML(bsigCharacteristicsPath, Characteristic)
+	if err != nil {
+		return err
+	}
+
+	characteristics = append(characteristics, bsigCharacteristics...)
+
+	// BSIG Descriptors
+	bsigDescriptorsPath, err := ensureCached("descriptors.yaml", bsigDescriptorURL)
+	if err != nil {
+		return err
+	}
+	bsigDescriptors, err := parseBluetoothSIGYAML(bsigDescriptorsPath, Descriptor)
+	if err != nil {
+		return err
+	}
+
+	descriptors = append(descriptors, bsigDescriptors...)
+
+	// BSIG Declarations
+	bsigDeclarationsPath, err := ensureCached("declarations.yaml", bsigDeclarationURL)
+	if err != nil {
+		return err
+	}
+	bsigDeclarations, err := parseBluetoothSIGYAML(bsigDeclarationsPath, Descriptor)
+	if err != nil {
+		return err
+	}
+
+	descriptors = append(descriptors, bsigDeclarations...)
+
+	// BSIG Vendors
+	bsigVendorsPath, err := ensureCached("company_identifiers.yaml", bsigVendorURL)
+	if err != nil {
+		return err
+	}
+
+	bsigVendors, err := parseBluetoothSIGYAML(bsigVendorsPath, Vendor)
+	if err != nil {
+		return err
+	}
+
+	vendors = append(vendors, bsigVendors...)
+
+	// BSIG Units
+	bsigUnitsPath, err := ensureCached("units.yaml", bsigUnitURL)
+	if err != nil {
+		return err
+	}
+	bsigUnits, err := parseBluetoothSIGYAML(bsigUnitsPath, Unit)
+	if err != nil {
+		return err
+	}
+
+	// -- Last Hope Bleak unsorted UUIDs
+	bleakPath, err := ensureCached("bleak_uuids.py", bleakURL)
+	if err != nil {
+		return err
+	}
+
+	bleakEntries, err := parseBleakUUIDs(bleakPath)
+	if err != nil {
+		return err
+	}
+
+	// -- Merge BSIG Member UUIDs with Bleak UUIDS as both are lost hope lookup
+	bsigMemberUUIDsPath, err := ensureCached("member_uuids.yaml", bsigMemberUUIDsURL)
+	if err != nil {
+		return err
+	}
+
+	bsigMemberUUIDs, err := parseBluetoothSIGYAML(bsigMemberUUIDsPath, Other)
+	if err != nil {
+		return err
+	}
+
+	bleakEntries = append(bleakEntries, bsigMemberUUIDs...)
+
 	timestamp := time.Now().UTC().Format(time.RFC3339)
 
 	f, err := os.Create(outFile)
@@ -122,7 +249,7 @@ func run() error {
 	}
 	defer f.Close()
 
-	if err := writeGeneratedFile(f, services, characteristics, descriptors, vendors, timestamp); err != nil {
+	if err := writeGeneratedFile(f, services, characteristics, descriptors, vendors, bsigUnits, bleakEntries, timestamp); err != nil {
 		return fmt.Errorf("failed to write generated file: %w", err)
 	}
 	fmt.Println("Generated", outFile)
@@ -219,8 +346,148 @@ func parseJSONArray(path string, bleType BLEType) ([]rawEntry, error) {
 	return entries, nil
 }
 
+// parseBluetoothSIGYAML parses a Bluetooth SIG YAML file and returns a single consolidated slice of rawEntry.
+// Vendor entries come from "company_identifiers" (value + name) and are always Vendor type.
+// Other BLE UUIDs come from "uuids" section (uuid + name) and get the caller-specified bleType.
+// Fails if neither section is present or contains no valid entries.
+func parseBluetoothSIGYAML(path string, bleType BLEType) ([]rawEntry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read SIG YAML file %s: %w", path, err)
+	}
+
+	var root map[string]interface{}
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("failed to parse SIG YAML %s: %w", path, err)
+	}
+
+	entries := make([]rawEntry, 0)
+
+	// --- Parse Vendor entries ---
+	if companiesRaw, ok := root["company_identifiers"]; ok {
+		companies, ok := companiesRaw.([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid company_identifiers format in %s", path)
+		}
+
+		for _, c := range companies {
+			compMap, ok := c.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			uuid := ""
+			if v, ok := compMap["value"]; ok {
+				switch v := v.(type) {
+				case int:
+					uuid = fmt.Sprintf("%d", v)
+				case float64:
+					uuid = fmt.Sprintf("%d", int(v))
+				case string:
+					uuid = v
+				default:
+					uuid = fmt.Sprintf("%v", v)
+				}
+			}
+
+			name := ""
+			if n, ok := compMap["name"].(string); ok {
+				name = n
+			}
+
+			if uuid != "" && name != "" {
+				entries = append(entries, rawEntry{
+					UUID: uuid,
+					Name: name,
+					Type: Vendor, // always Vendor
+				})
+			}
+		}
+	}
+
+	// --- Parse Non-Vendor BLE UUIDs ---
+	if uuidsRaw, ok := root["uuids"]; ok {
+		uuids, ok := uuidsRaw.([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid uuids format in %s", path)
+		}
+
+		for _, u := range uuids {
+			uuidMap, ok := u.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			uuid := ""
+			if v, ok := uuidMap["uuid"]; ok {
+				switch v := v.(type) {
+				case int:
+					uuid = fmt.Sprintf("%d", v)
+				case float64:
+					uuid = fmt.Sprintf("%d", int(v))
+				case string:
+					uuid = v
+				default:
+					uuid = fmt.Sprintf("%v", v)
+				}
+			}
+
+			name := ""
+			if n, ok := uuidMap["name"].(string); ok {
+				name = n
+			}
+
+			if uuid != "" && name != "" {
+				entries = append(entries, rawEntry{
+					UUID: uuid,
+					Name: name,
+					Type: bleType, // caller-specified type
+				})
+			}
+		}
+	}
+
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("SIG YAML file %s contains no valid company_identifiers or uuids", path)
+	}
+
+	return entries, nil
+}
+
+// parseBleakUUIDs extracts UUID/name pairs from Bleak's uuids.py file.
+func parseBleakUUIDs(path string) ([]rawEntry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Bleak file %s: %w", path, err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var entries []rawEntry
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Match lines like:  "9fa480e0-4967-4542-9390-d343dc5d04ae": "Apple Nearby Service",
+		if strings.HasPrefix(line, "\"") && strings.Contains(line, ":") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			uuid := strings.Trim(parts[0], "\" ")
+			name := strings.Trim(parts[1], " \",")
+			if uuid != "" && name != "" {
+				entries = append(entries, rawEntry{
+					UUID: uuid,
+					Name: name,
+					Type: Other,
+				})
+			}
+		}
+	}
+	return entries, nil
+}
+
 // writeGeneratedFile writes the BLE database to a Go source file using a template.
-func writeGeneratedFile(f *os.File, services, characteristics, descriptors, vendors []rawEntry, timestamp string) error {
+func writeGeneratedFile(f *os.File, services, characteristics, descriptors, vendors, units, bleakEntries []rawEntry, timestamp string) error {
 	tmpl, err := template.New("bledb").Parse(codeTemplate)
 	if err != nil {
 		return fmt.Errorf("failed to parse template: %w", err)
@@ -280,10 +547,13 @@ func writeGeneratedFile(f *os.File, services, characteristics, descriptors, vend
 		CharacteristicURL:     characteristicURL,
 		DescriptorURL:         descriptorURL,
 		VendorURL:             vendorURL,
+		BleakURL:              bleakURL,
 		ServiceEntries:        convertEntries(services, Service),
 		CharacteristicEntries: convertEntries(characteristics, Characteristic),
 		DescriptorEntries:     convertEntries(descriptors, Descriptor),
 		VendorEntries:         convertEntries(vendors, Vendor),
+		UnitEntries:           convertEntries(units, Unit),
+		BleakEntries:          convertEntries(bleakEntries, Other),
 	}
 
 	if err := tmpl.Execute(f, data); err != nil {

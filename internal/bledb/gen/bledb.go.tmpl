@@ -5,6 +5,8 @@
 //   Characteristics: {{.CharacteristicURL}}
 //   Descriptors:     {{.DescriptorURL}}
 //   Vendors:         {{.VendorURL}}
+//   BleakURL:        {{.BleakURL}}
+//
 
 package bledb
 
@@ -33,39 +35,78 @@ var (
 		{{printf "%q" .UUID}}: {{printf "%q" .Name}},
 {{- end}}
 	}
+	unitMap         = map[string]string{
+{{- range .UnitEntries}}
+		{{printf "%q" .UUID}}: {{printf "%q" .Name}},
+{{- end}}
+	}
+	bleakMap         = map[string]string{
+{{- range .BleakEntries}}
+		{{printf "%q" .UUID}}: {{printf "%q" .Name}},
+{{- end}}
+	}
 )
 
 // LookupService returns the name for a given service UUID.
 // If the UUID is not found, returns an empty string.
 func LookupService(uuid string) string {
-	if name, ok := serviceMap[normalize(uuid)]; ok {
+   normalized := normalize(uuid)
+	if name, ok := serviceMap[normalized]; ok {
 		return name
 	}
-	return ""
+	return lookupInBleakUUIDs(normalized)
 }
 
 // LookupCharacteristic returns the name for a given characteristic UUID.
 // If the UUID is not found, returns an empty string.
 func LookupCharacteristic(uuid string) string {
-	if name, ok := characteristicMap[normalize(uuid)]; ok {
+    normalized := normalize(uuid)
+	if name, ok := characteristicMap[normalized]; ok {
 		return name
 	}
-	return ""
+	return lookupInBleakUUIDs(normalized)
 }
 
 // LookupDescriptor returns the name for a given descriptor UUID.
 // If the UUID is not found, returns an empty string.
 func LookupDescriptor(uuid string) string {
-	if name, ok := descriptorMap[normalize(uuid)]; ok {
+    normalized := normalize(uuid)
+	if name, ok := descriptorMap[normalized]; ok {
 		return name
 	}
-	return ""
+	return lookupInBleakUUIDs(normalized)
 }
 
 // LookupVendor returns the name for a given vendor ID.
 // If the ID is not found, returns an empty string.
 func LookupVendor(id string) string {
-	if name, ok := vendorMap[normalize(id)]; ok {
+    normalized := normalize(id)
+	if name, ok := vendorMap[normalized]; ok {
+		return name
+	}
+	return lookupInBleakUUIDs(normalized)
+}
+
+// LookupUnit returns the name of a Bluetooth measurement unit for the given UUID.
+// If the UUID is not found in the unit map, returns an empty string.
+func LookupUnit(uuid string) string {
+	normalized := normalize(uuid)
+	if name, ok := unitMap[normalized]; ok {
+		return name
+	}
+	return lookupInBleakUUIDs(normalized)
+}
+
+// lookupInBleakUUIDs returns the name for a given UUID
+// by checking the Bleak project database as a fallback.
+//
+// The Bleak project is MIT-licensed and contains both standard and
+// proprietary/vendor-specific BLE UUIDs (e.g., Apple Nearby, ANCS).
+//
+// Only used if the UUID was not found in the primary Nordic database.
+// Returns an empty string if the UUID is unknown.
+func lookupInBleakUUIDs(normalizedId string) string {
+	if name, ok := bleakMap[normalizedId]; ok {
 		return name
 	}
 	return ""
