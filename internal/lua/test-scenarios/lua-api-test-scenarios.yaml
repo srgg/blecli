@@ -224,14 +224,18 @@ test_cases:
         GATT Services: 3
 
       [1] Service: 1234
-        [1.1] Characteristic: 5678 (props: 0x12)
+        [1.1] Characteristic: 5678
+            properties: Read, Notify
 
       [2] Service: Heart Rate (180d)
-        [2.1] Characteristic: Heart Rate Measurement (2a37) (props: 0x12)
-        [2.2] Characteristic: Body Sensor Location (2a38) (props: 0x12)
+        [2.1] Characteristic: Heart Rate Measurement (2a37)
+            properties: Read, Notify
+        [2.2] Characteristic: Body Sensor Location (2a38)
+            properties: Read, Notify
 
       [3] Service: Battery Service (180f)
-        [3.1] Characteristic: Battery Level (2a19) (props: 0x12)
+        [3.1] Characteristic: Battery Level (2a19)
+            properties: Read, Notify
 
 # GOAL: Verify that inspect.lua produce expected JSON output format
 #
@@ -261,10 +265,12 @@ test_cases:
             characteristics:
               - uuid: "5678"
                 properties:
-                  read: true
-                  write: false
-                  notify: true
-                  indicate: false
+                  read:
+                    value: 2
+                    name: "Read"
+                  notify:
+                    value: 16
+                    name: "Notify"
                 descriptors: []
           - uuid: "180d"
             name: "Heart Rate"
@@ -272,18 +278,22 @@ test_cases:
               - uuid: "2a37"
                 name: "Heart Rate Measurement"
                 properties:
-                  read: true
-                  write: false
-                  notify: true
-                  indicate: false
+                  read:
+                    value: 2
+                    name: "Read"
+                  notify:
+                    value: 16
+                    name: "Notify"
                 descriptors: []
               - uuid: "2a38"
                 name: "Body Sensor Location"
                 properties:
-                  read: true
-                  write: false
-                  notify: true
-                  indicate: false
+                  read:
+                    value: 2
+                    name: "Read"
+                  notify:
+                    value: 16
+                    name: "Notify"
                 descriptors: []
           - uuid: "180f"
             name: "Battery Service"
@@ -291,10 +301,12 @@ test_cases:
               - uuid: "2a19"
                 name: "Battery Level"
                 properties:
-                  read: true
-                  write: false
-                  notify: true
-                  indicate: false
+                  read:
+                    value: 2
+                    name: "Read"
+                  notify:
+                    value: 16
+                    name: "Notify"
                 descriptors: []
 
 

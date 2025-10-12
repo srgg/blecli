@@ -22,29 +22,44 @@ Device info:
   GATT Services: 6
 
 [1] Service 1234567812345678123456789abcdef0
-  [1.1] Characteristic 1234567812345678123456789abcdef1 (props: 0x02)
-  [1.2] Characteristic 1234567812345678123456789abcdef2 (props: 0x08)
-  [1.3] Characteristic 1234567812345678123456789abcdef3 (props: 0x10)
-  [1.4] Characteristic 1234567812345678123456789abcdef4 (props: 0x0A)
+  [1.1] Characteristic 1234567812345678123456789abcdef1
+      properties: Read
+  [1.2] Characteristic 1234567812345678123456789abcdef2
+      properties: Write
+  [1.3] Characteristic 1234567812345678123456789abcdef3
+      properties: Notify
+  [1.4] Characteristic 1234567812345678123456789abcdef4
+      properties: Read, Write
 
 [2] Service 180a
-  [2.1] Characteristic 2a24 (props: 0x02)
-  [2.2] Characteristic 2a25 (props: 0x02)
-  [2.3] Characteristic 2a26 (props: 0x02)
-  [2.4] Characteristic 2a27 (props: 0x02)
-  [2.5] Characteristic 2a29 (props: 0x02)
+  [2.1] Characteristic 2a24
+      properties: Read
+  [2.2] Characteristic 2a25
+      properties: Read
+  [2.3] Characteristic 2a26
+      properties: Read
+  [2.4] Characteristic 2a27
+      properties: Read
+  [2.5] Characteristic 2a29
+      properties: Read
 
 [3] Service 180d
-  [3.1] Characteristic 2a37 (props: 0x12)
+  [3.1] Characteristic 2a37
+      properties: Read, Notify
 
 [4] Service 180f
-  [4.1] Characteristic 2a19 (props: 0x12)
+  [4.1] Characteristic 2a19
+      properties: Read, Notify
 
 [5] Service 181a
-  [5.1] Characteristic 2a6e (props: 0x12)
-  [5.2] Characteristic 2a6f (props: 0x12)
+  [5.1] Characteristic 2a6e
+      properties: Read, Notify
+  [5.2] Characteristic 2a6f
+      properties: Read, Notify
 
 [6] Service 6e400001b5a3f393e0a9e50e24dcca9e
-  [6.1] Characteristic 6e400002b5a3f393e0a9e50e24dcca9e (props: 0x08)
-  [6.2] Characteristic 6e400003b5a3f393e0a9e50e24dcca9e (props: 0x10)
+  [6.1] Characteristic 6e400002b5a3f393e0a9e50e24dcca9e
+      properties: Write
+  [6.2] Characteristic 6e400003b5a3f393e0a9e50e24dcca9e
+      properties: Notify
 ```

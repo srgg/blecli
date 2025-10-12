@@ -8,7 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-//nolint:revive // DeviceInfo name is intentional for clarity when used as device.DeviceInfo
+//nolint:revive // DeviceInfo name is intentional for clarity when used as a device.DeviceInfo
 type DeviceInfo interface {
 	GetID() string
 	GetName() string
@@ -51,7 +51,7 @@ type Service interface {
 type Characteristic interface {
 	GetUUID() string
 	KnownName() string
-	GetProperties() string
+	GetProperties() Properties
 	GetDescriptors() []Descriptor
 }
 
@@ -59,6 +59,24 @@ type Characteristic interface {
 type Descriptor interface {
 	GetUUID() string
 	KnownName() string
+}
+
+// Property represents a single BLE characteristic property
+type Property interface {
+	Value() int
+	KnownName() string
+}
+
+// Properties represent a collection of BLE characteristic properties
+type Properties interface {
+	Broadcast() Property
+	Read() Property
+	Write() Property
+	WriteWithoutResponse() Property
+	Notify() Property
+	Indicate() Property
+	AuthenticatedSignedWrites() Property
+	ExtendedProperties() Property
 }
 
 // SubscribeOptions defined BLE Characteristics subscriptions

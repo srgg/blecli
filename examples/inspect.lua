@@ -53,17 +53,9 @@ local function collect_device_data()
             for _, char_uuid in ipairs(service_info.characteristics) do
                 local char_info = blim.characteristic(service_uuid, char_uuid) or {}
 
-                -- Build properties object
-                local props = {
-                    read = char_info.properties and char_info.properties.read or false,
-                    write = char_info.properties and char_info.properties.write or false,
-                    notify = char_info.properties and char_info.properties.notify or false,
-                    indicate = char_info.properties and char_info.properties.indicate or false
-                }
-
                 -- Try to read the characteristic value if it's readable
                 local value = nil
-                if props.read and char_info.read then
+                if char_info.properties and char_info.properties.read and char_info.read then
                     local val, err = char_info.read()
                     if err == nil then
                         value = val
@@ -74,7 +66,7 @@ local function collect_device_data()
                 table.insert(service_data.characteristics, {
                     uuid = char_uuid,
                     name = char_info.name,  -- Copy optional name field
-                    properties = props,
+                    properties = char_info.properties,  -- Keep dual-purpose table (array + hash)
                     value = value,
                     descriptors = char_info.descriptors or {}
                 })
@@ -179,20 +171,22 @@ local function output_text(data)
         io.write(string.format("\n[%d] Service: %s\n", service_index, service_name))
 
         for char_index, char in ipairs(service.characteristics) do
-            -- Format properties as hex flags
-            local props = 0x00
-            if char.properties.read then props = props + 0x02 end
-            if char.properties.write then props = props + 0x08 end
-            if char.properties.notify then props = props + 0x10 end
-            if char.properties.indicate then props = props + 0x20 end
-
-            -- Show characteristic name if it's a known DIS characteristic
+            -- Show characteristic name
             local char_display = blim.format_named(char)
-            --local char_name = DIS_CHARACTERISTICS[string.upper(char.uuid)]
-            --local char_display = char_name and string.format("%s (0x%s)", char_name, char.uuid) or string.format("0x%s", char.uuid)
+            io.write(string.format("  [%d.%d] Characteristic: %s\n",
+                service_index, char_index, char_display))
 
-            io.write(string.format("  [%d.%d] Characteristic: %s (props: 0x%02X)\n",
-                service_index, char_index, char_display, props))
+            -- Show properties on separate line
+            if char.properties then
+                local prop_names = {}
+                for _, prop in ipairs(char.properties) do
+                    table.insert(prop_names, prop.name)
+                end
+                local props_display = table.concat(prop_names, ", ")
+                if props_display ~= "" then
+                    io.write(string.format("      properties: %s\n", props_display))
+                end
+            end
 
             -- Show characteristic value if available
             if char.value and char.value ~= "" then
@@ -220,6 +214,26 @@ end
 
 -- Format and output as JSON using the json library
 local function output_json(data)
+    -- Clean properties tables: convert dual-purpose tables (array+hash) to hash-only
+    -- This ensures JSON encoder sees only named keys, not numeric array indices
+    for _, service in ipairs(data.services) do
+        for _, char in ipairs(service.characteristics) do
+            if char.properties then
+                local clean_props = {}
+                -- Iterate using ipairs to preserve bit order
+                for _, prop in ipairs(char.properties) do
+                    -- Convert property name to lowercase snake_case for key
+                    local key = string.lower(string.gsub(prop.name, " ", "_"))
+                    clean_props[key] = {
+                        value = prop.value,
+                        name = prop.name
+                    }
+                end
+                char.properties = clean_props
+            end
+        end
+    end
+
     local json = require("json")
     print(json.encode(data))
 end

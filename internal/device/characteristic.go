@@ -107,7 +107,7 @@ func drainAndReleaseChannel(ch chan *BLEValue) {
 type BLECharacteristic struct {
 	uuid        string
 	knownName   string
-	properties  string
+	properties  Properties
 	descriptors []Descriptor
 	value       []byte
 	BLEChar     *ble.Characteristic
@@ -141,7 +141,7 @@ func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection) *
 		uuid:        uuid,                                // store normalized
 		knownName:   bledb.LookupCharacteristic(rawUUID), // lookup using raw form if DB expects dashed
 		BLEChar:     c,
-		properties:  blePropsToString(c.Property),
+		properties:  NewProperties(c.Property),
 		updates:     make(chan *BLEValue, buffer),
 		descriptors: descriptors,
 		subs:        nil,
@@ -209,7 +209,7 @@ func (c *BLECharacteristic) KnownName() string {
 	return c.knownName
 }
 
-func (c *BLECharacteristic) GetProperties() string {
+func (c *BLECharacteristic) GetProperties() Properties {
 	return c.properties
 }
 
@@ -289,7 +289,7 @@ func (c *BLECharacteristic) CloseUpdates() {
 
 // ResetUpdates recreates the updates channel (for reconnection).
 // MUST only be called after CloseUpdates() has been called.
-// Returns error if channel is not closed.
+// Returns an error if channel is not closed.
 func (c *BLECharacteristic) ResetUpdates(buffer int) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

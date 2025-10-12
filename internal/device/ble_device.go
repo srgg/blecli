@@ -444,23 +444,6 @@ func (d *BLEDevice) GetConnection() Connection {
 
 // Helper functions
 
-func blePropsToString(p ble.Property) string {
-	var s []string
-	if p&ble.CharRead != 0 {
-		s = append(s, "Read")
-	}
-	if p&ble.CharWrite != 0 {
-		s = append(s, "Write")
-	}
-	if p&ble.CharNotify != 0 {
-		s = append(s, "Notify")
-	}
-	if p&ble.CharIndicate != 0 {
-		s = append(s, "Indicate")
-	}
-	return strings.Join(s, "|")
-}
-
 // extractNameFromManufacturerData attempts to extract a device name from manufacturer data
 func (d *BLEDevice) extractNameFromManufacturerData(data []byte) string {
 	if len(data) < 4 {

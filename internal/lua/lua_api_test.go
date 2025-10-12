@@ -201,9 +201,9 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Properties field validation", func() {
-		// GOAL: Verify properties field is table with at least one boolean property (read/write/notify/indicate)
+		// GOAL: Verify properties field is table with at least one property sub-table (read/write/notify/indicate)
 		//
-		// TEST SCENARIO: Lookup characteristic → properties is table → verify at least one property is set
+		// TEST SCENARIO: Lookup characteristic → properties is table → verify at least one property is set (truthy)
 
 		script := `
 			local char = blim.characteristic("180D", "2A37")
@@ -337,11 +337,16 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 			assert(char1.uuid == char2.uuid, "uuid should be consistent")
 			assert(char1.service == char2.service, "service should be consistent")
 
-			-- Compare properties table contents (tables aren't equal by reference in Lua)
-			assert(char1.properties.read == char2.properties.read, "read property should be consistent")
-			assert(char1.properties.write == char2.properties.write, "write property should be consistent")
-			assert(char1.properties.notify == char2.properties.notify, "notify property should be consistent")
-			assert(char1.properties.indicate == char2.properties.indicate, "indicate property should be consistent")
+			-- Compare properties: check both presence (truthy/falsy) matches
+			-- Properties are now tables with value/name, so compare their presence not reference
+			assert((char1.properties.read ~= nil) == (char2.properties.read ~= nil), "read property presence should be consistent")
+			assert((char1.properties.write ~= nil) == (char2.properties.write ~= nil), "write property presence should be consistent")
+			assert((char1.properties.notify ~= nil) == (char2.properties.notify ~= nil), "notify property presence should be consistent")
+			assert((char1.properties.indicate ~= nil) == (char2.properties.indicate ~= nil), "indicate property presence should be consistent")
+			-- If both have same property, verify values match
+			if char1.properties.read and char2.properties.read then
+				assert(char1.properties.read.value == char2.properties.read.value, "read property value should be consistent")
+			end
 
 			assert(#char1.descriptors == #char2.descriptors, "descriptor count should be consistent")
 		`

@@ -4,7 +4,7 @@
 local blim = {}
 local native = _blim_internal
 
--- Direct assignments (zero overhead - just references to Go functions)
+-- Direct assignments (zero overhead - references to Go functions)
 blim.subscribe = native.subscribe
 blim.list = native.list
 blim.characteristic = native.characteristic

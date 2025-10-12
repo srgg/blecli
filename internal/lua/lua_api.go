@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"runtime/debug"
-	"strings"
 	"syscall"
 	"time"
 
@@ -775,32 +774,53 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 		L.PushString(serviceUUID)
 		L.SetTable(-3)
 
-		// Field: properties (table with boolean flags for each property)
+		// Field: properties (dual-purpose table with array and hash parts)
+		// - Array part: ordered iteration with ipairs() in bit order
+		// - Hash part: boolean checks (if properties.read then)
 		L.PushString("properties")
 		L.NewTable()
 
-		// Parse properties string (e.g., "Read|Write|Notify") into boolean flags
-		propsStr := char.GetProperties()
-		if strings.Contains(propsStr, "Read") {
-			L.PushString("read")
-			L.PushBoolean(true)
-			L.SetTable(-3)
+		// Convert Properties struct to Lua table
+		props := char.GetProperties()
+
+		// Helper function to add a property to both array and hash parts
+		arrayIndex := 1
+		addProp := func(prop device.Property, key string) {
+			if prop != nil {
+				// Create property sub-table
+				L.NewTable()
+				L.PushString("value")
+				L.PushInteger(int64(prop.Value()))
+				L.SetTable(-3)
+				L.PushString("name")
+				L.PushString(prop.KnownName())
+				L.SetTable(-3)
+
+				// Add to hash part (for named access: properties.read)
+				L.PushString(key) // Stack: [props_table, prop_table, key]
+				L.PushValue(-2)   // Stack: [props_table, prop_table, key, prop_table]
+				L.SetTable(-4)    // props_table[key] = prop_table; Stack: [props_table, prop_table]
+
+				// Add to array part (for ordered iteration: ipairs(properties))
+				L.PushInteger(int64(arrayIndex)) // Stack: [props_table, prop_table, arrayIndex]
+				L.PushValue(-2)                  // Stack: [props_table, prop_table, arrayIndex, prop_table]
+				L.SetTable(-4)                   // props_table[arrayIndex] = prop_table; Stack: [props_table, prop_table]
+
+				// Pop the property table
+				L.Pop(1)
+				arrayIndex++
+			}
 		}
-		if strings.Contains(propsStr, "Write") {
-			L.PushString("write")
-			L.PushBoolean(true)
-			L.SetTable(-3)
-		}
-		if strings.Contains(propsStr, "Notify") {
-			L.PushString("notify")
-			L.PushBoolean(true)
-			L.SetTable(-3)
-		}
-		if strings.Contains(propsStr, "Indicate") {
-			L.PushString("indicate")
-			L.PushBoolean(true)
-			L.SetTable(-3)
-		}
+
+		// Add properties in bit order (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80)
+		addProp(props.Broadcast(), "broadcast")
+		addProp(props.Read(), "read")
+		addProp(props.WriteWithoutResponse(), "write_without_response")
+		addProp(props.Write(), "write")
+		addProp(props.Notify(), "notify")
+		addProp(props.Indicate(), "indicate")
+		addProp(props.AuthenticatedSignedWrites(), "authenticated_signed_writes")
+		addProp(props.ExtendedProperties(), "extended_properties")
 
 		L.SetTable(-3)
 
