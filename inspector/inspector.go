@@ -13,7 +13,8 @@ type ProgressCallback func(phase string)
 
 // InspectOptions defines options for inspecting a BLE device profile
 type InspectOptions struct {
-	ConnectTimeout time.Duration
+	ConnectTimeout        time.Duration
+	DescriptorReadTimeout time.Duration // Timeout for reading descriptor values (0 = skip reads)
 }
 
 // InspectCallback processes a connected device and produces output of type R
@@ -40,7 +41,10 @@ func InspectDevice[R any](ctx context.Context, address string, opts *InspectOpti
 
 	// Create device and connect (reuses BLEConnection.Connect logic - no duplication!)
 	dev := device.NewDeviceWithAddress(address, logger)
-	connectOpts := &device.ConnectOptions{ConnectTimeout: opts.ConnectTimeout}
+	connectOpts := &device.ConnectOptions{
+		ConnectTimeout:        opts.ConnectTimeout,
+		DescriptorReadTimeout: opts.DescriptorReadTimeout,
+	}
 
 	err := dev.Connect(ctx, connectOpts)
 

@@ -206,6 +206,30 @@ local function output_text(data)
                 for _, descriptor in ipairs(char.descriptors) do
                     local descriptor_display = blim.format_named(descriptor)
                     io.write(string.format("      descriptor: %s\n", descriptor_display))
+
+                    -- Show descriptor value if available
+                    if descriptor.value then
+                        io.write(string.format("        value: %s\n", descriptor.value))
+                    end
+
+                    -- Show parsed value if available
+                    if descriptor.parsed_value then
+                        if type(descriptor.parsed_value) == "table" then
+                            -- Check if it's an error
+                            if descriptor.parsed_value.error then
+                                io.write(string.format("        parsed: ERROR: %s\n", descriptor.parsed_value.error))
+                            else
+                                -- Pretty print the table fields
+                                io.write("        parsed:\n")
+                                for k, v in pairs(descriptor.parsed_value) do
+                                    io.write(string.format("          %s: %s\n", k, tostring(v)))
+                                end
+                            end
+                        else
+                            -- String or other simple type
+                            io.write(string.format("        parsed: %s\n", tostring(descriptor.parsed_value)))
+                        end
+                    end
                 end
             end
         end

@@ -36,7 +36,7 @@ type TestCase struct {
 	// Peripheral is an optional explicit peripheral service configuration
 	// If provided, these services will be used to configure the mock peripheral
 	// If not provided, peripheral services will be auto-populated from Subscription.Services
-	Peripheral []device.SubscribeOptions `json:"peripheral,omitempty" yaml:"peripheral,omitempty"`
+	Peripheral []testutils.ServiceConfig `json:"peripheral,omitempty" yaml:"peripheral,omitempty"`
 
 	Subscription TestSubscriptionOptions `json:"subscription,omitempty" yaml:"subscription,omitempty"`
 
@@ -238,6 +238,74 @@ type ScriptExecutor interface {
 //	local format = arg["format"]  -- "json"
 //	local verbose = arg["verbose"] -- "true"
 //
+// # Peripheral Configuration and Descriptor Support
+//
+// Tests can configure mock BLE peripherals with services, characteristics, and descriptors.
+// The Peripheral field in TestCase supports full descriptor configuration including error simulation.
+//
+// Example YAML with descriptor configuration:
+//
+//	test_cases:
+//	  - name: "Test Descriptor Reading"
+//	    peripheral:
+//	      - service: "180d"
+//	        characteristics:
+//	          - uuid: "2a37"
+//	            properties: "read,notify"
+//	            descriptors:
+//	              - uuid: "2902"  # Client Characteristic Configuration
+//	                value: [0x01, 0x00]
+//	              - uuid: "2901"  # User Description
+//	                value: [0x48, 0x65, 0x61, 0x72, 0x74, 0x20, 0x52, 0x61, 0x74, 0x65]  # "Heart Rate"
+//	    script: |
+//	      local char = blim.characteristic("180d", "2a37")
+//	      for i, desc in ipairs(char.descriptors) do
+//	        print(desc.uuid .. ": " .. desc.parsed_value.value)
+//	      end
+//
+// # Descriptor Error Simulation
+//
+// The test infrastructure supports simulating descriptor read errors for testing error handling.
+// Use the read_error field in descriptor configuration to specify error behavior:
+//
+//	descriptors:
+//	  - uuid: "2902"
+//	    read_error: "timeout"  # Simulates 10-second timeout (should be handled with DescriptorReadTimeout)
+//	  - uuid: "2901"
+//	    read_error: "permission denied"  # Returns permission error immediately
+//	  - uuid: "2900"
+//	    value: [0x01, 0x00]  # Normal descriptor with value (no error)
+//
+// The read_error field accepts:
+//   - "timeout": Blocks for 10 seconds (panics if timeout not handled properly)
+//   - Any other non-empty string: Returns an error immediately (e.g., "permission denied")
+//   - Omitted or empty: Normal descriptor read returning the value
+//
+// These error behaviors map to the DescriptorReadBehavior enum in PeripheralDeviceBuilder:
+//   - DescriptorReadTimeout (1): For timeout simulation
+//   - DescriptorReadError (2): For immediate error returns
+//   - Normal (0): For successful reads with value
+//
+// Example test case with error simulation:
+//
+//	test_cases:
+//	  - name: "Error: Descriptor Read Timeout"
+//	    peripheral:
+//	      - service: "1234"
+//	        characteristics:
+//	          - uuid: "5678"
+//	            descriptors:
+//	              - uuid: "2902"
+//	                read_error: "timeout"
+//	    script: |
+//	      local char = blim.characteristic("1234", "5678")
+//	      local desc = char.descriptors[1]
+//	      if desc.parsed_value.error then
+//	        print("Error: " .. desc.parsed_value.error)
+//	      end
+//	    expected_stdout: |
+//	      Error: timeout reading descriptor 0x2902
+//
 // # Error Handling Strategy
 //
 // This test infrastructure uses a deliberate error-handling strategy to distinguish between
@@ -377,8 +445,9 @@ func (suite *LuaApiSuite) createLuaApi() *BLEAPI2 {
 	}
 
 	opts := &device.ConnectOptions{
-		ConnectTimeout: 5 * time.Second,
-		Services:       subscribeOptions,
+		ConnectTimeout:        5 * time.Second,
+		DescriptorReadTimeout: 2 * time.Second, // Enable descriptor reading for tests
+		Services:              subscribeOptions,
 	}
 
 	// Connect with mocked device factory (should succeed since we set up mocks in SetupSuite)
@@ -714,10 +783,34 @@ func (suite *LuaApiSuite) RunTestCases(testCases ...TestCase) {
 
 		// Configure peripheral BEFORE SetupSubTest runs (which calls createLuaApi)
 		if len(testCase.Peripheral) > 0 {
-			// Explicit peripheral configuration provided - use it
-			for _, svcOpts := range testCase.Peripheral {
-				suite.ensurePeripheralService(svcOpts.Service, svcOpts.Characteristics)
+			// Reset peripheral builder to clean state for this test case
+			suite.PeripheralBuilder = testutils.NewPeripheralDeviceBuilder()
+
+			// Explicit peripheral configuration provided - use it with full builder support
+			for _, svcCfg := range testCase.Peripheral {
+				svcBuilder := suite.WithPeripheral().WithService(svcCfg.UUID)
+				for _, charCfg := range svcCfg.Characteristics {
+					svcBuilder.WithCharacteristic(charCfg.UUID, charCfg.Properties, charCfg.Value)
+					for i, descCfg := range charCfg.Descriptors {
+						suite.Logger.WithFields(map[string]interface{}{
+							"test_name":       testCase.Name,
+							"descriptor_idx":  i,
+							"descriptor_uuid": descCfg.UUID,
+						}).Debug("Adding descriptor to characteristic")
+
+						// Check ReadErrorBehavior and call appropriate builder method
+						switch descCfg.ReadErrorBehavior {
+						case testutils.DescriptorReadTimeout:
+							svcBuilder.WithDescriptorReadTimeout(descCfg.UUID)
+						case testutils.DescriptorReadError:
+							svcBuilder.WithDescriptorReadError(descCfg.UUID)
+						default:
+							svcBuilder.WithDescriptor(descCfg.UUID, descCfg.Value)
+						}
+					}
+				}
 			}
+			// Peripheral will be automatically built during SetupSubTest() -> createLuaApi()
 		} else if len(testCase.Subscription.Services) > 0 && testCase.ExpectErrorMessage == "" {
 			// Auto-populate peripheral services from subscription configuration
 			// Skip for error test cases (ExpectErrorMessage != "") as they may have invalid UUIDs

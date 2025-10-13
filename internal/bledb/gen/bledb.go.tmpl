@@ -50,7 +50,7 @@ var (
 // LookupService returns the name for a given service UUID.
 // If the UUID is not found, returns an empty string.
 func LookupService(uuid string) string {
-   normalized := normalize(uuid)
+	normalized := NormalizeUUID(uuid)
 	if name, ok := serviceMap[normalized]; ok {
 		return name
 	}
@@ -60,7 +60,7 @@ func LookupService(uuid string) string {
 // LookupCharacteristic returns the name for a given characteristic UUID.
 // If the UUID is not found, returns an empty string.
 func LookupCharacteristic(uuid string) string {
-    normalized := normalize(uuid)
+	normalized := NormalizeUUID(uuid)
 	if name, ok := characteristicMap[normalized]; ok {
 		return name
 	}
@@ -70,7 +70,7 @@ func LookupCharacteristic(uuid string) string {
 // LookupDescriptor returns the name for a given descriptor UUID.
 // If the UUID is not found, returns an empty string.
 func LookupDescriptor(uuid string) string {
-    normalized := normalize(uuid)
+	normalized := NormalizeUUID(uuid)
 	if name, ok := descriptorMap[normalized]; ok {
 		return name
 	}
@@ -80,7 +80,7 @@ func LookupDescriptor(uuid string) string {
 // LookupVendor returns the name for a given vendor ID.
 // If the ID is not found, returns an empty string.
 func LookupVendor(id string) string {
-    normalized := normalize(id)
+	normalized := NormalizeUUID(id)
 	if name, ok := vendorMap[normalized]; ok {
 		return name
 	}
@@ -90,7 +90,7 @@ func LookupVendor(id string) string {
 // LookupUnit returns the name of a Bluetooth measurement unit for the given UUID.
 // If the UUID is not found in the unit map, returns an empty string.
 func LookupUnit(uuid string) string {
-	normalized := normalize(uuid)
+	normalized := NormalizeUUID(uuid)
 	if name, ok := unitMap[normalized]; ok {
 		return name
 	}
@@ -112,10 +112,39 @@ func lookupInBleakUUIDs(normalizedId string) string {
 	return ""
 }
 
-func normalize(uuid string) string {
-	u := strings.ToLower(uuid)
-	u = strings.ReplaceAll(u, "-", "")
-	u = strings.ReplaceAll(u, "{", "")
-	u = strings.ReplaceAll(u, "}", "")
-	return u
+// NormalizeUUID converts a UUID string to the internal BLE library format (lowercase, no dashes).
+// Handles both standard UUID format (with dashes) and already normalized format (without dashes).
+// Also strips 0x prefix if present (e.g., "0x2902" -> "2902").
+// For full 128-bit UUIDs in Bluetooth SIG base format (0000xxxx-0000-1000-8000-00805f9b34fb),
+// extracts the 16-bit short form (xxxx).
+func NormalizeUUID(uuid string) string {
+	// Strip 0x prefix if present
+	uuid = strings.TrimPrefix(uuid, "0x")
+	uuid = strings.TrimPrefix(uuid, "0X")
+
+	// Remove dashes, braces and convert to lowercase
+	uuid = strings.ReplaceAll(uuid, "-", "")
+	uuid = strings.ReplaceAll(uuid, "{", "")
+	uuid = strings.ReplaceAll(uuid, "}", "")
+	uuid = strings.ToLower(uuid)
+
+	// Check if this is a full 128-bit Bluetooth SIG base UUID (32 hex chars)
+	// Format: 0000xxxx00001000800000805f9b34fb
+	// Extract the 16-bit short form (xxxx) from positions 4-8
+	if len(uuid) == 32 &&
+		strings.HasPrefix(uuid, "0000") &&
+		strings.HasSuffix(uuid, "00001000800000805f9b34fb") {
+		return uuid[4:8]
+	}
+
+	return uuid
+}
+
+// NormalizeUUIDs normalizes a slice of UUID strings to internal format.
+func NormalizeUUIDs(uuids []string) []string {
+	normalized := make([]string, len(uuids))
+	for i, uuid := range uuids {
+		normalized[i] = NormalizeUUID(uuid)
+	}
+	return normalized
 }

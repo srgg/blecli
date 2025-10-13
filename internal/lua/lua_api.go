@@ -336,7 +336,7 @@ func (api *BLEAPI2) registerListFunction(L *lua.State) {
 		// Add both indexed array (for ordered iteration) and keyed access (for lookup)
 		arrayIndex := 1
 		for _, service := range services {
-			uuid := service.GetUUID()
+			uuid := service.UUID()
 
 			// Create service info table
 			L.NewTable()
@@ -354,7 +354,7 @@ func (api *BLEAPI2) registerListFunction(L *lua.State) {
 			charIndex := 1
 			for _, c := range service.GetCharacteristics() {
 				L.PushInteger(int64(charIndex))
-				L.PushString(c.GetUUID())
+				L.PushString(c.UUID())
 				L.SetTable(-3)
 				charIndex++
 			}
@@ -759,7 +759,7 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 
 		// Field: uuid
 		L.PushString("uuid")
-		L.PushString(char.GetUUID())
+		L.PushString(char.UUID())
 		L.SetTable(-3)
 
 		// Field: name (only if known)
@@ -824,7 +824,7 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 
 		L.SetTable(-3)
 
-		// Field: descriptors (array of objects with uuid and name)
+		// Field: descriptors (array of objects with uuid, name, value, and parsed_value)
 		L.PushString("descriptors")
 		L.NewTable()
 		descriptors := char.GetDescriptors()
@@ -834,12 +834,24 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 			L.NewTable()
 			// Add uuid
 			L.PushString("uuid")
-			L.PushString(desc.GetUUID())
+			L.PushString(desc.UUID())
 			L.SetTable(-3)
 			// Add name (only if known)
 			if knownName := desc.KnownName(); knownName != "" {
 				L.PushString("name")
 				L.PushString(knownName)
+				L.SetTable(-3)
+			}
+			// Add value (raw bytes as hex string)
+			if value := desc.Value(); value != nil {
+				L.PushString("value")
+				L.PushString(fmt.Sprintf("%X", value))
+				L.SetTable(-3)
+			}
+			// Add parsed_value (structured table for known descriptors)
+			if parsedValue := desc.ParsedValue(); parsedValue != nil {
+				L.PushString("parsed_value")
+				api.pushDescriptorParsedValue(L, parsedValue)
 				L.SetTable(-3)
 			}
 			L.SetTable(-3)
@@ -893,6 +905,88 @@ func (api *BLEAPI2) registerSleepFunction(L *lua.State) {
 		return 0
 	})
 	L.SetTable(-3)
+}
+
+// pushDescriptorParsedValue pushes a parsed descriptor value onto the Lua stack as a table.
+// Handles all known descriptor types (ExtendedProperties, ClientConfig, etc.) and error states.
+// Stack effect: pushes one value (table or string)
+func (api *BLEAPI2) pushDescriptorParsedValue(L *lua.State, parsedValue interface{}) {
+	switch v := parsedValue.(type) {
+	case *device.ExtendedProperties:
+		// Push ExtendedProperties as {reliable_write=bool, writable_auxiliaries=bool}
+		L.NewTable()
+		L.PushString("reliable_write")
+		L.PushBoolean(v.ReliableWrite)
+		L.SetTable(-3)
+		L.PushString("writable_auxiliaries")
+		L.PushBoolean(v.WritableAuxiliaries)
+		L.SetTable(-3)
+
+	case *device.ClientConfig:
+		// Push ClientConfig as {notifications=bool, indications=bool}
+		L.NewTable()
+		L.PushString("notifications")
+		L.PushBoolean(v.Notifications)
+		L.SetTable(-3)
+		L.PushString("indications")
+		L.PushBoolean(v.Indications)
+		L.SetTable(-3)
+
+	case *device.ServerConfig:
+		// Push ServerConfig as {broadcasts=bool}
+		L.NewTable()
+		L.PushString("broadcasts")
+		L.PushBoolean(v.Broadcasts)
+		L.SetTable(-3)
+
+	case *device.PresentationFormat:
+		// Push PresentationFormat as {format=int, exponent=int, unit=int, namespace=int, description=int}
+		L.NewTable()
+		L.PushString("format")
+		L.PushInteger(int64(v.Format))
+		L.SetTable(-3)
+		L.PushString("exponent")
+		L.PushInteger(int64(v.Exponent))
+		L.SetTable(-3)
+		L.PushString("unit")
+		L.PushInteger(int64(v.Unit))
+		L.SetTable(-3)
+		L.PushString("namespace")
+		L.PushInteger(int64(v.Namespace))
+		L.SetTable(-3)
+		L.PushString("description")
+		L.PushInteger(int64(v.Description))
+		L.SetTable(-3)
+
+	case *device.ValidRange:
+		// Push ValidRange as {min=hex_string, max=hex_string}
+		L.NewTable()
+		L.PushString("min")
+		L.PushString(fmt.Sprintf("%X", v.MinValue))
+		L.SetTable(-3)
+		L.PushString("max")
+		L.PushString(fmt.Sprintf("%X", v.MaxValue))
+		L.SetTable(-3)
+
+	case string:
+		// User Description - push as plain string
+		L.PushString(v)
+
+	case []byte:
+		// Unknown descriptor type - push raw bytes as hex string
+		L.PushString(fmt.Sprintf("%X", v))
+
+	case *device.DescriptorError:
+		// Push DescriptorError as {error=string}
+		L.NewTable()
+		L.PushString("error")
+		L.PushString(v.Error())
+		L.SetTable(-3)
+
+	default:
+		// Fallback for unexpected types - push nil
+		L.PushNil()
+	}
 }
 
 // Close cleans up the API resources

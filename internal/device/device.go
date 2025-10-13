@@ -42,14 +42,14 @@ type Connection interface {
 
 // Service represents a GATT service interface
 type Service interface {
-	GetUUID() string
+	UUID() string
 	KnownName() string
 	GetCharacteristics() []Characteristic
 }
 
 // Characteristic represents a GATT characteristic interface
 type Characteristic interface {
-	GetUUID() string
+	UUID() string
 	KnownName() string
 	GetProperties() Properties
 	GetDescriptors() []Descriptor
@@ -57,8 +57,10 @@ type Characteristic interface {
 
 // Descriptor represents a GATT descriptor interface
 type Descriptor interface {
-	GetUUID() string
+	UUID() string
 	KnownName() string
+	Value() []byte            // Returns raw descriptor value bytes, nil if read failed or skipped
+	ParsedValue() interface{} // Returns parsed value, *DescriptorError if read failed, nil if skipped
 }
 
 // Property represents a single BLE characteristic property
@@ -87,9 +89,10 @@ type SubscribeOptions struct {
 
 // ConnectOptions defines BLE connection options
 type ConnectOptions struct {
-	Address        string
-	ConnectTimeout time.Duration
-	Services       []SubscribeOptions
+	Address               string
+	ConnectTimeout        time.Duration
+	DescriptorReadTimeout time.Duration // Timeout for reading descriptor values (0 = skip reads)
+	Services              []SubscribeOptions
 }
 
 // NewDevice creates a Device from a BLE advertisement

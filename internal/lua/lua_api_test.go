@@ -682,6 +682,20 @@ func (suite *LuaApiTestSuite) TestLuaBridgeAccess() {
 	})
 }
 
+// TestWellKnownDescriptorTypes validates well-known BLE descriptor value parsing and exposure
+// by executing YAML-defined test scenarios.
+//
+// Test scenarios are externalized in well-known-descriptor-types-cases.yaml for maintainability.
+// Each scenario verifies:
+//   - Raw descriptor values (hex-encoded bytes)
+//   - Parsed descriptor values (structured Lua tables)
+//   - Error handling (read failures, parse errors, timeouts)
+//
+// See test-scenarios/lua-api-well-known-descriptor-types-scenarios.yaml for individual test case documentation.
+func (suite *LuaApiTestSuite) TestWellKnownDescriptorTypes() {
+	suite.RunTestCasesFromFile("test-scenarios/lua-api-well-known-descriptor-types-scenarios.yaml")
+}
+
 // TestBLEAPI2TestSuite runs the test suite using testify/suite
 func TestBLEAPI2TestSuite(t *testing.T) {
 	suitelib.Run(t, new(LuaApiTestSuite))

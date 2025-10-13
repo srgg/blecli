@@ -16,19 +16,30 @@ blim.sleep = native.sleep
 
 -- Helper functions for Lua scripts
 
--- Format a named object as "<name> (<uuid lowercase>)" or just the uuid
--- Example:
---   maybe_named = { name = "Heart Rate", uuid = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E" }
---   -> "Heart Rate (6e400001-b5a3-f393-e0a9-e50e24dcca9e)"
+-- Format a named object as "<name> (0xuuid)" or just the uuid with 0x prefix
+-- Short UUIDs (4-8 hex chars) get 0x prefix, long UUIDs stay as-is
+-- Examples:
+--   maybe_named = { name = "Heart Rate", uuid = "180d" }
+--   -> "Heart Rate (0x180d)"
+--   maybe_named = { name = "Apple Service", uuid = "6e400001b5a3f393e0a9e50e24dcca9e" }
+--   -> "Apple Service (6e400001b5a3f393e0a9e50e24dcca9e)"
 function blim.format_named(maybe_named)
     if not maybe_named or not maybe_named.uuid then
         return ""
     end
     local uuid_lower = string.lower(maybe_named.uuid)
+
+    -- Add 0x prefix for short UUIDs (16-bit: 4 chars, 32-bit: 8 chars)
+    -- Long 128-bit UUIDs (32 chars) don't get prefix as they're obviously hex
+    local uuid_display = uuid_lower
+    if #uuid_lower <= 8 then
+        uuid_display = "0x" .. uuid_lower
+    end
+
     if maybe_named.name and maybe_named.name ~= "" then
-        return string.format("%s (%s)", maybe_named.name, uuid_lower)
+        return string.format("%s (%s)", maybe_named.name, uuid_display)
     else
-        return uuid_lower
+        return uuid_display
     end
 end
 

@@ -32,13 +32,14 @@ type Bridge interface {
 
 // BridgeOptions contains all the configuration for running a bridge
 type BridgeOptions struct {
-	BleAddress          string                    // BLE device address
-	BleConnectTimeout   time.Duration             // BLE Connection timeout
-	BleSubscribeOptions []device.SubscribeOptions // BLE subscribe options
-	Logger              *logrus.Logger            // Logger instance
-	PtyStdinBufferSize  int                       // PTY stdin ring buffer size in bytes (0 = use default)
-	PtyStdoutBufferSize int                       // PTY stdout ring buffer size in bytes (0 = use default)
-	TTYSymlinkPath      string                    // Optional tty symlink path for PTY slave (e.g., /tmp/ble-device)
+	BleAddress               string                    // BLE device address
+	BleConnectTimeout        time.Duration             // BLE Connection timeout
+	BleDescriptorReadTimeout time.Duration             // Timeout for reading descriptor values (0 = skip reads)
+	BleSubscribeOptions      []device.SubscribeOptions // BLE subscribe options
+	Logger                   *logrus.Logger            // Logger instance
+	PtyStdinBufferSize       int                       // PTY stdin ring buffer size in bytes (0 = use default)
+	PtyStdoutBufferSize      int                       // PTY stdout ring buffer size in bytes (0 = use default)
+	TTYSymlinkPath           string                    // Optional tty symlink path for PTY slave (e.g., /tmp/ble-device)
 }
 
 // ProgressCallback is called when the bridge phase changes
@@ -151,9 +152,10 @@ func RunDeviceBridge[R any](
 
 	// Connect to device
 	connectOpts := &device.ConnectOptions{
-		Address:        opts.BleAddress,
-		ConnectTimeout: opts.BleConnectTimeout,
-		Services:       opts.BleSubscribeOptions,
+		Address:               opts.BleAddress,
+		ConnectTimeout:        opts.BleConnectTimeout,
+		DescriptorReadTimeout: opts.BleDescriptorReadTimeout,
+		Services:              opts.BleSubscribeOptions,
 	}
 
 	if err := luaApi.GetDevice().Connect(bridgeCtx, connectOpts); err != nil {

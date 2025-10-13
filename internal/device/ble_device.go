@@ -24,27 +24,13 @@ const (
 	DefaultBLEWriteDelay = 10 * time.Millisecond
 )
 
-// BLEDescriptor implements the Descriptor interface
-type BLEDescriptor struct {
-	uuid      string
-	knownName string
-}
-
-func (d *BLEDescriptor) GetUUID() string {
-	return d.uuid
-}
-
-func (d *BLEDescriptor) KnownName() string {
-	return d.knownName
-}
-
 // BLEAdvertisedService implements the Service interface for advertised services
 type BLEAdvertisedService struct {
 	uuid            string
 	characteristics []Characteristic
 }
 
-func (s *BLEAdvertisedService) GetUUID() string {
+func (s *BLEAdvertisedService) UUID() string {
 	return s.uuid
 }
 
@@ -512,7 +498,7 @@ func (d *BLEDevice) hasServiceUUID(uuid string) bool {
 	// First check connected services if a device is connected
 	if d.isConnectedInternal() {
 		for _, service := range d.connection.services {
-			if strings.EqualFold(service.GetUUID(), uuid) {
+			if strings.EqualFold(service.UUID(), uuid) {
 				return true
 			}
 		}

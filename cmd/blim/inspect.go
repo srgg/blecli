@@ -27,14 +27,16 @@ characteristics, and descriptors. Attempts to read characteristic values when po
 }
 
 var (
-	inspectConnectTimeout time.Duration
-	inspectVerbose        bool
-	inspectJSON           bool
-	inspectReadLimit      int
+	inspectConnectTimeout        time.Duration
+	inspectDescriptorReadTimeout time.Duration
+	inspectVerbose               bool
+	inspectJSON                  bool
+	inspectReadLimit             int
 )
 
 func init() {
 	inspectCmd.Flags().DurationVar(&inspectConnectTimeout, "connect-timeout", 30*time.Second, "Connection timeout")
+	inspectCmd.Flags().DurationVar(&inspectDescriptorReadTimeout, "descriptor-timeout", 0, "Timeout for reading descriptor values (default: 2s if unset, 0 to skip descriptor reads)")
 	inspectCmd.Flags().BoolVarP(&inspectVerbose, "verbose", "v", false, "Verbose output")
 	inspectCmd.Flags().BoolVar(&inspectJSON, "json", false, "Output as JSON")
 	inspectCmd.Flags().IntVar(&inspectReadLimit, "read-limit", 64, "Max bytes to read from readable characteristics (0 to disable reads)")
@@ -55,7 +57,8 @@ func runInspect(cmd *cobra.Command, args []string) error {
 
 	// Build inspect options
 	opts := &inspector.InspectOptions{
-		ConnectTimeout: inspectConnectTimeout,
+		ConnectTimeout:        inspectConnectTimeout,
+		DescriptorReadTimeout: inspectDescriptorReadTimeout,
 	}
 
 	// Use background context; per-command timeout is applied inside the inspector

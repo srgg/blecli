@@ -1,18 +1,19 @@
 package device
 
-import "strings"
+import "github.com/srg/blim/internal/bledb"
 
-// NormalizeUUID converts a UUID string to the internal BLE library format (lowercase, no dashes)
-// Handles both standard UUID format (with dashes) and already normalized format (without dashes)
+// NormalizeUUID is re-exported from bledb for convenience.
+// It converts a UUID string to the internal BLE library format (lowercase, no dashes).
+// Handles both standard UUID format (with dashes) and already normalized format (without dashes).
+// Also strips 0x prefix if present (e.g., "0x2902" -> "2902").
+// For full 128-bit UUIDs in Bluetooth SIG base format (0000xxxx-0000-1000-8000-00805f9b34fb),
+// extracts the 16-bit short form (xxxx).
 func NormalizeUUID(uuid string) string {
-	return strings.ToLower(strings.ReplaceAll(uuid, "-", ""))
+	return bledb.NormalizeUUID(uuid)
 }
 
-// NormalizeUUIDs normalizes a slice of UUID strings to internal format
+// NormalizeUUIDs is re-exported from bledb for convenience.
+// It normalizes a slice of UUID strings to internal format.
 func NormalizeUUIDs(uuids []string) []string {
-	normalized := make([]string, len(uuids))
-	for i, uuid := range uuids {
-		normalized[i] = NormalizeUUID(uuid)
-	}
-	return normalized
+	return bledb.NormalizeUUIDs(uuids)
 }

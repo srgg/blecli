@@ -2,7 +2,6 @@ package device
 
 import (
 	"fmt"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -119,23 +118,9 @@ type BLECharacteristic struct {
 	subs    []func(*BLEValue)
 }
 
-func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection) *BLECharacteristic {
+func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection, descriptors []Descriptor) *BLECharacteristic {
 	rawUUID := c.UUID.String()
 	uuid := NormalizeUUID(rawUUID)
-
-	// Populate and sort descriptors
-	descriptors := make([]Descriptor, 0, len(c.Descriptors))
-	for _, d := range c.Descriptors {
-		descRawUUID := d.UUID.String()
-		descriptors = append(descriptors, &BLEDescriptor{
-			uuid:      NormalizeUUID(descRawUUID),
-			knownName: bledb.LookupDescriptor(descRawUUID),
-		})
-	}
-	// Sort by UUID for consistent ordering
-	sort.Slice(descriptors, func(i, j int) bool {
-		return descriptors[i].GetUUID() < descriptors[j].GetUUID()
-	})
 
 	return &BLECharacteristic{
 		uuid:        uuid,                                // store normalized
@@ -150,7 +135,7 @@ func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection) *
 }
 
 func (c *BLECharacteristic) EnqueueValue(v *BLEValue) {
-	// Check if channel is closed before attempting to send
+	// Check if the channel is closed before attempting to send
 	// This prevents panic from sending on a closed channel if BLE callbacks fire after shutdown
 	if c.closed.Load() {
 		releaseBLEValue(v)
@@ -201,7 +186,7 @@ func (c *BLECharacteristic) notifySubscribers(v *BLEValue) {
 	}
 }
 
-func (c *BLECharacteristic) GetUUID() string {
+func (c *BLECharacteristic) UUID() string {
 	return c.uuid
 }
 
@@ -289,7 +274,7 @@ func (c *BLECharacteristic) CloseUpdates() {
 
 // ResetUpdates recreates the updates channel (for reconnection).
 // MUST only be called after CloseUpdates() has been called.
-// Returns an error if channel is not closed.
+// Returns an error if the channel is not closed.
 func (c *BLECharacteristic) ResetUpdates(buffer int) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

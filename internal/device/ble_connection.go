@@ -57,11 +57,12 @@ var DeviceFactory = func() (ble.Device, error) {
 
 // BLEConnection represents a live BLE connection (notifications, writes)
 type BLEConnection struct {
-	client      ble.Client
-	logger      *logrus.Logger
-	writeMutex  sync.Mutex
-	connMutex   sync.RWMutex
-	isConnected bool
+	client                ble.Client
+	logger                *logrus.Logger
+	writeMutex            sync.Mutex
+	connMutex             sync.RWMutex
+	isConnected           bool
+	descriptorReadTimeout time.Duration // Timeout for reading descriptor values during discovery
 
 	services map[string]*BLEService
 
@@ -74,7 +75,7 @@ type BLEConnection struct {
 // Both UUIDs are normalized for consistent lookup (lowercase, no dashes).
 // Returns an error if the service or characteristic is not found.
 func (c *BLEConnection) GetCharacteristic(service, uuid string) (*BLECharacteristic, error) {
-	// Normalize UUIDs for consistent lookup
+	// Normalize UUIDs for a consistent lookup
 	normalizedServiceUUID := NormalizeUUID(service)
 	normalizedCharUUID := NormalizeUUID(uuid)
 
@@ -103,7 +104,7 @@ func (c *BLEConnection) GetServices() []Service {
 	}
 	// Sort by UUID for consistent ordering
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].GetUUID() < result[j].GetUUID()
+		return result[i].UUID() < result[j].UUID()
 	})
 	return result
 }
@@ -172,6 +173,14 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 		return fmt.Errorf("device already connected")
 	}
 
+	// Set descriptor read timeout with default if not explicitly set
+	c.descriptorReadTimeout = opts.DescriptorReadTimeout
+	if c.descriptorReadTimeout == 0 && opts.DescriptorReadTimeout == 0 {
+		// Distinguish between "not set" and "explicitly set to 0"
+		// If the field wasn't touched, use default; if explicitly 0, skip reads
+		c.descriptorReadTimeout = DefaultDescriptorReadTimeout
+	}
+
 	c.logger.WithFields(logrus.Fields{
 		"address": address,
 		"timeout": opts.ConnectTimeout,
@@ -227,7 +236,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 		svc, ok := c.services[svcUUID]
 		if !ok {
 			svc = &BLEService{
-				UUID:            svcUUID,                         // store normalized
+				uuid:            svcUUID,                         // store normalized
 				knownName:       bledb.LookupService(svcRawUUID), // lookup using raw form if DB expects dashed
 				Characteristics: make(map[string]*BLECharacteristic),
 			}
@@ -243,8 +252,23 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 			}).Debug("Found characteristic UUID")
 			characteristic, ok := svc.Characteristics[charUUID]
 			if !ok {
-				// Create BLECharacteristic with connection reference for reading
-				characteristic = NewCharacteristic(bleCharacteristic, DefaultChannelBuffer, c)
+				// Use descriptors from DiscoverProfile (already discovered)
+				// Note: On Darwin/macOS, descriptor Handle fields are not populated by the BLE library,
+				// which means descriptors cannot be read. This is a limitation of the go-ble/ble Darwin implementation.
+				// The descriptors are listed for informational purposes, but their values will be nil.
+
+				// Create descriptors with values (reads are best-effort, won't fail characteristic creation)
+				descriptors := make([]Descriptor, 0, len(bleCharacteristic.Descriptors))
+				for _, d := range bleCharacteristic.Descriptors {
+					descriptors = append(descriptors, newDescriptor(d, client, c.descriptorReadTimeout, c.logger))
+				}
+				// Sort by UUID for consistent ordering
+				sort.Slice(descriptors, func(i, j int) bool {
+					return descriptors[i].UUID() < descriptors[j].UUID()
+				})
+
+				// Create BLECharacteristic with pre-created descriptors
+				characteristic = NewCharacteristic(bleCharacteristic, DefaultChannelBuffer, c, descriptors)
 				svc.Characteristics[charUUID] = characteristic
 			} else {
 				// Reconnecting - update live handle and recreate channel if closed on disconnect

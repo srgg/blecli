@@ -43,16 +43,18 @@ Example:
 }
 
 var (
-	bridgeServiceUUID    string
-	bridgeConnectTimeout time.Duration
-	bridgeVerbose        bool
-	bridgeLuaScript      string
-	bridgeSymlink        string
+	bridgeServiceUUID           string
+	bridgeConnectTimeout        time.Duration
+	bridgeDescriptorReadTimeout time.Duration
+	bridgeVerbose               bool
+	bridgeLuaScript             string
+	bridgeSymlink               string
 )
 
 func init() {
 	bridgeCmd.Flags().StringVar(&bridgeServiceUUID, "service", "6E400001-B5A3-F393-E0A9-E50E24DCCA9E", "BLE service UUID to bridge with")
 	bridgeCmd.Flags().DurationVar(&bridgeConnectTimeout, "connect-timeout", 30*time.Second, "Connection timeout")
+	bridgeCmd.Flags().DurationVar(&bridgeDescriptorReadTimeout, "descriptor-timeout", 0, "Timeout for reading descriptor values (default: 2s if unset, 0 to skip descriptor reads)")
 	bridgeCmd.Flags().BoolVarP(&bridgeVerbose, "verbose", "v", false, "Verbose output")
 	bridgeCmd.Flags().StringVar(&bridgeLuaScript, "script", "", "Lua script file with ble_to_tty() and tty_to_ble() functions")
 	bridgeCmd.Flags().StringVar(&bridgeSymlink, "symlink", "", "Create a symlink to the PTY device (e.g., /tmp/ble-device)")
@@ -158,8 +160,9 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	_, err = bridge.RunDeviceBridge(
 		ctx,
 		&bridge.BridgeOptions{
-			BleAddress:        deviceAddress,
-			BleConnectTimeout: bridgeConnectTimeout,
+			BleAddress:               deviceAddress,
+			BleConnectTimeout:        bridgeConnectTimeout,
+			BleDescriptorReadTimeout: bridgeDescriptorReadTimeout,
 			BleSubscribeOptions: []device.SubscribeOptions{
 				{
 					Service: serviceUUID.String(),

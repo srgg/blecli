@@ -246,7 +246,7 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 					for {
 						select {
 						case val := <-c.updates:
-							record.BatchValues[c.GetUUID()] = append(record.BatchValues[c.GetUUID()], val.Data)
+							record.BatchValues[c.UUID()] = append(record.BatchValues[c.UUID()], val.Data)
 							if val.Flags != 0 {
 								record.Flags |= val.Flags
 							}
@@ -267,7 +267,7 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 				for _, c := range sub.Chars {
 					select {
 					case val := <-c.updates:
-						record.Values[c.GetUUID()] = val.Data
+						record.Values[c.UUID()] = val.Data
 						if val.Flags != 0 {
 							record.Flags |= val.Flags
 						}
@@ -289,7 +289,7 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 						return
 					case val := <-char.updates:
 						record := newRecord(StreamEveryUpdate)
-						record.Values[char.GetUUID()] = val.Data
+						record.Values[char.UUID()] = val.Data
 						record.TsUs = val.TsUs
 						if val.Flags != 0 {
 							record.Flags |= val.Flags

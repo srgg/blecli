@@ -206,11 +206,19 @@ test_cases:
     wait_after: 500ms
     peripheral:
       - service: "1234"
-        characteristics: ["5678"]
+        characteristics:
+          - uuid: "5678"
+            properties: "read,notify"
       - service: "180d"
-        characteristics: ["2a37", "2a38"]
+        characteristics:
+          - uuid: "2a37"
+            properties: "read,notify"
+          - uuid: "2a38"
+            properties: "read,notify"
       - service: "180f"
-        characteristics: ["2a19"]
+        characteristics:
+          - uuid: "2a19"
+            properties: "read,notify"
     expected_stdout: |
       Device info:
         ID: 00:00:00:00:00:01
@@ -223,18 +231,18 @@ test_cases:
         Service Data: none
         GATT Services: 3
 
-      [1] Service: 1234
-        [1.1] Characteristic: 5678
+      [1] Service: 0x1234
+        [1.1] Characteristic: 0x5678
             properties: Read, Notify
 
-      [2] Service: Heart Rate (180d)
-        [2.1] Characteristic: Heart Rate Measurement (2a37)
+      [2] Service: Heart Rate (0x180d)
+        [2.1] Characteristic: Heart Rate Measurement (0x2a37)
             properties: Read, Notify
-        [2.2] Characteristic: Body Sensor Location (2a38)
+        [2.2] Characteristic: Body Sensor Location (0x2a38)
             properties: Read, Notify
 
-      [3] Service: Battery Service (180f)
-        [3.1] Characteristic: Battery Level (2a19)
+      [3] Service: Battery Service (0x180f)
+        [3.1] Characteristic: Battery Level (0x2a19)
             properties: Read, Notify
 
 # GOAL: Verify that inspect.lua produce expected JSON output format
@@ -245,11 +253,19 @@ test_cases:
     wait_after: 500ms
     peripheral:
       - service: "1234"
-        characteristics: ["5678"]
+        characteristics:
+          - uuid: "5678"
+            properties: "read,notify"
       - service: "180d"
-        characteristics: ["2a37", "2a38"]
+        characteristics:
+          - uuid: "2a37"
+            properties: "read,notify"
+          - uuid: "2a38"
+            properties: "read,notify"
       - service: "180f"
-        characteristics: ["2a19"]
+        characteristics:
+          - uuid: "2a19"
+            properties: "read,notify"
     expected_json_output:
       - device:
           id: "00:00:00:00:00:01"
