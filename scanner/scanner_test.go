@@ -131,7 +131,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 		description     string
 	}{
 		{
-			name:            "includes all device with no filters",
+			name:            "includes all devices with no filters",
 			scanOptions:     &scanner.ScanOptions{},
 			expectedDevices: []device.DeviceInfo{suite.dev1, suite.dev2, suite.dev3},
 			description:     "No filters should include all discovered devices",
@@ -178,8 +178,20 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 		},
 	}
 
-	mapVal2Array := func(m map[string]device.DeviceInfo) []device.DeviceInfo {
-		values := make([]device.DeviceInfo, 0, len(m))
+	// Convert DeviceInfo array to DeviceEntry array
+	deviceInfoToEntries := func(devices []device.DeviceInfo) []scanner.DeviceEntry {
+		entries := make([]scanner.DeviceEntry, 0, len(devices))
+		for _, dev := range devices {
+			entries = append(entries, scanner.DeviceEntry{
+				Device:   dev,
+				LastSeen: time.Now(), // This will be ignored in comparison
+			})
+		}
+		return entries
+	}
+
+	mapVal2Array := func(m map[string]scanner.DeviceEntry) []scanner.DeviceEntry {
+		values := make([]scanner.DeviceEntry, 0, len(m))
 		for _, v := range m {
 			values = append(values, v)
 		}
@@ -188,16 +200,16 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 
 	// jsonassert ("github.com/yudai/gojsondiff) does not support root-level arrays,
 	// as it does not have options to ignore order in the arrays
-	wrapArrayAsMap := func(a []device.DeviceInfo) map[string][]device.DeviceInfo {
+	wrapArrayAsMap := func(a []scanner.DeviceEntry) map[string][]scanner.DeviceEntry {
 		// Sort devices by address
-		sorted := make([]device.DeviceInfo, len(a))
+		sorted := make([]scanner.DeviceEntry, len(a))
 		copy(sorted, a)
 		sort.Slice(sorted, func(i, j int) bool {
-			return sorted[i].GetAddress() < sorted[j].GetAddress()
+			return sorted[i].Device.GetAddress() < sorted[j].Device.GetAddress()
 		})
 
-		// return map with a single key "array" to overcome limitations
-		return map[string][]device.DeviceInfo{"array": sorted}
+		// return the map with a single key "array" to overcome limitations
+		return map[string][]scanner.DeviceEntry{"array": sorted}
 	}
 
 	for _, tt := range tests {
@@ -222,7 +234,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 			require.NotNil(suite.T(), devices, "Devices map should not be nil")
 
 			// Marshal expected results to JSON
-			expectedJSON := testutils.MustJSON(wrapArrayAsMap(tt.expectedDevices))
+			expectedJSON := testutils.MustJSON(wrapArrayAsMap(deviceInfoToEntries(tt.expectedDevices)))
 			// Marshal actual scan results to JSON
 			actualJSON2, err := json.Marshal(mapVal2Array(devices))
 			suite.NotEmpty(actualJSON2)
@@ -232,7 +244,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 			// Use JSONAsserter to compare - this will FAIL proving filtering is not implemented
 			jsonAsserter := testutils.NewJSONAsserter(suite.T()).
 				WithOptions(
-					testutils.WithIgnoredFields("lastSeen"),
+					testutils.WithIgnoredFields("LastSeen"),
 					testutils.WithIgnoreExtraKeys(false),
 					testutils.WithCompareOnlyExpectedKeys(true),
 				)

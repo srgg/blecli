@@ -32,17 +32,13 @@ type DeviceEvent struct {
 
 type DeviceEntry struct {
 	Device   device.DeviceInfo
-	LastSeen time.Time
-}
-
-type deviceEntry struct {
 	device   device.Device
-	lastSeen time.Time
+	LastSeen time.Time
 }
 
 // Scanner handles BLE device discovery
 type Scanner struct {
-	devices *hashmap.Map[string, deviceEntry]
+	devices *hashmap.Map[string, DeviceEntry]
 	events  *lua.RingChannel[DeviceEvent]
 	logger  *logrus.Logger
 
@@ -81,7 +77,7 @@ func NewScanner(logger *logrus.Logger) (*Scanner, error) {
 
 // Scan performs BLE discovery with provided options
 func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions, progressCallback ProgressCallback) (map[string]DeviceEntry, error) {
-	s.devices = hashmap.New[string, deviceEntry]()
+	s.devices = hashmap.New[string, DeviceEntry]()
 
 	if opts == nil {
 		opts = DefaultScanOptions()
@@ -117,10 +113,11 @@ func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions, progressCallback 
 	progressCallback("Processing results")
 
 	devices := make(map[string]DeviceEntry, s.devices.Len())
-	s.devices.Range(func(key string, value deviceEntry) bool {
+	s.devices.Range(func(key string, value DeviceEntry) bool {
 		devices[key] = DeviceEntry{
 			Device:   value.device,
-			LastSeen: value.lastSeen,
+			device:   value.device,
+			LastSeen: value.LastSeen,
 		}
 		return true
 	})
@@ -138,9 +135,9 @@ func (s *Scanner) handleAdvertisement(adv device.Advertisement) {
 			return
 		}
 
-		entry := deviceEntry{
+		entry := DeviceEntry{
 			device:   devicefactory.NewDeviceFromAdvertisement(adv, s.logger),
-			lastSeen: time.Now(),
+			LastSeen: time.Now(),
 		}
 
 		e, existing = s.devices.GetOrInsert(deviceID, entry)
@@ -148,13 +145,13 @@ func (s *Scanner) handleAdvertisement(adv device.Advertisement) {
 
 	event := DeviceEvent{
 		DeviceInfo: e.device,
-		Timestamp:  e.lastSeen,
+		Timestamp:  e.LastSeen,
 	}
 
 	if existing {
 		e.device.Update(adv)
-		e.lastSeen = time.Now()
-		event.Timestamp = e.lastSeen
+		e.LastSeen = time.Now()
+		event.Timestamp = e.LastSeen
 		event.Type = EventUpdated
 	} else {
 		s.logger.WithFields(logrus.Fields{
@@ -218,8 +215,8 @@ func (s *Scanner) shouldIncludeDevice(adv device.Advertisement, opts *ScanOption
 func (s *Scanner) makeDeviceList() []DeviceEntry {
 	devs := make([]DeviceEntry, 0, s.devices.Len())
 
-	s.devices.Range(func(key string, value deviceEntry) bool {
-		devs = append(devs, DeviceEntry{Device: value.device, LastSeen: value.lastSeen})
+	s.devices.Range(func(key string, value DeviceEntry) bool {
+		devs = append(devs, DeviceEntry{Device: value.device, LastSeen: value.LastSeen})
 		return true
 	})
 

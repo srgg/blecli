@@ -11,6 +11,7 @@ import (
 	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
 	"github.com/srg/blim/internal/testutils/mocks"
+	"github.com/srg/blim/scanner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -260,9 +261,9 @@ func TestDisplayDevicesTable(t *testing.T) {
 			"connectable": true
 		}`).BuildDevice(logger)
 
-	devices := []deviceWithTime{
-		{DeviceInfo: device1, lastSeen: time.Now()},
-		{DeviceInfo: device2, lastSeen: time.Now()},
+	devices := []scanner.DeviceEntry{
+		{Device: device1, LastSeen: time.Now()},
+		{Device: device2, LastSeen: time.Now()},
 	}
 
 	// In a real implementation, we would redirect stdout

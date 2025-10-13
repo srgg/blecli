@@ -9,6 +9,7 @@ GO_PACKAGES=$(shell go list ./...)
 export CGO_LDFLAGS := -L/opt/homebrew/lib
 export PKG_CONFIG_PATH := /opt/homebrew/lib/pkgconfig
 BUILD_FLAGS := -tags luajit
+TEST_FLAGS := $(BUILD_FLAGS) -tags test
 
 # Default target
 .PHONY: all
@@ -41,24 +42,24 @@ generate-bledb:
 test: generate
 	@if [ -z "$(TEST)" ]; then \
 		echo "Running all tests..."; \
-		go test $(BUILD_FLAGS) -v ./...; \
+		go test $(TEST_FLAGS) -v ./...; \
 	else \
 		echo "Running specific test: $(TEST)..."; \
-		go test $(BUILD_FLAGS) -v -run $(TEST) ./...; \
+		go test $(TEST_FLAGS) -v -run $(TEST) ./...; \
 	fi
 
 # Run tests with race detection
 .PHONY: test-race
 test-race:
 	@echo "Running tests with race detection..."
-	go test $(BUILD_FLAGS) -race -v ./...
+	go test $(TEST_FLAGS) -race -v ./...
 
 # Run tests with coverage
 .PHONY: test-coverage
 test-coverage:
 	@echo "Running tests with coverage..."
 	mkdir -p $(COVERAGE_DIR)
-	go test $(BUILD_FLAGS) -coverprofile=$(COVERAGE_DIR)/coverage.out ./...
+	go test $(TEST_FLAGS) -coverprofile=$(COVERAGE_DIR)/coverage.out ./...
 	go tool cover -html=$(COVERAGE_DIR)/coverage.out -o $(COVERAGE_DIR)/coverage.html
 	@echo "Coverage report generated: $(COVERAGE_DIR)/coverage.html"
 
