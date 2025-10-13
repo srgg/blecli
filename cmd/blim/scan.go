@@ -275,9 +275,9 @@ func displayDevicesTableFromMap(enties map[string]scanner.DeviceEntry, cfg *conf
 		devList = append(devList, e)
 	}
 
-	// Sort by RSSI
+	// Sort by Name
 	sort.Slice(devList, func(i, j int) bool {
-		return devList[i].Device.GetRSSI() > devList[j].Device.GetRSSI()
+		return devList[i].Device.GetName() > devList[j].Device.GetName()
 	})
 
 	switch cfg.OutputFormat {
