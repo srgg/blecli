@@ -495,7 +495,7 @@ func (suite *LuaApiSuite) TearDownTest() {
 		if dev := suite.LuaApi.GetDevice(); dev != nil && dev.IsConnected() {
 			suite.Logger.WithFields(map[string]interface{}{
 				"device_ptr":     fmt.Sprintf("%p", dev),
-				"device_address": dev.GetAddress(),
+				"device_address": dev.Address(),
 			}).Debug("TearDownTest: Disconnecting device...")
 			if err := dev.Disconnect(); err != nil {
 				errors = append(errors, fmt.Errorf("disconnecting device: %w", err))

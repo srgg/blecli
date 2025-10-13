@@ -330,10 +330,10 @@ func (api *BLEAPI2) registerListFunction(L *lua.State) {
 			L.NewTable() // Return empty table if no connection
 			return 1
 		}
-		services := connection.GetServices()
+		services := connection.Services()
 		L.NewTable()
 
-		// Add both indexed array (for ordered iteration) and keyed access (for lookup)
+		// Add both an indexed array (for ordered iteration) and keyed access (for lookup)
 		arrayIndex := 1
 		for _, service := range services {
 			uuid := service.UUID()
@@ -391,22 +391,22 @@ func (api *BLEAPI2) registerDeviceInfo(L *lua.State) {
 	if dev != nil {
 		// Device ID
 		L.PushString("id")
-		L.PushString(dev.GetID())
+		L.PushString(dev.ID())
 		L.SetTable(-3)
 
 		// Device BleAddress
 		L.PushString("address")
-		L.PushString(dev.GetAddress())
+		L.PushString(dev.Address())
 		L.SetTable(-3)
 
 		// Device Name
 		L.PushString("name")
-		L.PushString(dev.GetName())
+		L.PushString(dev.Name())
 		L.SetTable(-3)
 
 		// RSSI
 		L.PushString("rssi")
-		L.PushInteger(int64(dev.GetRSSI()))
+		L.PushInteger(int64(dev.RSSI()))
 		L.SetTable(-3)
 
 		// Connectable
@@ -415,7 +415,7 @@ func (api *BLEAPI2) registerDeviceInfo(L *lua.State) {
 		L.SetTable(-3)
 
 		// TX Power (optional)
-		if txPower := dev.GetTxPower(); txPower != nil {
+		if txPower := dev.TxPower(); txPower != nil {
 			L.PushString("tx_power")
 			L.PushInteger(int64(*txPower))
 			L.SetTable(-3)
@@ -424,7 +424,7 @@ func (api *BLEAPI2) registerDeviceInfo(L *lua.State) {
 		// Advertised Services
 		L.PushString("advertised_services")
 		L.NewTable()
-		uuids := dev.GetAdvertisedServices()
+		uuids := dev.AdvertisedServices()
 		for i, uuid := range uuids {
 			L.PushInteger(int64(i + 1))
 			L.PushString(uuid)
@@ -433,7 +433,7 @@ func (api *BLEAPI2) registerDeviceInfo(L *lua.State) {
 		L.SetTable(-3)
 
 		// Manufacturer Data
-		manufData := dev.GetManufacturerData()
+		manufData := dev.ManufacturerData()
 		L.PushString("manufacturer_data")
 		if len(manufData) > 0 {
 			L.PushString(fmt.Sprintf("%X", manufData))
@@ -445,7 +445,7 @@ func (api *BLEAPI2) registerDeviceInfo(L *lua.State) {
 		// Service Data
 		L.PushString("service_data")
 		L.NewTable()
-		serviceData := dev.GetServiceData()
+		serviceData := dev.ServiceData()
 		for uuid, data := range serviceData {
 			L.PushString(uuid)
 			L.PushString(fmt.Sprintf("%X", data))

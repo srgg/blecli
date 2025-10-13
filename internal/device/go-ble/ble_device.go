@@ -124,13 +124,13 @@ func NewBLEDeviceWithAddress(address string, logger *logrus.Logger) *BLEDevice {
 
 // Device interface implementation
 
-func (d *BLEDevice) GetID() string {
+func (d *BLEDevice) ID() string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.id
 }
 
-func (d *BLEDevice) GetName() string {
+func (d *BLEDevice) Name() string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	if d.name == "" {
@@ -139,19 +139,19 @@ func (d *BLEDevice) GetName() string {
 	return d.name
 }
 
-func (d *BLEDevice) GetAddress() string {
+func (d *BLEDevice) Address() string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.address
 }
 
-func (d *BLEDevice) GetRSSI() int {
+func (d *BLEDevice) RSSI() int {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.rssi
 }
 
-func (d *BLEDevice) GetTxPower() *int {
+func (d *BLEDevice) TxPower() *int {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.txPower
@@ -163,20 +163,20 @@ func (d *BLEDevice) IsConnectable() bool {
 	return d.connectable
 }
 
-func (d *BLEDevice) GetAdvertisedServices() []string {
+func (d *BLEDevice) AdvertisedServices() []string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
 	return d.advertisedServices
 }
 
-func (d *BLEDevice) GetManufacturerData() []byte {
+func (d *BLEDevice) ManufacturerData() []byte {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.manufData
 }
 
-func (d *BLEDevice) GetServiceData() map[string][]byte {
+func (d *BLEDevice) ServiceData() map[string][]byte {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.serviceData
@@ -205,7 +205,7 @@ func (d *BLEDevice) Connect(ctx context.Context, opts *device.ConnectOptions) er
 	}
 
 	// Try to resolve device name from GAP Device Name characteristic (0x2A00)
-	// GAP Device Name is more authoritative than advertisement name
+	// GAP Device Name is more authoritative than the advertisement name
 	const (
 		gapServiceUUID = "1800"
 		deviceNameChar = "2a00"

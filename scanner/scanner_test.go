@@ -139,7 +139,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 		{
 			name: "excludes device on block list",
 			scanOptions: &scanner.ScanOptions{
-				BlockList: []string{suite.dev1.GetAddress()},
+				BlockList: []string{suite.dev1.Address()},
 			},
 			expectedDevices: []device.DeviceInfo{suite.dev2, suite.dev3},
 			description:     "Device AA:BB:CC:DD:EE:FF should be excluded from results",
@@ -205,7 +205,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 		sorted := make([]scanner.DeviceEntry, len(a))
 		copy(sorted, a)
 		sort.Slice(sorted, func(i, j int) bool {
-			return sorted[i].Device.GetAddress() < sorted[j].Device.GetAddress()
+			return sorted[i].Device.Address() < sorted[j].Device.Address()
 		})
 
 		// return the map with a single key "array" to overcome limitations

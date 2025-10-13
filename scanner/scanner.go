@@ -155,9 +155,9 @@ func (s *Scanner) handleAdvertisement(adv device.Advertisement) {
 		event.Type = EventUpdated
 	} else {
 		s.logger.WithFields(logrus.Fields{
-			"device":  e.device.GetName(),
-			"address": e.device.GetAddress(),
-			"rssi":    e.device.GetRSSI(),
+			"device":  e.device.Name(),
+			"address": e.device.Address(),
+			"rssi":    e.device.RSSI(),
 		}).Info("Discovered new device")
 		event.Type = EventNew
 	}

@@ -30,15 +30,15 @@ type Advertisement interface {
 
 //nolint:revive // DeviceInfo name is intentional for clarity when used as a device.DeviceInfo
 type DeviceInfo interface {
-	GetID() string
-	GetName() string
-	GetAddress() string
-	GetRSSI() int
-	GetTxPower() *int
+	ID() string
+	Name() string
+	Address() string
+	RSSI() int
+	TxPower() *int
 	IsConnectable() bool
-	GetAdvertisedServices() []string
-	GetManufacturerData() []byte
-	GetServiceData() map[string][]byte
+	AdvertisedServices() []string
+	ManufacturerData() []byte
+	ServiceData() map[string][]byte
 }
 
 // Device defines the interface for all device types
@@ -59,7 +59,7 @@ type PeripheralDevice interface {
 
 // Connection represents a BLE connection interface
 type Connection interface {
-	GetServices() []Service
+	Services() []Service
 	GetService(uuid string) (Service, error)
 	GetCharacteristic(service, uuid string) (Characteristic, error)
 	Subscribe(opts []*SubscribeOptions, pattern StreamMode, maxRate time.Duration, callback func(*Record)) error

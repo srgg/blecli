@@ -78,7 +78,7 @@ func (suite *BridgeSuite) ExecuteScriptWithCallbacks(
 	defer cancel()
 
 	// Get address from parents' device
-	address := suite.LuaApi.GetDevice().GetAddress()
+	address := suite.LuaApi.GetDevice().Address()
 
 	// Re-build subscribe options from peripheral configuration
 	var subscribeOptions []device.SubscribeOptions
@@ -142,7 +142,7 @@ func (suite *BridgeSuite) ExecuteScriptWithCallbacks(
 
 		data["TTY"] = b.GetTTYName()
 		data["TTYSymlink"] = b.GetTTYSymlink()
-		data["DeviceAddress"] = b.GetLuaAPI().GetDevice().GetAddress()
+		data["DeviceAddress"] = b.GetLuaAPI().GetDevice().Address()
 
 		suite.SetTemplateData(data)
 

@@ -41,7 +41,7 @@ type DescriptorJSON struct {
 func DeviceToJSON(d device.Device) string {
 	// Map Services - advertised services are now just UUIDs (no characteristics until connected)
 	var services []ServiceJSON
-	for _, serviceUUID := range d.GetAdvertisedServices() {
+	for _, serviceUUID := range d.AdvertisedServices() {
 		services = append(services, ServiceJSON{
 			UUID:            serviceUUID,            // serviceUUID is already a string
 			Characteristics: []CharacteristicJSON{}, // Advertised services have no characteristics
@@ -51,8 +51,8 @@ func DeviceToJSON(d device.Device) string {
 	// Keep manufacturer and service data as byte arrays (closer to BLE format)
 	// Convert []byte to []int to avoid base64 encoding
 	var manufData interface{}
-	if d.GetManufacturerData() != nil {
-		byteData := d.GetManufacturerData()
+	if d.ManufacturerData() != nil {
+		byteData := d.ManufacturerData()
 		intData := make([]int, len(byteData))
 		for i, b := range byteData {
 			intData[i] = int(b)
@@ -61,9 +61,9 @@ func DeviceToJSON(d device.Device) string {
 	}
 
 	var serviceData interface{}
-	if len(d.GetServiceData()) > 0 {
+	if len(d.ServiceData()) > 0 {
 		svcData := make(map[string][]int)
-		for k, v := range d.GetServiceData() {
+		for k, v := range d.ServiceData() {
 			intData := make([]int, len(v))
 			for i, b := range v {
 				intData[i] = int(b)
@@ -74,11 +74,11 @@ func DeviceToJSON(d device.Device) string {
 	}
 
 	jsonStruct := DeviceJSONFull{
-		ID:               d.GetID(),
-		Name:             d.GetName(),
-		Address:          d.GetAddress(),
-		RSSI:             d.GetRSSI(),
-		TxPower:          d.GetTxPower(),
+		ID:               d.ID(),
+		Name:             d.Name(),
+		Address:          d.Address(),
+		RSSI:             d.RSSI(),
+		TxPower:          d.TxPower(),
 		Connectable:      d.IsConnectable(),
 		Services:         services,
 		ManufacturerData: manufData,

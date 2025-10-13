@@ -253,7 +253,7 @@ func TestDevice_ExtractNameFromManufacturerData(t *testing.T) {
 
 			//bleDevice := dev.(*BLEDevice)
 			//result := bleDevice.extractNameFromManufacturerData(tt.manufData)
-			assert.Equal(t, tt.expectedName, dev.GetName())
+			assert.Equal(t, tt.expectedName, dev.Name())
 		})
 	}
 }
@@ -308,7 +308,7 @@ func TestDevice_NameResolutionPrecedence(t *testing.T) {
 
 			logger := logrus.New()
 			dev := devicefactory.NewDeviceFromAdvertisement(adv, logger)
-			assert.Equal(t, tt.expectedName, dev.GetName(), tt.description)
+			assert.Equal(t, tt.expectedName, dev.Name(), tt.description)
 		})
 	}
 }
@@ -331,7 +331,7 @@ func TestDevice_NameUpdateBehavior(t *testing.T) {
 	logger := logrus.New()
 	dev := devicefactory.NewDeviceFromAdvertisement(adv1, logger)
 	device := dev
-	assert.Equal(t, "Extracted", device.GetName(), "Should extract name from manufacturer data initially")
+	assert.Equal(t, "Extracted", device.Name(), "Should extract name from manufacturer data initially")
 
 	// Update with advertisement that has LocalName
 	adv2 := testutils.CreateMockAdvertisementFromJSON(`{

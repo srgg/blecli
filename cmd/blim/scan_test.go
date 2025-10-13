@@ -294,9 +294,9 @@ func TestDisplayDevicesJSON(t *testing.T) {
 	devices := []device.Device{device1}
 
 	// Test that we can access device properties
-	assert.Equal(t, "AA:BB:CC:DD:EE:FF", devices[0].GetID())
-	assert.Equal(t, "Test Device", devices[0].GetName())
-	assert.Equal(t, -45, devices[0].GetRSSI())
+	assert.Equal(t, "AA:BB:CC:DD:EE:FF", devices[0].ID())
+	assert.Equal(t, "Test Device", devices[0].Name())
+	assert.Equal(t, -45, devices[0].RSSI())
 }
 
 func TestDevice_DisplayName_Integration(t *testing.T) {
@@ -342,7 +342,7 @@ func TestDevice_DisplayName_Integration(t *testing.T) {
 				"txPower": 0
 			}`, tt.localName, tt.address).BuildDevice(logger)
 
-			result := device.GetName()
+			result := device.Name()
 			assert.Equal(t, tt.expected, result)
 		})
 	}

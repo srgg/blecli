@@ -93,9 +93,9 @@ func (c *BLEConnection) GetCharacteristic(service, uuid string) (device.Characte
 	return char, nil
 }
 
-// GetServices returns all discovered BLE services for this connection.
+// Services returns all discovered BLE services for this connection.
 // Services are sorted by UUID for consistent ordering. Thread-safe.
-func (c *BLEConnection) GetServices() []device.Service {
+func (c *BLEConnection) Services() []device.Service {
 	c.connMutex.RLock()
 	defer c.connMutex.RUnlock()
 

@@ -250,7 +250,7 @@ func runWatchMode(s *scanner.Scanner, opts *scanner.ScanOptions, cfg *config.Con
 			}
 
 		case ev := <-s.Events():
-			devicesMap[ev.DeviceInfo.GetAddress()] = scanner.DeviceEntry{
+			devicesMap[ev.DeviceInfo.Address()] = scanner.DeviceEntry{
 				Device:   ev.DeviceInfo,
 				LastSeen: ev.Timestamp,
 			}
@@ -277,7 +277,7 @@ func displayDevicesTableFromMap(enties map[string]scanner.DeviceEntry, cfg *conf
 
 	// Sort by Name
 	sort.Slice(devList, func(i, j int) bool {
-		return devList[i].Device.GetName() > devList[j].Device.GetName()
+		return devList[i].Device.Name() > devList[j].Device.Name()
 	})
 
 	switch cfg.OutputFormat {
@@ -304,14 +304,14 @@ func displayDevicesTable(entries []scanner.DeviceEntry) error {
 
 	for _, e := range entries {
 		dev := e.Device
-		name := dev.GetName()
+		name := dev.Name()
 		if len(name) > 20 {
 			name = name[:17] + "..."
 		}
 
 		// Join service UUIDs for display
-		uuids := make([]string, 0, len(dev.GetAdvertisedServices()))
-		for _, s := range dev.GetAdvertisedServices() {
+		uuids := make([]string, 0, len(dev.AdvertisedServices()))
+		for _, s := range dev.AdvertisedServices() {
 			uuids = append(uuids, s)
 		}
 		services := strings.Join(uuids, ",")
@@ -322,7 +322,7 @@ func displayDevicesTable(entries []scanner.DeviceEntry) error {
 		lastSeen := time.Since(e.LastSeen).Truncate(time.Second)
 
 		fmt.Fprintf(w, "%s\t%s\t%d dBm\t%s\t%s ago\n",
-			name, dev.GetAddress(), dev.GetRSSI(), services, lastSeen)
+			name, dev.Address(), dev.RSSI(), services, lastSeen)
 	}
 
 	return w.Flush()

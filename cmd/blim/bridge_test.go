@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-// BridgeCmdTestSuite tests the bridge command via runBridge function
+// BridgeCmdTestSuite tests the bridge command via the runBridge function
 type BridgeCmdTestSuite struct {
 	testutils.MockBLEPeripheralSuite
 	originalFlags struct {
@@ -20,7 +20,7 @@ type BridgeCmdTestSuite struct {
 	}
 }
 
-// SetupSuite saves original flags and sets up mock peripheral
+// SetupSuite saves original flags and sets up a mock peripheral
 func (suite *BridgeCmdTestSuite) SetupSuite() {
 	// Save original flag values
 	suite.originalFlags.serviceUUID = bridgeServiceUUID
@@ -193,7 +193,7 @@ func (suite *BridgeCmdTestSuite) SetupTest() {
 //Bridge is running. Press Ctrl+C to stop the bridge.
 //`
 //
-//	// Use TextAsserter to verify output matches expected
+//	// Use TextAsserter to verify the output matches the expectation
 //	testutils.NewTextAsserter(suite.T()).
 //		WithOptions(
 //			testutils.WithTrimSpace(true),

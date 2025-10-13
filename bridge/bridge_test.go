@@ -76,7 +76,7 @@ func (suite *BridgeTestSuite) TestSymlinkCreation() {
 	_, err := RunDeviceBridge(
 		bridgeCtx,
 		&BridgeOptions{
-			BleAddress:        suite.LuaApi.GetDevice().GetAddress(),
+			BleAddress:        suite.LuaApi.GetDevice().Address(),
 			BleConnectTimeout: 5 * time.Second,
 			Logger:            suite.Logger,
 			TTYSymlinkPath:    symlinkPath,
@@ -114,7 +114,7 @@ func (suite *BridgeTestSuite) TestSymlinkCleanupOnError() {
 	_, err := RunDeviceBridge(
 		bridgeCtx,
 		&BridgeOptions{
-			BleAddress:        suite.LuaApi.GetDevice().GetAddress(),
+			BleAddress:        suite.LuaApi.GetDevice().Address(),
 			BleConnectTimeout: 5 * time.Second,
 			Logger:            suite.Logger,
 			TTYSymlinkPath:    symlinkPath,
@@ -148,7 +148,7 @@ func (suite *BridgeTestSuite) TestNoSymlinkWhenNotSpecified() {
 	_, err := RunDeviceBridge(
 		bridgeCtx,
 		&BridgeOptions{
-			BleAddress:        suite.LuaApi.GetDevice().GetAddress(),
+			BleAddress:        suite.LuaApi.GetDevice().Address(),
 			BleConnectTimeout: 5 * time.Second,
 			Logger:            suite.Logger,
 		},
@@ -183,7 +183,7 @@ func (suite *BridgeTestSuite) TestTTYSymlinkAlreadyExists() {
 	_, err = RunDeviceBridge(
 		bridgeCtx,
 		&BridgeOptions{
-			BleAddress:        suite.LuaApi.GetDevice().GetAddress(),
+			BleAddress:        suite.LuaApi.GetDevice().Address(),
 			BleConnectTimeout: 5 * time.Second,
 			Logger:            suite.Logger,
 			TTYSymlinkPath:    symlinkPath,
