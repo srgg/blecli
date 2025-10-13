@@ -175,7 +175,27 @@ void setupBatteryService() {
         CHAR_BATTERY_LEVEL,
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
     );
+
+    // Add CCCD (0x2902) for notifications
     pBatteryCharacteristic->addDescriptor(new BLE2902());
+
+    // Add User Description (0x2901)
+    BLEDescriptor *pBatteryDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+    pBatteryDesc->setValue("Device Battery Level");
+    pBatteryCharacteristic->addDescriptor(pBatteryDesc);
+
+    // Add Presentation Format (0x2904) for battery percentage
+    BLEDescriptor *pBatteryFormat = new BLEDescriptor(BLEUUID((uint16_t)0x2904));
+    uint8_t formatValue[7] = {
+        0x04,        // Format: unsigned 8-bit integer
+        0x00,        // Exponent: 0
+        0xAD, 0x27,  // Unit: percentage (0x27AD)
+        0x01,        // Namespace: Bluetooth SIG
+        0x00, 0x00   // Description: 0
+    };
+    pBatteryFormat->setValue(formatValue, 7);
+    pBatteryCharacteristic->addDescriptor(pBatteryFormat);
+
     pBatteryCharacteristic->setValue(&batteryLevel, 1);
 
     pService->start();
@@ -189,7 +209,14 @@ void setupHeartRateService() {
         CHAR_HEART_RATE,
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
     );
+
+    // Add CCCD (0x2902) for notifications
     pHeartRateCharacteristic->addDescriptor(new BLE2902());
+
+    // Add User Description (0x2901)
+    BLEDescriptor *pHRDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+    pHRDesc->setValue("Heart Rate Measurement");
+    pHeartRateCharacteristic->addDescriptor(pHRDesc);
 
     // Heart rate measurement format: flags (1 byte) + heart rate (1 byte)
     uint8_t hrValue[2] = {0x00, heartRate};
@@ -202,18 +229,56 @@ void setupHeartRateService() {
 void setupEnvironmentalSensingService() {
     BLEService *pService = pServer->createService(SERVICE_ENV_SENSING);
 
+    // Temperature characteristic
     pTemperatureCharacteristic = pService->createCharacteristic(
         CHAR_TEMPERATURE,
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
     );
     pTemperatureCharacteristic->addDescriptor(new BLE2902());
+
+    // Add User Description (0x2901)
+    BLEDescriptor *pTempDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+    pTempDesc->setValue("Ambient Temperature");
+    pTemperatureCharacteristic->addDescriptor(pTempDesc);
+
+    // Add Presentation Format (0x2904) for temperature in Celsius
+    BLEDescriptor *pTempFormat = new BLEDescriptor(BLEUUID((uint16_t)0x2904));
+    uint8_t tempFormatValue[7] = {
+        0x0E,        // Format: signed 16-bit integer
+        0xFE,        // Exponent: -2 (hundredths)
+        0x2F, 0x27,  // Unit: degrees Celsius (0x272F)
+        0x01,        // Namespace: Bluetooth SIG
+        0x00, 0x00   // Description: 0
+    };
+    pTempFormat->setValue(tempFormatValue, 7);
+    pTemperatureCharacteristic->addDescriptor(pTempFormat);
+
     pTemperatureCharacteristic->setValue((uint8_t*)&temperature, 2);
 
+    // Humidity characteristic
     pHumidityCharacteristic = pService->createCharacteristic(
         CHAR_HUMIDITY,
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
     );
     pHumidityCharacteristic->addDescriptor(new BLE2902());
+
+    // Add User Description (0x2901)
+    BLEDescriptor *pHumDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+    pHumDesc->setValue("Relative Humidity");
+    pHumidityCharacteristic->addDescriptor(pHumDesc);
+
+    // Add Presentation Format (0x2904) for humidity percentage
+    BLEDescriptor *pHumFormat = new BLEDescriptor(BLEUUID((uint16_t)0x2904));
+    uint8_t humFormatValue[7] = {
+        0x06,        // Format: unsigned 16-bit integer
+        0xFE,        // Exponent: -2 (hundredths)
+        0xAD, 0x27,  // Unit: percentage (0x27AD)
+        0x01,        // Namespace: Bluetooth SIG
+        0x00, 0x00   // Description: 0
+    };
+    pHumFormat->setValue(humFormatValue, 7);
+    pHumidityCharacteristic->addDescriptor(pHumFormat);
+
     pHumidityCharacteristic->setValue((uint8_t*)&humidity, 2);
 
     pService->start();
@@ -242,12 +307,24 @@ void setupUartService() {
 void setupCustomTestService() {
     BLEService *pService = pServer->createService(SERVICE_CUSTOM_TEST);
 
-    // Read-only characteristic
+    // Read-only characteristic with multiple descriptors
     BLECharacteristic *pReadChar = pService->createCharacteristic(
         CHAR_TEST_READ,
         BLECharacteristic::PROPERTY_READ
     );
     pReadChar->setValue("ReadOnlyValue");
+
+    // Add User Description (0x2901)
+    BLEDescriptor *pReadDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+    pReadDesc->setValue("Test Read-Only Characteristic");
+    pReadChar->addDescriptor(pReadDesc);
+
+    // Add Characteristic Extended Properties Descriptor (0x2900)
+    // Value: 0x0001 = Reliable Write enabled
+    BLEDescriptor *pExtPropsDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2900));
+    uint8_t extPropsValue[2] = {0x01, 0x00};  // Little-endian: 0x0001
+    pExtPropsDesc->setValue(extPropsValue, 2);
+    pReadChar->addDescriptor(pExtPropsDesc);
 
     // Write-only characteristic
     BLECharacteristic *pWriteChar = pService->createCharacteristic(

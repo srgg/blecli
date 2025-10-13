@@ -7,16 +7,29 @@ import (
 	"testing"
 	"time"
 
-	ble "github.com/go-ble/ble"
+	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
+	"github.com/srg/blim/internal/device"
+	goble "github.com/srg/blim/internal/device/go-ble"
 	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
-	"github.com/srg/blim/internal/testutils/mocks"
 	"github.com/srg/blim/pkg/config"
 	"github.com/srg/blim/scanner"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 )
+
+// bleScanningDeviceMock wraps ble.Device to implement device.ScanningDevice for tests
+type bleScanningDeviceMock struct {
+	blelib.Device
+}
+
+// Scan adapts ble.Device.Scan to use device.Advertisement
+func (s *bleScanningDeviceMock) Scan(ctx context.Context, allowDup bool, handler func(device.Advertisement)) error {
+	bleHandler := func(adv blelib.Advertisement) {
+		handler(goble.NewBLEAdvertisement(adv))
+	}
+	return s.Device.Scan(ctx, allowDup, bleHandler)
+}
 
 // ScanInterruptSuite tests scan interrupt behavior with proper mock setup
 type ScanInterruptSuite struct {
@@ -55,27 +68,39 @@ func (s *ScanInterruptSuite) SetupTest() {
 	// Call parent to apply mock configuration
 	s.MockBLEPeripheralSuite.SetupTest()
 
-	// Customize the mock device to add blocking Scan behavior for interrupt testing
-	// This overrides the default non-blocking behavior from PeripheralDeviceBuilder
-	mockDevice := s.PeripheralBuilder.Build().(*mocks.MockDevice)
+	// The PeripheralDeviceBuilder creates a mock device, but we need to customize it
+	// to add blocking Scan behavior for interrupt testing
+	bleDevice := s.PeripheralBuilder.Build()
 
-	// Remove default Scan expectation and add blocking version
-	mockDevice.ExpectedCalls = nil
-	mockDevice.On("Scan", mock.Anything, mock.Anything, mock.MatchedBy(func(handler ble.AdvHandler) bool {
-		// Call handler for each advertisement
-		handler(adv1)
-		handler(adv2)
-		return true
-	})).Run(func(args mock.Arguments) {
-		// Block until context is cancelled (for interrupt testing)
-		ctx := args.Get(0).(context.Context)
-		<-ctx.Done()
-	}).Return(nil)
-
-	// Update device factory with our customized device
-	devicefactory.DeviceFactory = func() (ble.Device, error) {
-		return mockDevice, nil
+	// Wrap in a custom mock that blocks until context is cancelled
+	blockingDevice := &blockingScanDevice{
+		Device: bleDevice,
+		adv1:   adv1,
+		adv2:   adv2,
 	}
+
+	// Update the device factory with the blocking device
+	devicefactory.DeviceFactory = func() (device.ScanningDevice, error) {
+		return blockingDevice, nil
+	}
+}
+
+// blockingScanDevice wraps a BLE device to make Scan block until context is cancelled
+// This is needed for interrupt testing
+type blockingScanDevice struct {
+	blelib.Device
+	adv1, adv2 device.Advertisement
+}
+
+// Scan sends advertisements then blocks until context is cancelled
+func (b *blockingScanDevice) Scan(ctx context.Context, allowDup bool, handler func(device.Advertisement)) error {
+	// Send the advertisements first
+	handler(b.adv1)
+	handler(b.adv2)
+
+	// Then block until context is cancelled (simulating ongoing scan)
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 // TestSingleScanInterrupt tests that a single scan with duration responds to SIGINT

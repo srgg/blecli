@@ -8,7 +8,6 @@ import (
 	"syscall"
 	"time"
 
-	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/srg/blim"
@@ -89,10 +88,13 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	logger := cfg.NewLogger()
 
 	deviceAddress := args[0]
-	serviceUUID, err := parseUUID(bridgeServiceUUID, "service")
+
+	// Validate and normalize service UUID
+	serviceUUIDs, err := device.ValidateUUID(bridgeServiceUUID)
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid service UUID: %w", err)
 	}
+	serviceUUID := serviceUUIDs[0]
 
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -165,7 +167,7 @@ func runBridge(cmd *cobra.Command, args []string) error {
 			BleDescriptorReadTimeout: bridgeDescriptorReadTimeout,
 			BleSubscribeOptions: []device.SubscribeOptions{
 				{
-					Service: serviceUUID.String(),
+					Service: serviceUUID,
 				},
 			},
 			Logger:         logger,
@@ -176,17 +178,4 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	)
 
 	return err
-}
-
-func parseUUID(uuidStr, name string) (*blelib.UUID, error) {
-	if uuidStr == "" {
-		return nil, fmt.Errorf("%s UUID cannot be empty", name)
-	}
-
-	uuid, err := blelib.Parse(uuidStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid %s UUID '%s': %w", name, uuidStr, err)
-	}
-
-	return &uuid, nil
 }

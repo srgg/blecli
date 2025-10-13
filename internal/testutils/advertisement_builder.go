@@ -1,10 +1,11 @@
+//go:build test
+
 package testutils
 
 import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
 	goble "github.com/srg/blim/internal/device/go-ble"
@@ -12,7 +13,7 @@ import (
 )
 
 // AdvertisementBuilder builds mocked BLE advertisements for testing.
-// It provides a fluent API for configuring mock ble.Advertisement instances
+// It provides a fluent API for configuring a mock device.Advertisement instances
 // with explicit field tracking to ensure only set fields have mock expectations.
 type AdvertisementBuilder struct {
 	name        string
@@ -196,20 +197,21 @@ func (b *AdvertisementBuilder) FromJSON(jsonStrFmt string, args ...interface{}) 
 // Build creates a MockAdvertisement that implements ble.Advertisement interface.
 // All mock expectations are set based on explicitly configured fields only.
 // Following testify best practices for mock setup.
-func (b *AdvertisementBuilder) Build() *mocks.MockAdvertisement {
-	adv := &mocks.MockAdvertisement{}
+func (b *AdvertisementBuilder) Build() *mocks.DeviceAdvertisementMock {
+	//adv := &mocks.MockAdvertisement{}
+	adv := &mocks.DeviceAdvertisementMock{}
 
-	// Convert string UUIDs to ble.UUID with proper error handling
-	var bleServices []ble.UUID
-	for _, s := range b.services {
-		bleServices = append(bleServices, ble.MustParse(s))
+	// Convert service data to expected format
+	var deviceServiceData []struct {
+		UUID string
+		Data []byte
 	}
-
-	// Convert service data with proper UUID parsing
-	var bleServiceData []ble.ServiceData
 	for uuid, data := range b.serviceData {
-		bleServiceData = append(bleServiceData, ble.ServiceData{
-			UUID: ble.MustParse(uuid),
+		deviceServiceData = append(deviceServiceData, struct {
+			UUID string
+			Data []byte
+		}{
+			UUID: uuid,
 			Data: data,
 		})
 	}
@@ -217,9 +219,7 @@ func (b *AdvertisementBuilder) Build() *mocks.MockAdvertisement {
 	// Setup mock expectations using testify best practices
 	// Only set expectations for explicitly configured fields
 	if b.addressSet {
-		addr := &mocks.MockAddr{}
-		addr.On("String").Return(b.address)
-		adv.On("Addr").Return(addr)
+		adv.On("Addr").Return(b.address)
 	}
 	if b.nameSet {
 		adv.On("LocalName").Return(b.name)
@@ -231,10 +231,10 @@ func (b *AdvertisementBuilder) Build() *mocks.MockAdvertisement {
 		adv.On("ManufacturerData").Return(b.manufData)
 	}
 	if b.serviceDataSet {
-		adv.On("ServiceData").Return(bleServiceData)
+		adv.On("ServiceData").Return(deviceServiceData)
 	}
 	if b.servicesSet {
-		adv.On("Services").Return(bleServices)
+		adv.On("Services").Return(b.services)
 	}
 	if b.connectableSet {
 		adv.On("Connectable").Return(b.connectable)
@@ -246,6 +246,12 @@ func (b *AdvertisementBuilder) Build() *mocks.MockAdvertisement {
 			adv.On("TxPowerLevel").Return(127) // BLE spec default for unavailable
 		}
 	}
+
+	// Set up OverflowService and SolicitedService - always return empty slices
+	// These are rarely used but part of the Advertisement interface
+	// Mark as Maybe() since they're only called in scan simulation, not by device code
+	adv.On("OverflowService").Return([]string{}).Maybe()
+	adv.On("SolicitedService").Return([]string{}).Maybe()
 
 	return adv
 }
@@ -300,21 +306,21 @@ func (b *AdvertisementBuilder) BuildDevice(logger *logrus.Logger) device.Device 
 //	    WithService("180D").
 //	    Build()
 type AdvertisementArrayBuilder[T any] struct {
-	advertisements []ble.Advertisement
+	advertisements []device.Advertisement
 	parent         T
-	buildFunc      func(T, []ble.Advertisement) T
+	buildFunc      func(T, []device.Advertisement) T
 }
 
 // NewAdvertisementArrayBuilder creates a new array builder with the specified generic type.
 func NewAdvertisementArrayBuilder[T any]() *AdvertisementArrayBuilder[T] {
 	return &AdvertisementArrayBuilder[T]{
-		advertisements: make([]ble.Advertisement, 0),
+		advertisements: make([]device.Advertisement, 0),
 	}
 }
 
 // WithAdvertisements adds pre-existing Advertisements to the array and returns the array builder for chaining.
 // Supports adding multiple advertisements in a single call.
-func (ab *AdvertisementArrayBuilder[T]) WithAdvertisements(ads ...ble.Advertisement) *AdvertisementArrayBuilder[T] {
+func (ab *AdvertisementArrayBuilder[T]) WithAdvertisements(ads ...device.Advertisement) *AdvertisementArrayBuilder[T] {
 	ab.advertisements = append(ab.advertisements, ads...)
 	return ab
 }

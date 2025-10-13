@@ -14,7 +14,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/srg/blim/internal/device"
@@ -96,14 +95,14 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create BLE scanner: %w", err)
 	}
 
-	// Parse service UUIDs if provided
-	var serviceUUIDs []blelib.UUID
-	for _, svcStr := range scanServices {
-		uuid, err := blelib.Parse(svcStr)
+	// Validate and normalize service UUIDs if provided
+	var serviceUUIDs []string
+	if len(scanServices) > 0 {
+		var err error
+		serviceUUIDs, err = device.ValidateUUID(scanServices...)
 		if err != nil {
-			return fmt.Errorf("invalid service UUID '%s': %w", svcStr, err)
+			return fmt.Errorf("invalid service UUID: %w", err)
 		}
-		serviceUUIDs = append(serviceUUIDs, uuid)
 	}
 
 	// Create scan options
@@ -128,18 +127,38 @@ func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *con
 	}
 
 	// Scan for a specified duration, or until interrupted by the user.
-	ctx := blelib.WithSigHandler(context.WithTimeout(context.Background(), cfg.ScanTimeout))
+	// OLD: ctx := blelib.WithSigHandler(context.WithTimeout(context.Background(), cfg.ScanTimeout))
+
+	// Create context with timeout
+	baseCtx := context.Background()
+	if cfg.ScanTimeout > 0 {
+		var cancel context.CancelFunc
+		baseCtx, cancel = context.WithTimeout(baseCtx, cfg.ScanTimeout)
+		defer cancel()
+	}
+
+	// Create cancellable context for signal handling
+	ctx, cancel := context.WithCancel(baseCtx)
+	defer cancel()
 
 	// Listen for Ctrl+C to cancel
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 	go func() {
 		<-sigCh
 		fmt.Println("\nCtrl+C pressed, cancelling scan...")
-		if cb, ok := ctx.Value(blelib.ContextKeySig).(func()); ok {
-			cb() // stop the scan
-		}
+		cancel()
 	}()
+
+	// OLD signal handling code:
+	// go func() {
+	// 	<-sigCh
+	// 	fmt.Println("\nCtrl+C pressed, cancelling scan...")
+	// 	if cb, ok := ctx.Value(blelib.ContextKeySig).(func()); ok {
+	// 		cb() // stop the scan
+	// 	}
+	// }()
 
 	// Setup progress printer
 	progress := NewCountdownProgressPrinter("Scanning for BLE devices", "Scanning", cfg.ScanTimeout, "Processing results")
@@ -156,7 +175,7 @@ func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *con
 	return displayDevicesTableFromMap(devices, cfg)
 }
 
-func runWatchMode(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *config.Config, logger *logrus.Logger) error {
+func runWatchMode(s *scanner.Scanner, opts *scanner.ScanOptions, cfg *config.Config, logger *logrus.Logger) error {
 	// Scan until interrupted by the user.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -168,18 +187,20 @@ func runWatchMode(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *conf
 
 	go func() {
 		<-sigCh
+
 		fmt.Println("\nCtrl+C pressed, cancelling scan...")
 		cancel()
 	}()
 
 	// Start collecting events immediately BEFORE starting the scan
-	devicesMap := make(map[string]device.DeviceInfo)
+	// Use deviceEntry to track both device info and last seen timestamp
+	devicesMap := make(map[string]scanner.DeviceEntry)
 
 	// Run the blocking scan in a goroutine
 	scanErrCh := make(chan error, 1)
 	go func() {
 		var err error
-		devicesMap, err = scanner.Scan(ctx, opts, nil) // No progress callback for watch mode
+		devicesMap, err = s.Scan(ctx, opts, nil) // No progress callback for watch mode
 		scanErrCh <- err
 		close(scanErrCh)
 	}()
@@ -204,8 +225,12 @@ func runWatchMode(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *conf
 			return printDeviceTable(ctx.Err())
 
 		case err := <-scanErrCh:
-			// Scan completed (normally or with error)
-			return printDeviceTable(err)
+			// Scan completed
+			// If there's a real error (not just cancellation), exit
+			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				return printDeviceTable(err)
+			}
+			// Otherwise, scan completed normally - continue watching events indefinitely
 		case <-ticker.C:
 			// Periodic check to ensure ctx.Done() gets a chance to be processed
 			// This prevents channel starvation from the busy events channel
@@ -224,8 +249,11 @@ func runWatchMode(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *conf
 				tickCount = 0
 			}
 
-		case ev := <-scanner.Events():
-			devicesMap[ev.DeviceInfo.GetAddress()] = ev.DeviceInfo
+		case ev := <-s.Events():
+			devicesMap[ev.DeviceInfo.GetAddress()] = scanner.DeviceEntry{
+				Device:   ev.DeviceInfo,
+				LastSeen: ev.Timestamp,
+			}
 		}
 	}
 }
@@ -235,24 +263,21 @@ type deviceWithTime struct {
 	lastSeen time.Time
 }
 
-func displayDevicesTableFromMap(devices map[string]device.DeviceInfo, cfg *config.Config) error {
-	if len(devices) == 0 {
+func displayDevicesTableFromMap(enties map[string]scanner.DeviceEntry, cfg *config.Config) error {
+	if len(enties) == 0 {
 		fmt.Println("No devices discovered")
 		return nil
 	}
 
 	// Track last seen time for scan display
-	devList := make([]deviceWithTime, 0, len(devices))
-	for _, d := range devices {
-		devList = append(devList, deviceWithTime{
-			DeviceInfo: d,
-			lastSeen:   time.Now(), // Track when we saw this device
-		})
+	devList := make([]scanner.DeviceEntry, 0, len(enties))
+	for _, e := range enties {
+		devList = append(devList, e)
 	}
 
 	// Sort by RSSI
 	sort.Slice(devList, func(i, j int) bool {
-		return devList[i].GetRSSI() > devList[j].GetRSSI()
+		return devList[i].Device.GetRSSI() > devList[j].Device.GetRSSI()
 	})
 
 	switch cfg.OutputFormat {
@@ -260,7 +285,7 @@ func displayDevicesTableFromMap(devices map[string]device.DeviceInfo, cfg *confi
 		// Extract just the DeviceInfo for JSON
 		infoList := make([]device.DeviceInfo, len(devList))
 		for i, d := range devList {
-			infoList[i] = d.DeviceInfo
+			infoList[i] = d.Device
 		}
 		return displayDevicesJSON(infoList)
 	default:
@@ -268,7 +293,7 @@ func displayDevicesTableFromMap(devices map[string]device.DeviceInfo, cfg *confi
 	}
 }
 
-func displayDevicesTable(devices []deviceWithTime) error {
+func displayDevicesTable(entries []scanner.DeviceEntry) error {
 	var base io.Writer = os.Stdout
 	if base == nil {
 		base = io.Discard
@@ -277,7 +302,8 @@ func displayDevicesTable(devices []deviceWithTime) error {
 	fmt.Fprintln(w, "NAME\tADDRESS\tRSSI\tSERVICES\tLAST SEEN")
 	fmt.Fprintln(w, strings.Repeat("-", 80))
 
-	for _, dev := range devices {
+	for _, e := range entries {
+		dev := e.Device
 		name := dev.GetName()
 		if len(name) > 20 {
 			name = name[:17] + "..."
@@ -293,7 +319,7 @@ func displayDevicesTable(devices []deviceWithTime) error {
 			services = services[:27] + "..."
 		}
 
-		lastSeen := time.Since(dev.lastSeen).Truncate(time.Second)
+		lastSeen := time.Since(e.LastSeen).Truncate(time.Second)
 
 		fmt.Fprintf(w, "%s\t%s\t%d dBm\t%s\t%s ago\n",
 			name, dev.GetAddress(), dev.GetRSSI(), services, lastSeen)

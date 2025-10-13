@@ -9,7 +9,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
 )
@@ -79,10 +78,10 @@ func NewBLEDevice(address string, logger *logrus.Logger) *BLEDevice {
 	}
 }
 
-// NewBLEDeviceFromAdvertisement creates a BLEDevice from a BLE advertisement
-func NewBLEDeviceFromAdvertisement(adv ble.Advertisement, logger *logrus.Logger) *BLEDevice {
+// NewBLEDeviceFromAdvertisement creates a BLEDevice from a device.Advertisement
+func NewBLEDeviceFromAdvertisement(adv device.Advertisement, logger *logrus.Logger) *BLEDevice {
 	// Use the new constructor with preconnection
-	dev := NewBLEDevice(adv.Addr().String(), logger)
+	dev := NewBLEDevice(adv.Addr(), logger)
 
 	// Set advertisement-specific data
 	dev.name = adv.LocalName()
@@ -92,13 +91,13 @@ func NewBLEDeviceFromAdvertisement(adv ble.Advertisement, logger *logrus.Logger)
 
 	// Convert service UUIDs into minimal Service entries (UUID only)
 	for _, uuid := range adv.Services() {
-		dev.advertisedServices = append(dev.advertisedServices, uuid.String())
+		dev.advertisedServices = append(dev.advertisedServices, device.NormalizeUUID(uuid))
 	}
 	sort.Strings(dev.advertisedServices)
 
 	// Convert service data
 	for _, svcData := range adv.ServiceData() {
-		dev.serviceData[svcData.UUID.String()] = svcData.Data
+		dev.serviceData[device.NormalizeUUID(svcData.UUID)] = svcData.Data
 	}
 
 	// Extract TX power if available
@@ -272,7 +271,7 @@ func (d *BLEDevice) IsConnected() bool {
 }
 
 // Update refreshes device information from a new advertisement
-func (d *BLEDevice) Update(adv ble.Advertisement) {
+func (d *BLEDevice) Update(adv device.Advertisement) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -297,9 +296,9 @@ func (d *BLEDevice) Update(adv ble.Advertisement) {
 	// Merge advertised services (ensure UUID entries exist)
 	needsSort := false
 	for _, svc := range adv.Services() {
-		u := svc.String()
-		if !d.hasServiceUUID(u) {
-			d.advertisedServices = append(d.advertisedServices, u)
+		normalizedSvc := device.NormalizeUUID(svc)
+		if !d.hasServiceUUID(normalizedSvc) {
+			d.advertisedServices = append(d.advertisedServices, normalizedSvc)
 			needsSort = true
 		}
 	}
@@ -309,7 +308,7 @@ func (d *BLEDevice) Update(adv ble.Advertisement) {
 
 	// Update service data
 	for _, svcData := range adv.ServiceData() {
-		d.serviceData[svcData.UUID.String()] = svcData.Data
+		d.serviceData[device.NormalizeUUID(svcData.UUID)] = svcData.Data
 	}
 
 	// Update TX power

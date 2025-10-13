@@ -3,9 +3,30 @@ package device
 import (
 	"context"
 	"time"
-
-	"github.com/go-ble/ble"
 )
+
+// ScanningDevice represents a BLE device capable of scanning for advertisements
+type ScanningDevice interface {
+	Scan(ctx context.Context, allowDup bool, handler func(Advertisement)) error
+}
+
+type Advertisement interface {
+	LocalName() string
+	ManufacturerData() []byte
+	ServiceData() []struct {
+		UUID string
+		Data []byte
+	}
+
+	Services() []string
+	OverflowService() []string
+	TxPowerLevel() int
+	Connectable() bool
+	SolicitedService() []string
+
+	RSSI() int
+	Addr() string
+}
 
 //nolint:revive // DeviceInfo name is intentional for clarity when used as a device.DeviceInfo
 type DeviceInfo interface {
@@ -27,8 +48,13 @@ type Device interface {
 	Connect(ctx context.Context, opts *ConnectOptions) error
 	Disconnect() error
 	IsConnected() bool
-	Update(adv ble.Advertisement)
+	Update(adv Advertisement)
 	GetConnection() Connection
+}
+
+type PeripheralDevice interface {
+	Device
+	ScanningDevice
 }
 
 // Connection represents a BLE connection interface

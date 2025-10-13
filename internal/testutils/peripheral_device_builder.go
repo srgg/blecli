@@ -1,3 +1,5 @@
+//go:build test
+
 package testutils
 
 import (
@@ -6,6 +8,7 @@ import (
 	"time"
 
 	blelib "github.com/go-ble/ble"
+	"github.com/srg/blim/internal/device"
 	"github.com/srg/blim/internal/testutils/mocks"
 	"github.com/stretchr/testify/mock"
 	"gopkg.in/yaml.v3"
@@ -114,7 +117,7 @@ type DeviceProfileConfig struct {
 //	    value: [0x00, 0x00]  # Normal descriptor with value
 type PeripheralDeviceBuilder struct {
 	profile            DeviceProfileConfig
-	scanAdvertisements []blelib.Advertisement
+	scanAdvertisements []device.Advertisement
 }
 
 // NewPeripheralDeviceBuilder creates a new peripheral device builder
@@ -202,7 +205,7 @@ func (b *PeripheralDeviceBuilder) FromJSON(jsonStrFmt string, args ...interface{
 func (b *PeripheralDeviceBuilder) WithScanAdvertisements() *AdvertisementArrayBuilder[*PeripheralDeviceBuilder] {
 	arrayBuilder := NewAdvertisementArrayBuilder[*PeripheralDeviceBuilder]()
 	arrayBuilder.parent = b
-	arrayBuilder.buildFunc = func(parent *PeripheralDeviceBuilder, ads []blelib.Advertisement) *PeripheralDeviceBuilder {
+	arrayBuilder.buildFunc = func(parent *PeripheralDeviceBuilder, ads []device.Advertisement) *PeripheralDeviceBuilder {
 		// Add ble.Advertisements directly to scan advertisements
 		parent.scanAdvertisements = append(parent.scanAdvertisements, ads...)
 		return parent
@@ -327,8 +330,55 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 	// Set up scan expectations - simulate discovering the configured advertisements
 	mockDevice.On("Scan", mock.Anything, mock.Anything, mock.MatchedBy(func(handler blelib.AdvHandler) bool {
 		// Simulate discovering all configured advertisements
-		for _, adv := range b.scanAdvertisements {
-			handler(adv)
+		for _, devAdv := range b.scanAdvertisements {
+			// Create an inline adapter that wraps the device.Advertisement as ble.Advertisement
+			mockAddr := &mocks.MockAddr{}
+			mockAddr.On("String").Return(devAdv.Addr())
+
+			// Create ble.Advertisement adapter
+			adapter := &mocks.BleAdvertisementMock{}
+			adapter.On("LocalName").Return(devAdv.LocalName())
+			adapter.On("ManufacturerData").Return(devAdv.ManufacturerData())
+			adapter.On("TxPowerLevel").Return(devAdv.TxPowerLevel())
+			adapter.On("Connectable").Return(devAdv.Connectable())
+			adapter.On("RSSI").Return(devAdv.RSSI())
+			adapter.On("Addr").Return(mockAddr)
+
+			// Convert ServiceData
+			deviceServiceData := devAdv.ServiceData()
+			bleServiceData := make([]blelib.ServiceData, len(deviceServiceData))
+			for i, sd := range deviceServiceData {
+				bleServiceData[i] = blelib.ServiceData{
+					UUID: blelib.MustParse(sd.UUID),
+					Data: sd.Data,
+				}
+			}
+			adapter.On("ServiceData").Return(bleServiceData)
+
+			// Convert Services
+			deviceServices := devAdv.Services()
+			bleServices := make([]blelib.UUID, len(deviceServices))
+			for i, svc := range deviceServices {
+				bleServices[i] = blelib.MustParse(svc)
+			}
+			adapter.On("Services").Return(bleServices)
+
+			// Convert OverflowService and SolicitedService
+			deviceOverflow := devAdv.OverflowService()
+			bleOverflow := make([]blelib.UUID, len(deviceOverflow))
+			for i, svc := range deviceOverflow {
+				bleOverflow[i] = blelib.MustParse(svc)
+			}
+			adapter.On("OverflowService").Return(bleOverflow)
+
+			deviceSolicited := devAdv.SolicitedService()
+			bleSolicited := make([]blelib.UUID, len(deviceSolicited))
+			for i, svc := range deviceSolicited {
+				bleSolicited[i] = blelib.MustParse(svc)
+			}
+			adapter.On("SolicitedService").Return(bleSolicited)
+
+			handler(adapter)
 		}
 		return true
 	})).Return(nil)

@@ -1,3 +1,5 @@
+//go:build test
+
 package testutils
 
 import (
@@ -5,6 +7,7 @@ import (
 
 	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
+	"github.com/srg/blim/internal/device"
 	goble "github.com/srg/blim/internal/device/go-ble"
 	"github.com/stretchr/testify/suite"
 )
@@ -77,7 +80,7 @@ type MockBLEPeripheralSuite struct {
 	PeripheralBuilder *PeripheralDeviceBuilder // Builder for configuring mock devices
 
 	// Mock advertisements configuration
-	AdvertisementsBuilder *AdvertisementArrayBuilder[[]blelib.Advertisement] // Builder for configuring mocked Advertisements for Scan
+	AdvertisementsBuilder *AdvertisementArrayBuilder[[]device.Advertisement] // Builder for configuring mocked Advertisements for Scan
 }
 
 // SetupSuite initializes the test suite following testify/suite best practices.
@@ -165,10 +168,10 @@ func (s *MockBLEPeripheralSuite) WithPeripheral() *PeripheralDeviceBuilder {
 
 // WithAdvertisements returns the peripheral builder configured for advertisements.
 // Use this method to set up scan advertisements in test setup.
-func (s *MockBLEPeripheralSuite) WithAdvertisements() *AdvertisementArrayBuilder[[]blelib.Advertisement] {
+func (s *MockBLEPeripheralSuite) WithAdvertisements() *AdvertisementArrayBuilder[[]device.Advertisement] {
 
 	if s.AdvertisementsBuilder == nil {
-		s.AdvertisementsBuilder = NewAdvertisementArrayBuilder[[]blelib.Advertisement]()
+		s.AdvertisementsBuilder = NewAdvertisementArrayBuilder[[]device.Advertisement]()
 	}
 
 	s.Logger.Debug("Advertisements configuration started")

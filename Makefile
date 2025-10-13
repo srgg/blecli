@@ -189,7 +189,7 @@ generate-mocks:
 .PHONY: clean-mocks
 clean-mocks:
 	@echo "Cleaning generated mocks..."
-	rm -rf pkg/mocks/mock_*.go
+	rm -rf internal/testutils/mocks/*.go
 	@echo "Generated mocks cleaned"
 
 # Clean generated BLE database

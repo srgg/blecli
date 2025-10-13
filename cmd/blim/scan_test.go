@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/srg/blim/internal/device"
@@ -20,7 +19,7 @@ import (
 // ScanTestSuite provides testify/suite for proper test isolation
 type ScanTestSuite struct {
 	suite.Suite
-	originalDeviceFactory func() (blelib.Device, error)
+	originalDeviceFactory func() (device.ScanningDevice, error)
 	originalFlags         struct {
 		scanDuration    time.Duration
 		scanFormat      string
@@ -47,11 +46,12 @@ func (suite *ScanTestSuite) SetupSuite() {
 
 	// Save the original BLE device factory and inject mock
 	suite.originalDeviceFactory = devicefactory.DeviceFactory
-	devicefactory.DeviceFactory = func() (blelib.Device, error) {
+	devicefactory.DeviceFactory = func() (device.ScanningDevice, error) {
 		mockDevice := &mocks.MockDevice{}
 		// Set up expectations for the Scan method
 		mockDevice.On("Scan", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		return mockDevice, nil
+		// Wrap mock device to implement device.ScanningDevice interface
+		return &bleScanningDeviceMock{Device: mockDevice}, nil
 	}
 }
 

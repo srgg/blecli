@@ -273,7 +273,7 @@ func (c *BLECharacteristic) CloseUpdates() {
 	}
 }
 
-// ResetUpdates recreates the updates channel (for reconnection).
+// ResetUpdates recreates the update channel (for reconnection).
 // MUST only be called after CloseUpdates() has been called.
 // Returns an error if the channel is not closed.
 func (c *BLECharacteristic) ResetUpdates(buffer int) error {

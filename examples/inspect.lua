@@ -207,8 +207,8 @@ local function output_text(data)
                     local descriptor_display = blim.format_named(descriptor)
                     io.write(string.format("      descriptor: %s\n", descriptor_display))
 
-                    -- Show descriptor value if available
-                    if descriptor.value then
+                    -- Show descriptor value if available and non-empty
+                    if descriptor.value and descriptor.value ~= "" then
                         io.write(string.format("        value: %s\n", descriptor.value))
                     end
 

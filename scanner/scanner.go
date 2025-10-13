@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/cornelk/hashmap"
-	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
 	"github.com/srg/blim/internal/devicefactory"
@@ -28,24 +27,34 @@ const (
 type DeviceEvent struct {
 	Type       DeviceEventType
 	DeviceInfo device.DeviceInfo
+	Timestamp  time.Time // When this event occurred
+}
+
+type DeviceEntry struct {
+	Device   device.DeviceInfo
+	LastSeen time.Time
+}
+
+type deviceEntry struct {
+	device   device.Device
+	lastSeen time.Time
 }
 
 // Scanner handles BLE device discovery
 type Scanner struct {
-	devices *hashmap.Map[string, device.Device]
+	devices *hashmap.Map[string, deviceEntry]
 	events  *lua.RingChannel[DeviceEvent]
 	logger  *logrus.Logger
-	//isScanning bool
 
 	scanOptions *ScanOptions
-	scanDevice  blelib.Device
+	scanDevice  device.ScanningDevice
 }
 
 // ScanOptions configures scanning behavior
 type ScanOptions struct {
 	Duration        time.Duration
 	DuplicateFilter bool
-	ServiceUUIDs    []blelib.UUID
+	ServiceUUIDs    []string
 	AllowList       []string
 	BlockList       []string
 }
@@ -71,8 +80,8 @@ func NewScanner(logger *logrus.Logger) (*Scanner, error) {
 }
 
 // Scan performs BLE discovery with provided options
-func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions, progressCallback ProgressCallback) (map[string]device.DeviceInfo, error) {
-	s.devices = hashmap.New[string, device.Device]()
+func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions, progressCallback ProgressCallback) (map[string]DeviceEntry, error) {
+	s.devices = hashmap.New[string, deviceEntry]()
 
 	if opts == nil {
 		opts = DefaultScanOptions()
@@ -96,6 +105,7 @@ func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions, progressCallback 
 	defer func() {
 		s.scanOptions = nil
 	}()
+
 	err = s.scanDevice.Scan(ctx, opts.DuplicateFilter, s.handleAdvertisement)
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return nil, fmt.Errorf("scan failed: %w", err)
@@ -106,9 +116,12 @@ func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions, progressCallback 
 	// Report processing phase
 	progressCallback("Processing results")
 
-	devices := make(map[string]device.DeviceInfo, s.devices.Len())
-	s.devices.Range(func(key string, value device.Device) bool {
-		devices[key] = value
+	devices := make(map[string]DeviceEntry, s.devices.Len())
+	s.devices.Range(func(key string, value deviceEntry) bool {
+		devices[key] = DeviceEntry{
+			Device:   value.device,
+			LastSeen: value.lastSeen,
+		}
 		return true
 	})
 
@@ -116,29 +129,38 @@ func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions, progressCallback 
 }
 
 // handleAdvertisement updates existing or adds a new device
-func (s *Scanner) handleAdvertisement(adv blelib.Advertisement) {
-	deviceID := adv.Addr().String()
+func (s *Scanner) handleAdvertisement(adv device.Advertisement) {
+	deviceID := adv.Addr()
 
-	dev, existing := s.devices.Get(deviceID)
+	e, existing := s.devices.Get(deviceID)
 	if !existing {
 		if !s.shouldIncludeDevice(adv, s.scanOptions) {
 			return
 		}
-		dev, existing = s.devices.GetOrInsert(deviceID, devicefactory.NewDeviceFromAdvertisement(adv, s.logger))
+
+		entry := deviceEntry{
+			device:   devicefactory.NewDeviceFromAdvertisement(adv, s.logger),
+			lastSeen: time.Now(),
+		}
+
+		e, existing = s.devices.GetOrInsert(deviceID, entry)
 	}
 
 	event := DeviceEvent{
-		DeviceInfo: dev,
+		DeviceInfo: e.device,
+		Timestamp:  e.lastSeen,
 	}
 
 	if existing {
-		dev.Update(adv)
+		e.device.Update(adv)
+		e.lastSeen = time.Now()
+		event.Timestamp = e.lastSeen
 		event.Type = EventUpdated
 	} else {
 		s.logger.WithFields(logrus.Fields{
-			"device":  dev.GetName(),
-			"address": dev.GetAddress(),
-			"rssi":    dev.GetRSSI(),
+			"device":  e.device.GetName(),
+			"address": e.device.GetAddress(),
+			"rssi":    e.device.GetRSSI(),
 		}).Info("Discovered new device")
 		event.Type = EventNew
 	}
@@ -147,8 +169,8 @@ func (s *Scanner) handleAdvertisement(adv blelib.Advertisement) {
 }
 
 // shouldIncludeDevice applies to allow/block/service filters
-func (s *Scanner) shouldIncludeDevice(adv blelib.Advertisement, opts *ScanOptions) bool {
-	addr := adv.Addr().String()
+func (s *Scanner) shouldIncludeDevice(adv device.Advertisement, opts *ScanOptions) bool {
+	addr := adv.Addr()
 
 	for _, blocked := range opts.BlockList {
 		if addr == blocked {
@@ -172,8 +194,10 @@ func (s *Scanner) shouldIncludeDevice(adv blelib.Advertisement, opts *ScanOption
 	if len(opts.ServiceUUIDs) > 0 {
 		hasRequired := false
 		for _, required := range opts.ServiceUUIDs {
+			requiredNorm := device.NormalizeUUID(required)
 			for _, advUUID := range adv.Services() {
-				if required.Equal(advUUID) {
+				advNorm := device.NormalizeUUID(advUUID)
+				if requiredNorm == advNorm {
 					hasRequired = true
 					break
 				}
@@ -191,11 +215,11 @@ func (s *Scanner) shouldIncludeDevice(adv blelib.Advertisement, opts *ScanOption
 }
 
 // GetDevices returns a snapshot of discovered devices
-func (s *Scanner) makeDeviceList() []device.DeviceInfo {
-	devs := make([]device.DeviceInfo, 0, s.devices.Len())
+func (s *Scanner) makeDeviceList() []DeviceEntry {
+	devs := make([]DeviceEntry, 0, s.devices.Len())
 
-	s.devices.Range(func(key string, value device.Device) bool {
-		devs = append(devs, value)
+	s.devices.Range(func(key string, value deviceEntry) bool {
+		devs = append(devs, DeviceEntry{Device: value.device, LastSeen: value.lastSeen})
 		return true
 	})
 
@@ -206,11 +230,3 @@ func (s *Scanner) makeDeviceList() []device.DeviceInfo {
 func (s *Scanner) Events() <-chan DeviceEvent {
 	return s.events.C()
 }
-
-//func (s *Scanner) CancelScan() error {
-//	if s.scanDevice != nil {
-//		return s.scanDevice.Stop()
-//	}
-//
-//	return fmt.Errorf("no scan device to cancel")
-//}

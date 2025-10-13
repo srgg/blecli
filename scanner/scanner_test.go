@@ -7,9 +7,7 @@ import (
 	"testing"
 	"time"
 
-	blelib "github.com/go-ble/ble"
 	"github.com/srg/blim/internal/device"
-	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
 	"github.com/srg/blim/scanner"
 	"github.com/stretchr/testify/require"
@@ -19,12 +17,12 @@ import (
 type ScannerTestSuite struct {
 	testutils.MockBLEPeripheralSuite
 
-	adv1, adv2, adv3 blelib.Advertisement
+	adv1, adv2, adv3 device.Advertisement
 	dev1, dev2, dev3 device.DeviceInfo
 }
 
 func (suite *ScannerTestSuite) SetupTest() {
-	suite.adv1 = testutils.NewAdvertisementBuilder().
+	advBuilder1 := testutils.NewAdvertisementBuilder().
 		WithAddress("AA:BB:CC:DD:EE:FF").
 		WithName("Test Device 1").
 		WithRSSI(-45).
@@ -32,11 +30,11 @@ func (suite *ScannerTestSuite) SetupTest() {
 		WithConnectable(true).
 		WithManufacturerData(nil).
 		WithNoServiceData().
-		WithTxPower(11).
-		Build()
-	suite.dev1 = devicefactory.NewDeviceFromAdvertisement(suite.adv1, suite.Logger)
+		WithTxPower(11)
+	suite.adv1 = advBuilder1.Build()
+	suite.dev1 = advBuilder1.BuildDevice(suite.Logger)
 
-	suite.adv2 = testutils.NewAdvertisementBuilder().
+	advBuilder2 := testutils.NewAdvertisementBuilder().
 		WithAddress("11:22:33:44:55:66").
 		WithName("Test Device 2").
 		WithRSSI(-67).
@@ -44,12 +42,11 @@ func (suite *ScannerTestSuite) SetupTest() {
 		WithConnectable(true).
 		WithManufacturerData(nil).
 		WithNoServiceData().
-		WithTxPower(12).
-		Build()
-	suite.dev2 = devicefactory.NewDeviceFromAdvertisement(suite.adv2, suite.Logger)
+		WithTxPower(12)
+	suite.adv2 = advBuilder2.Build()
+	suite.dev2 = advBuilder2.BuildDevice(suite.Logger)
 
-	// Add a third device that won't match most test conditions
-	suite.adv3 = testutils.NewAdvertisementBuilder().
+	advBuilder3 := testutils.NewAdvertisementBuilder().
 		WithAddress("99:88:77:66:55:44").
 		WithName("Test Device 3").
 		WithRSSI(-80).
@@ -57,9 +54,9 @@ func (suite *ScannerTestSuite) SetupTest() {
 		WithConnectable(true).
 		WithManufacturerData(nil).
 		WithNoServiceData().
-		WithTxPower(13).
-		Build()
-	suite.dev3 = devicefactory.NewDeviceFromAdvertisement(suite.adv3, suite.Logger)
+		WithTxPower(13)
+	suite.adv3 = advBuilder3.Build()
+	suite.dev3 = advBuilder3.BuildDevice(suite.Logger)
 
 	suite.WithAdvertisements().
 		WithAdvertisements(suite.adv1, suite.adv2, suite.adv3).
@@ -105,7 +102,7 @@ func (suite *ScannerTestSuite) TestScanOptionsValidation() {
 			opts: &scanner.ScanOptions{
 				Duration:        5 * time.Second,
 				DuplicateFilter: false,
-				ServiceUUIDs:    []blelib.UUID{},
+				ServiceUUIDs:    []string{},
 				AllowList:       []string{"AA:BB:CC:DD:EE:FF"},
 				BlockList:       []string{"11:22:33:44:55:66"},
 			},
@@ -150,7 +147,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 		{
 			name: "includes device with matching service UUID",
 			scanOptions: &scanner.ScanOptions{
-				ServiceUUIDs: []blelib.UUID{blelib.UUID16(0x180F)},
+				ServiceUUIDs: []string{"180F"},
 			},
 			expectedDevices: []device.DeviceInfo{suite.dev1},
 			description:     "Only devices with Battery Service (180F) should be included",
@@ -158,7 +155,7 @@ func (suite *ScannerTestSuite) TestScannerFiltering() {
 		{
 			name: "excludes device without matching service UUID",
 			scanOptions: &scanner.ScanOptions{
-				ServiceUUIDs: []blelib.UUID{blelib.UUID16(0x1234)}, // Non-existent service
+				ServiceUUIDs: []string{"1234"}, // Non-existent service
 			},
 			expectedDevices: []device.DeviceInfo{},
 			description:     "No devices should match non-existent service UUID",

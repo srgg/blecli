@@ -1,6 +1,10 @@
 package device
 
-import "github.com/srg/blim/internal/bledb"
+import (
+	"fmt"
+
+	"github.com/srg/blim/internal/bledb"
+)
 
 // NormalizeUUID is re-exported from bledb for convenience.
 // It converts a UUID string to the internal BLE library format (lowercase, no dashes).
@@ -16,4 +20,27 @@ func NormalizeUUID(uuid string) string {
 // It normalizes a slice of UUID strings to internal format.
 func NormalizeUUIDs(uuids []string) []string {
 	return bledb.NormalizeUUIDs(uuids)
+}
+
+// ValidateUUID validates that UUID strings are non-empty and well-formed.
+// Returns normalized UUID strings or an error.
+// Accepts one or more UUIDs as variadic arguments.
+func ValidateUUID(uuids ...string) ([]string, error) {
+	if len(uuids) == 0 {
+		return nil, fmt.Errorf("at least one UUID is required")
+	}
+
+	result := make([]string, 0, len(uuids))
+	for i, uuid := range uuids {
+		if uuid == "" {
+			return nil, fmt.Errorf("UUID at index %d cannot be empty", i)
+		}
+		// Normalize and validate
+		normalized := NormalizeUUID(uuid)
+		if normalized == "" {
+			return nil, fmt.Errorf("invalid UUID format at index %d: %s", i, uuid)
+		}
+		result = append(result, normalized)
+	}
+	return result, nil
 }

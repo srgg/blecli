@@ -1,7 +1,6 @@
 package goble
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/go-ble/ble"
@@ -59,15 +58,9 @@ func newDescriptor(d *ble.Descriptor, client ble.Client, timeout time.Duration, 
 			return
 		}
 
-		// Check if Handle is valid (0 means not set/invalid)
-		// On Darwin/macOS, the go-ble/ble library doesn't populate descriptor handles,
-		// so descriptors cannot be read explicitly
-		if d.Handle == 0 {
-			resultCh <- readResult{data: []byte{}, err: fmt.Errorf("descriptor handle not available (macOS limitation)")}
-			return
-		}
-
-		// If no cached value and handle is valid, perform explicit read
+		// Perform explicit read using the BLE client.
+		// On Darwin/macOS, this works via CoreBluetooth's object-based API
+		// (doesn't require handles like Linux/Windows implementations).
 		data, err := client.ReadDescriptor(d)
 		resultCh <- readResult{data: data, err: err}
 	}()
