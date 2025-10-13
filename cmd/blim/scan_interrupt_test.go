@@ -13,7 +13,6 @@ import (
 	goble "github.com/srg/blim/internal/device/go-ble"
 	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
-	"github.com/srg/blim/pkg/config"
 	"github.com/srg/blim/scanner"
 	"github.com/stretchr/testify/suite"
 )
@@ -105,10 +104,19 @@ func (b *blockingScanDevice) Scan(ctx context.Context, allowDup bool, handler fu
 
 // TestSingleScanInterrupt tests that a single scan with duration responds to SIGINT
 func (s *ScanInterruptSuite) TestSingleScanInterrupt() {
+	// Create logger
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+	logger.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp:   true,
+		TimestampFormat: time.RFC3339,
+	})
+
 	// Create configuration
-	cfg := config.DefaultConfig()
-	cfg.LogLevel = logrus.DebugLevel
-	logger := cfg.NewLogger()
+	cfg := &scanConfig{
+		scanTimeout:  20 * time.Second,
+		outputFormat: "table",
+	}
 
 	// Create scanner
 	scan, err := scanner.NewScanner(logger)
@@ -147,10 +155,19 @@ func (s *ScanInterruptSuite) TestSingleScanInterrupt() {
 
 // TestWatchModeInterrupt tests that watch mode responds to SIGINT
 func (s *ScanInterruptSuite) TestWatchModeInterrupt() {
+	// Create logger
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+	logger.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp:   true,
+		TimestampFormat: time.RFC3339,
+	})
+
 	// Create configuration
-	cfg := config.DefaultConfig()
-	cfg.LogLevel = logrus.DebugLevel
-	logger := cfg.NewLogger()
+	cfg := &scanConfig{
+		scanTimeout:  0,
+		outputFormat: "table",
+	}
 
 	// Create scanner
 	scan, err := scanner.NewScanner(logger)
@@ -187,12 +204,21 @@ func (s *ScanInterruptSuite) TestWatchModeInterrupt() {
 	}
 }
 
-// TestWatchModeHangAfterScanFinishes tests that watch mode runs indefinitely and responds to interrupt
+// TestWatchModeHangAfterScanFinishes tests that watch mode runs indefinitely and responds to an interrupt
 func (s *ScanInterruptSuite) TestWatchModeHangAfterScanFinishes() {
+	// Create logger
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+	logger.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp:   true,
+		TimestampFormat: time.RFC3339,
+	})
+
 	// Create configuration
-	cfg := config.DefaultConfig()
-	cfg.LogLevel = logrus.DebugLevel
-	logger := cfg.NewLogger()
+	cfg := &scanConfig{
+		scanTimeout:  0,
+		outputFormat: "table",
+	}
 
 	// Create scanner
 	scan, err := scanner.NewScanner(logger)

@@ -17,7 +17,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/srg/blim/internal/device"
-	"github.com/srg/blim/pkg/config"
 	"github.com/srg/blim/scanner"
 )
 
@@ -36,7 +35,6 @@ advertised services.`,
 var (
 	scanDuration    time.Duration
 	scanFormat      string
-	scanVerbose     bool
 	scanServices    []string
 	scanAllowList   []string
 	scanBlockList   []string
@@ -44,10 +42,21 @@ var (
 	scanWatch       bool
 )
 
+type scanConfig struct {
+	scanTimeout  time.Duration
+	outputFormat string
+}
+
+func defaultScanConfig() *scanConfig {
+	return &scanConfig{
+		scanTimeout:  10 * time.Second,
+		outputFormat: "table",
+	}
+}
+
 func init() {
 	scanCmd.Flags().DurationVarP(&scanDuration, "duration", "d", 10*time.Second, "Scan duration (0 for indefinite)")
 	scanCmd.Flags().StringVarP(&scanFormat, "format", "f", "table", "Output format (table, json)")
-	scanCmd.Flags().BoolVarP(&scanVerbose, "verbose", "v", false, "Verbose output")
 	scanCmd.Flags().StringSliceVarP(&scanServices, "services", "s", nil, "Filter by service UUIDs")
 	scanCmd.Flags().StringSliceVar(&scanAllowList, "allow", nil, "Only show devices with these addresses")
 	scanCmd.Flags().StringSliceVar(&scanBlockList, "block", nil, "Hide devices with these addresses")
@@ -69,25 +78,26 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid format '%s': must be one of %v", scanFormat, validFormats)
 	}
 
+	// Configure logger based on --log-level and --verbose flags
+	logger, err := configureLogger(cmd, "verbose")
+	if err != nil {
+		return err
+	}
+
 	// All arguments validated - don't show usage on runtime errors
 	cmd.SilenceUsage = true
 
 	// Create configuration
-	cfg := config.DefaultConfig()
-	if scanVerbose {
-		cfg.LogLevel = logrus.DebugLevel
-	}
-	cfg.OutputFormat = scanFormat
+	cfg := defaultScanConfig()
+	cfg.outputFormat = scanFormat
 	if scanDuration > 0 {
-		cfg.ScanTimeout = scanDuration
+		cfg.scanTimeout = scanDuration
 	}
 
 	// For watch mode, default to indefinite scan if no duration specified
 	if scanWatch && scanDuration == 0 {
-		cfg.ScanTimeout = 0 // Indefinite
+		cfg.scanTimeout = 0 // Indefinite
 	}
-
-	logger := cfg.NewLogger()
 
 	// Create scanner
 	s, err := scanner.NewScanner(logger)
@@ -107,7 +117,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	// Create scan options
 	scanOpts := &scanner.ScanOptions{
-		Duration:        cfg.ScanTimeout,
+		Duration:        cfg.scanTimeout,
 		DuplicateFilter: scanNoDuplicate,
 		ServiceUUIDs:    serviceUUIDs,
 		AllowList:       scanAllowList,
@@ -121,23 +131,20 @@ func runScan(cmd *cobra.Command, args []string) error {
 	return runSingleScan(s, scanOpts, cfg, logger)
 }
 
-func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *config.Config, logger *logrus.Logger) error {
+func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *scanConfig, logger *logrus.Logger) error {
 	if cfg == nil {
-		cfg = config.DefaultConfig()
+		cfg = defaultScanConfig()
 	}
-
-	// Scan for a specified duration, or until interrupted by the user.
-	// OLD: ctx := blelib.WithSigHandler(context.WithTimeout(context.Background(), cfg.ScanTimeout))
 
 	// Create context with timeout
 	baseCtx := context.Background()
-	if cfg.ScanTimeout > 0 {
+	if cfg.scanTimeout > 0 {
 		var cancel context.CancelFunc
-		baseCtx, cancel = context.WithTimeout(baseCtx, cfg.ScanTimeout)
+		baseCtx, cancel = context.WithTimeout(baseCtx, cfg.scanTimeout)
 		defer cancel()
 	}
 
-	// Create cancellable context for signal handling
+	// Create a cancellable context for signal handling
 	ctx, cancel := context.WithCancel(baseCtx)
 	defer cancel()
 
@@ -151,17 +158,8 @@ func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *con
 		cancel()
 	}()
 
-	// OLD signal handling code:
-	// go func() {
-	// 	<-sigCh
-	// 	fmt.Println("\nCtrl+C pressed, cancelling scan...")
-	// 	if cb, ok := ctx.Value(blelib.ContextKeySig).(func()); ok {
-	// 		cb() // stop the scan
-	// 	}
-	// }()
-
 	// Setup progress printer
-	progress := NewCountdownProgressPrinter("Scanning for BLE devices", "Scanning", cfg.ScanTimeout, "Processing results")
+	progress := NewCountdownProgressPrinter("Scanning for BLE devices", "Scanning", cfg.scanTimeout, "Processing results")
 	progress.Start()
 	defer progress.Stop()
 
@@ -175,7 +173,7 @@ func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *con
 	return displayDevicesTableFromMap(devices, cfg)
 }
 
-func runWatchMode(s *scanner.Scanner, opts *scanner.ScanOptions, cfg *config.Config, logger *logrus.Logger) error {
+func runWatchMode(s *scanner.Scanner, opts *scanner.ScanOptions, cfg *scanConfig, logger *logrus.Logger) error {
 	// Scan until interrupted by the user.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -263,7 +261,7 @@ type deviceWithTime struct {
 	lastSeen time.Time
 }
 
-func displayDevicesTableFromMap(enties map[string]scanner.DeviceEntry, cfg *config.Config) error {
+func displayDevicesTableFromMap(enties map[string]scanner.DeviceEntry, cfg *scanConfig) error {
 	if len(enties) == 0 {
 		fmt.Println("No devices discovered")
 		return nil
@@ -280,7 +278,7 @@ func displayDevicesTableFromMap(enties map[string]scanner.DeviceEntry, cfg *conf
 		return devList[i].Device.Name() > devList[j].Device.Name()
 	})
 
-	switch cfg.OutputFormat {
+	switch cfg.outputFormat {
 	case "json":
 		// Extract just the DeviceInfo for JSON
 		infoList := make([]device.DeviceInfo, len(devList))

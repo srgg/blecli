@@ -13,7 +13,6 @@ import (
 	"github.com/srg/blim/inspector"
 	"github.com/srg/blim/internal/device"
 	"github.com/srg/blim/internal/lua"
-	"github.com/srg/blim/pkg/config"
 )
 
 // inspectCmd represents the inspect command
@@ -29,7 +28,6 @@ characteristics, and descriptors. Attempts to read characteristic values when po
 var (
 	inspectConnectTimeout        time.Duration
 	inspectDescriptorReadTimeout time.Duration
-	inspectVerbose               bool
 	inspectJSON                  bool
 	inspectReadLimit             int
 )
@@ -37,7 +35,6 @@ var (
 func init() {
 	inspectCmd.Flags().DurationVar(&inspectConnectTimeout, "connect-timeout", 30*time.Second, "Connection timeout")
 	inspectCmd.Flags().DurationVar(&inspectDescriptorReadTimeout, "descriptor-timeout", 0, "Timeout for reading descriptor values (default: 2s if unset, 0 to skip descriptor reads)")
-	inspectCmd.Flags().BoolVarP(&inspectVerbose, "verbose", "v", false, "Verbose output")
 	inspectCmd.Flags().BoolVar(&inspectJSON, "json", false, "Output as JSON")
 	inspectCmd.Flags().IntVar(&inspectReadLimit, "read-limit", 64, "Max bytes to read from readable characteristics (0 to disable reads)")
 }
@@ -45,15 +42,14 @@ func init() {
 func runInspect(cmd *cobra.Command, args []string) error {
 	address := args[0]
 
-	cfg := config.DefaultConfig()
-	if inspectVerbose {
-		cfg.LogLevel = logrus.DebugLevel
+	// Configure logger based on --log-level and --verbose flags
+	logger, err := configureLogger(cmd, "verbose")
+	if err != nil {
+		return err
 	}
 
 	// All arguments validated - don't show usage on runtime errors
 	cmd.SilenceUsage = true
-
-	logger := cfg.NewLogger()
 
 	// Build inspect options
 	opts := &inspector.InspectOptions{
@@ -74,7 +70,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 		return nil, executeInspectLuaScript(ctx, dev, logger)
 	}
 
-	_, err := inspector.InspectDevice(ctx, address, opts, logger, progress.Callback(), processDevice)
+	_, err = inspector.InspectDevice(ctx, address, opts, logger, progress.Callback(), processDevice)
 	return err
 }
 

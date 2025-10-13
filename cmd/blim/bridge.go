@@ -8,13 +8,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/srg/blim"
 	"github.com/srg/blim/bridge"
 	"github.com/srg/blim/internal/device"
 	"github.com/srg/blim/internal/lua"
-	"github.com/srg/blim/pkg/config"
 )
 
 // bridgeCmd represents the bridge command
@@ -45,7 +43,6 @@ var (
 	bridgeServiceUUID           string
 	bridgeConnectTimeout        time.Duration
 	bridgeDescriptorReadTimeout time.Duration
-	bridgeVerbose               bool
 	bridgeLuaScript             string
 	bridgeSymlink               string
 )
@@ -54,38 +51,19 @@ func init() {
 	bridgeCmd.Flags().StringVar(&bridgeServiceUUID, "service", "6E400001-B5A3-F393-E0A9-E50E24DCCA9E", "BLE service UUID to bridge with")
 	bridgeCmd.Flags().DurationVar(&bridgeConnectTimeout, "connect-timeout", 30*time.Second, "Connection timeout")
 	bridgeCmd.Flags().DurationVar(&bridgeDescriptorReadTimeout, "descriptor-timeout", 0, "Timeout for reading descriptor values (default: 2s if unset, 0 to skip descriptor reads)")
-	bridgeCmd.Flags().BoolVarP(&bridgeVerbose, "verbose", "v", false, "Verbose output")
 	bridgeCmd.Flags().StringVar(&bridgeLuaScript, "script", "", "Lua script file with ble_to_tty() and tty_to_ble() functions")
 	bridgeCmd.Flags().StringVar(&bridgeSymlink, "symlink", "", "Create a symlink to the PTY device (e.g., /tmp/ble-device)")
 }
 
 func runBridge(cmd *cobra.Command, args []string) error {
-	// Create configuration
-	cfg := config.DefaultConfig()
-
-	// Check global log level flag
-	logLevel, _ := cmd.Flags().GetString("log-level")
-	if logLevel != "" {
-		switch logLevel {
-		case "debug":
-			cfg.LogLevel = logrus.DebugLevel
-		case "info":
-			cfg.LogLevel = logrus.InfoLevel
-		case "warn":
-			cfg.LogLevel = logrus.WarnLevel
-		case "error":
-			cfg.LogLevel = logrus.ErrorLevel
-		default:
-			return fmt.Errorf("invalid log level: %s", logLevel)
-		}
-	} else if bridgeVerbose {
-		cfg.LogLevel = logrus.DebugLevel
+	// Configure logger based on --log-level and --verbose flags
+	logger, err := configureLogger(cmd, "verbose")
+	if err != nil {
+		return err
 	}
 
 	// All arguments validated - don't show usage on runtime errors
 	cmd.SilenceUsage = true
-
-	logger := cfg.NewLogger()
 
 	deviceAddress := args[0]
 

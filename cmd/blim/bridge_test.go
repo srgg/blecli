@@ -25,7 +25,6 @@ func (suite *BridgeCmdTestSuite) SetupSuite() {
 	// Save original flag values
 	suite.originalFlags.serviceUUID = bridgeServiceUUID
 	suite.originalFlags.connectTimeout = bridgeConnectTimeout
-	suite.originalFlags.verbose = bridgeVerbose
 	suite.originalFlags.luaScript = bridgeLuaScript
 }
 
@@ -33,7 +32,6 @@ func (suite *BridgeCmdTestSuite) SetupSuite() {
 func (suite *BridgeCmdTestSuite) TearDownSuite() {
 	bridgeServiceUUID = suite.originalFlags.serviceUUID
 	bridgeConnectTimeout = suite.originalFlags.connectTimeout
-	bridgeVerbose = suite.originalFlags.verbose
 	bridgeLuaScript = suite.originalFlags.luaScript
 }
 
@@ -78,14 +76,12 @@ func (suite *BridgeCmdTestSuite) SetupTest() {
 	// Reset flags to defaults
 	bridgeServiceUUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 	bridgeConnectTimeout = 30 * time.Second
-	bridgeVerbose = false
 	bridgeLuaScript = ""
 
 	// Reset command flags
 	bridgeCmd.ResetFlags()
 	bridgeCmd.Flags().StringVar(&bridgeServiceUUID, "service", "6E400001-B5A3-F393-E0A9-E50E24DCCA9E", "BLE service UUID to bridge with")
 	bridgeCmd.Flags().DurationVar(&bridgeConnectTimeout, "connect-timeout", 30*time.Second, "Connection timeout")
-	bridgeCmd.Flags().BoolVarP(&bridgeVerbose, "verbose", "v", false, "Verbose output")
 	bridgeCmd.Flags().StringVar(&bridgeLuaScript, "script", "", "Lua script file")
 }
 

@@ -38,7 +38,6 @@ func (suite *ScanTestSuite) SetupSuite() {
 	// Save original flag values
 	suite.originalFlags.scanDuration = scanDuration
 	suite.originalFlags.scanFormat = scanFormat
-	suite.originalFlags.scanVerbose = scanVerbose
 	suite.originalFlags.scanServices = scanServices
 	suite.originalFlags.scanAllowList = scanAllowList
 	suite.originalFlags.scanBlockList = scanBlockList
@@ -62,7 +61,6 @@ func (suite *ScanTestSuite) TearDownSuite() {
 	devicefactory.DeviceFactory = suite.originalDeviceFactory
 	scanDuration = suite.originalFlags.scanDuration
 	scanFormat = suite.originalFlags.scanFormat
-	scanVerbose = suite.originalFlags.scanVerbose
 	scanServices = suite.originalFlags.scanServices
 	scanAllowList = suite.originalFlags.scanAllowList
 	scanBlockList = suite.originalFlags.scanBlockList
@@ -82,7 +80,6 @@ func (suite *ScanTestSuite) SetupTest() {
 	// Re-add all the flags with their default values
 	scanCmd.Flags().DurationVarP(&scanDuration, "duration", "d", 10*time.Second, "Scan duration (0 for indefinite)")
 	scanCmd.Flags().StringVarP(&scanFormat, "format", "f", "table", "Output format (table, json)")
-	scanCmd.Flags().BoolVarP(&scanVerbose, "verbose", "v", false, "Verbose output")
 	scanCmd.Flags().StringSliceVarP(&scanServices, "services", "s", nil, "Filter by service UUIDs")
 	scanCmd.Flags().StringSliceVar(&scanAllowList, "allow", nil, "Only show devices with these addresses")
 	scanCmd.Flags().StringSliceVar(&scanBlockList, "block", nil, "Hide devices with these addresses")
@@ -101,7 +98,6 @@ func (suite *ScanTestSuite) TestScanCmd_Help() {
 	suite.Assert().Contains(output, "Scan for and display Bluetooth Low Energy devices")
 	suite.Assert().Contains(output, "--duration")
 	suite.Assert().Contains(output, "--format")
-	suite.Assert().Contains(output, "--verbose")
 }
 
 func (suite *ScanTestSuite) TestScanCmd_InvalidFormat() {
@@ -193,8 +189,6 @@ func (suite *ScanTestSuite) TestScanCmd_Flags() {
 					suite.Assert().Equal(expected, scanDuration)
 				case "format":
 					suite.Assert().Equal(expected, scanFormat)
-				case "verbose":
-					suite.Assert().Equal(expected, scanVerbose)
 				case "no-duplicates":
 					suite.Assert().Equal(expected, scanNoDuplicate)
 				case "watch":
@@ -364,7 +358,6 @@ func setupTest(t *testing.T) {
 func resetScanFlags() {
 	scanDuration = 10 * time.Second
 	scanFormat = "table"
-	scanVerbose = false
 	scanServices = nil
 	scanAllowList = nil
 	scanBlockList = nil
