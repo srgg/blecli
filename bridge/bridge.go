@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/lua"
 	"github.com/srg/blim/internal/ptyio"
 )
@@ -147,7 +148,7 @@ func RunDeviceBridge[R any](
 	progressCallback("Connecting")
 
 	// Create Lua API (creates device)
-	dev := device.NewDeviceWithAddress(opts.BleAddress, logger)
+	dev := devicefactory.NewDevice(opts.BleAddress, logger)
 	luaApi = lua.NewBLEAPI2(dev, logger)
 
 	// Connect to device

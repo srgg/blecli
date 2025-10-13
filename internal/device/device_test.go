@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/sirupsen/logrus"
-	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -91,7 +91,7 @@ func TestDevice_Update(t *testing.T) {
 		}`).Build()
 
 	logger := logrus.New()
-	device := device.NewDevice(initialAdv, logger)
+	device := devicefactory.NewDeviceFromAdvertisement(initialAdv, logger)
 	initialAdv.AssertExpectations(t)
 
 	// Create update advertisement
@@ -249,7 +249,7 @@ func TestDevice_ExtractNameFromManufacturerData(t *testing.T) {
 			}`, testutils.MustJSON(tt.manufData)).Build()
 
 			logger := logrus.New()
-			dev := device.NewDevice(adv, logger)
+			dev := devicefactory.NewDeviceFromAdvertisement(adv, logger)
 
 			//bleDevice := dev.(*BLEDevice)
 			//result := bleDevice.extractNameFromManufacturerData(tt.manufData)
@@ -307,7 +307,7 @@ func TestDevice_NameResolutionPrecedence(t *testing.T) {
 			).Build()
 
 			logger := logrus.New()
-			dev := device.NewDevice(adv, logger)
+			dev := devicefactory.NewDeviceFromAdvertisement(adv, logger)
 			assert.Equal(t, tt.expectedName, dev.GetName(), tt.description)
 		})
 	}
@@ -329,7 +329,7 @@ func TestDevice_NameUpdateBehavior(t *testing.T) {
 			}`, testutils.MustJSON([]byte{0x00, 0x01, 'E', 'x', 't', 'r', 'a', 'c', 't', 'e', 'd'})).Build()
 
 	logger := logrus.New()
-	dev := device.NewDevice(adv1, logger)
+	dev := devicefactory.NewDeviceFromAdvertisement(adv1, logger)
 	device := dev
 	assert.Equal(t, "Extracted", device.GetName(), "Should extract name from manufacturer data initially")
 

@@ -7,6 +7,7 @@ import (
 	"github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
+	goble "github.com/srg/blim/internal/device/go-ble"
 	"github.com/srg/blim/internal/testutils/mocks"
 )
 
@@ -253,7 +254,7 @@ func (b *AdvertisementBuilder) Build() *mocks.MockAdvertisement {
 // Convenience method for creating Device instances in tests.
 func (b *AdvertisementBuilder) BuildDevice(logger *logrus.Logger) device.Device {
 	adv := b.Build()
-	return device.NewDevice(adv, logger)
+	return goble.NewBLEDeviceFromAdvertisement(adv, logger)
 }
 
 // AdvertisementArrayBuilder builds arrays of ble.Advertisement with generic parent support.

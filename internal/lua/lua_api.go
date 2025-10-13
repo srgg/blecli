@@ -861,16 +861,26 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 		// Method: read() - reads the characteristic value from the device
 		// Returns (value, nil) on success or (nil, error_message) on failure
 		api.SafePushGoFunction(L, "read", func(L *lua.State) int {
-			value, err := char.Read()
-			if err != nil {
-				// Return (nil, error_message) for expected errors
+			// Type-assert to access Read() method (not part of interface)
+			type ReadableCharacteristic interface {
+				Read() ([]byte, error)
+			}
+			if readable, ok := char.(ReadableCharacteristic); ok {
+				value, err := readable.Read()
+				if err != nil {
+					// Return (nil, error_message) for expected errors
+					L.PushNil()
+					L.PushString(fmt.Sprintf("read() failed: %v", err))
+					return 2
+				}
+				// Return (value, nil) on success
+				L.PushString(string(value))
 				L.PushNil()
-				L.PushString(fmt.Sprintf("read() failed: %v", err))
 				return 2
 			}
-			// Return (value, nil) on success
-			L.PushString(string(value))
+			// Characteristic doesn't support Read()
 			L.PushNil()
+			L.PushString("read() not supported for this characteristic")
 			return 2
 		})
 		L.SetTable(-3)

@@ -1,4 +1,4 @@
-package device
+package goble
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"github.com/go-ble/ble/darwin"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/bledb"
+	"github.com/srg/blim/internal/device"
 )
 
 // ----------------------------
@@ -74,10 +75,10 @@ type BLEConnection struct {
 // GetCharacteristic retrieves a characteristic by service and characteristic UUID.
 // Both UUIDs are normalized for consistent lookup (lowercase, no dashes).
 // Returns an error if the service or characteristic is not found.
-func (c *BLEConnection) GetCharacteristic(service, uuid string) (*BLECharacteristic, error) {
+func (c *BLEConnection) GetCharacteristic(service, uuid string) (device.Characteristic, error) {
 	// Normalize UUIDs for a consistent lookup
-	normalizedServiceUUID := NormalizeUUID(service)
-	normalizedCharUUID := NormalizeUUID(uuid)
+	normalizedServiceUUID := device.NormalizeUUID(service)
+	normalizedCharUUID := device.NormalizeUUID(uuid)
 
 	svc, ok := c.services[normalizedServiceUUID]
 	if !ok {
@@ -94,11 +95,11 @@ func (c *BLEConnection) GetCharacteristic(service, uuid string) (*BLECharacteris
 
 // GetServices returns all discovered BLE services for this connection.
 // Services are sorted by UUID for consistent ordering. Thread-safe.
-func (c *BLEConnection) GetServices() []Service {
+func (c *BLEConnection) GetServices() []device.Service {
 	c.connMutex.RLock()
 	defer c.connMutex.RUnlock()
 
-	result := make([]Service, 0, len(c.services))
+	result := make([]device.Service, 0, len(c.services))
 	for _, v := range c.services {
 		result = append(result, v)
 	}
@@ -112,12 +113,12 @@ func (c *BLEConnection) GetServices() []Service {
 // GetService retrieves a specific service by its UUID.
 // The UUID is normalized for consistent lookup (lowercase, no dashes).
 // Returns an error if the service is not found.
-func (c *BLEConnection) GetService(uuid string) (Service, error) {
+func (c *BLEConnection) GetService(uuid string) (device.Service, error) {
 	c.connMutex.RLock()
 	defer c.connMutex.RUnlock()
 
 	// Normalize UUID for lookup
-	normalizedUUID := NormalizeUUID(uuid)
+	normalizedUUID := device.NormalizeUUID(uuid)
 	svc, ok := c.services[normalizedUUID]
 	if !ok {
 		return nil, fmt.Errorf("service %s not found", uuid)
@@ -159,7 +160,7 @@ func NewBLEConnection(logger *logrus.Logger) *BLEConnection {
 }
 
 // Connect establishes a BLE connection and populates live characteristics
-func (c *BLEConnection) Connect(ctx context.Context, address string, opts *ConnectOptions) error {
+func (c *BLEConnection) Connect(ctx context.Context, address string, opts *device.ConnectOptions) error {
 	c.connMutex.Lock()
 	defer c.connMutex.Unlock()
 
@@ -231,7 +232,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 	// Populate services and characteristics from BLE Profile
 	for _, bleSvc := range bleProfile.Services {
 		svcRawUUID := bleSvc.UUID.String()
-		svcUUID := NormalizeUUID(svcRawUUID)
+		svcUUID := device.NormalizeUUID(svcRawUUID)
 		c.logger.WithField("service_uuid", svcRawUUID).Debug("Found service UUID")
 		svc, ok := c.services[svcUUID]
 		if !ok {
@@ -245,7 +246,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 
 		for _, bleCharacteristic := range bleSvc.Characteristics {
 			charRawUUID := bleCharacteristic.UUID.String()
-			charUUID := NormalizeUUID(charRawUUID)
+			charUUID := device.NormalizeUUID(charRawUUID)
 			c.logger.WithFields(logrus.Fields{
 				"service_uuid": svcUUID,
 				"char_uuid":    charRawUUID,
@@ -258,7 +259,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *Conne
 				// The descriptors are listed for informational purposes, but their values will be nil.
 
 				// Create descriptors with values (reads are best-effort, won't fail characteristic creation)
-				descriptors := make([]Descriptor, 0, len(bleCharacteristic.Descriptors))
+				descriptors := make([]device.Descriptor, 0, len(bleCharacteristic.Descriptors))
 				for _, d := range bleCharacteristic.Descriptors {
 					descriptors = append(descriptors, newDescriptor(d, client, c.descriptorReadTimeout, c.logger))
 				}
@@ -468,7 +469,7 @@ func (c *BLEConnection) IsConnected() bool {
 }
 
 // validateSubscribeOptions validates service and characteristics existence and notification support
-func (c *BLEConnection) validateSubscribeOptions(opts *SubscribeOptions, requireNotificationSupport bool) (map[string]*BLECharacteristic, error) {
+func (c *BLEConnection) validateSubscribeOptions(opts *device.SubscribeOptions, requireNotificationSupport bool) (map[string]*BLECharacteristic, error) {
 	// Comprehensive validation - collect ALL issues before failing
 	var missingServices []string
 	var missingChars []string
@@ -476,8 +477,8 @@ func (c *BLEConnection) validateSubscribeOptions(opts *SubscribeOptions, require
 	characteristicsToProcess := make(map[string]*BLECharacteristic)
 
 	// Normalize UUIDs for consistent lookup (BLE library uses lowercase, no dashes)
-	normalizedServiceUUID := NormalizeUUID(opts.Service)
-	normalizedCharUUIDs := NormalizeUUIDs(opts.Characteristics)
+	normalizedServiceUUID := device.NormalizeUUID(opts.Service)
+	normalizedCharUUIDs := device.NormalizeUUIDs(opts.Characteristics)
 
 	// Validate service exists using normalized UUID
 	service, serviceExists := c.services[normalizedServiceUUID]
@@ -534,7 +535,7 @@ func (c *BLEConnection) validateSubscribeOptions(opts *SubscribeOptions, require
 	return characteristicsToProcess, nil
 }
 
-func (c *BLEConnection) BLESubscribe(opts *SubscribeOptions) error {
+func (c *BLEConnection) BLESubscribe(opts *device.SubscribeOptions) error {
 	// Acquire lock, validate, copy characteristics, then release lock before network calls
 	c.connMutex.RLock()
 
@@ -601,7 +602,7 @@ func (c *BLEConnection) BLESubscribe(opts *SubscribeOptions) error {
 	return nil
 }
 
-func (c *BLEConnection) BLEUnsubscribe(opts *SubscribeOptions) error {
+func (c *BLEConnection) BLEUnsubscribe(opts *device.SubscribeOptions) error {
 	// Acquire lock, validate, copy characteristics, then release lock before network calls
 	c.connMutex.RLock()
 
@@ -644,7 +645,7 @@ func (c *BLEConnection) BLEUnsubscribe(opts *SubscribeOptions) error {
 
 // unsubscribeInternal performs unsubscribe operations
 // Acquires and releases locks as needed to avoid deadlocks
-func (c *BLEConnection) unsubscribeInternal(opts *SubscribeOptions) error {
+func (c *BLEConnection) unsubscribeInternal(opts *device.SubscribeOptions) error {
 	// Handle unsubscribes from all subscriptions when opts is nil
 	if opts == nil {
 		var unsubscribeErrors []string

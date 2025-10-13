@@ -9,6 +9,7 @@ import (
 
 	blelib "github.com/go-ble/ble"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
 	"github.com/srg/blim/scanner"
 	"github.com/stretchr/testify/require"
@@ -33,7 +34,7 @@ func (suite *ScannerTestSuite) SetupTest() {
 		WithNoServiceData().
 		WithTxPower(11).
 		Build()
-	suite.dev1 = device.NewDevice(suite.adv1, suite.Logger)
+	suite.dev1 = devicefactory.NewDeviceFromAdvertisement(suite.adv1, suite.Logger)
 
 	suite.adv2 = testutils.NewAdvertisementBuilder().
 		WithAddress("11:22:33:44:55:66").
@@ -45,7 +46,7 @@ func (suite *ScannerTestSuite) SetupTest() {
 		WithNoServiceData().
 		WithTxPower(12).
 		Build()
-	suite.dev2 = device.NewDevice(suite.adv2, suite.Logger)
+	suite.dev2 = devicefactory.NewDeviceFromAdvertisement(suite.adv2, suite.Logger)
 
 	// Add a third device that won't match most test conditions
 	suite.adv3 = testutils.NewAdvertisementBuilder().
@@ -58,7 +59,7 @@ func (suite *ScannerTestSuite) SetupTest() {
 		WithNoServiceData().
 		WithTxPower(13).
 		Build()
-	suite.dev3 = device.NewDevice(suite.adv3, suite.Logger)
+	suite.dev3 = devicefactory.NewDeviceFromAdvertisement(suite.adv3, suite.Logger)
 
 	suite.WithAdvertisements().
 		WithAdvertisements(suite.adv1, suite.adv2, suite.adv3).

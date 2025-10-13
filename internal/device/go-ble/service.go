@@ -1,7 +1,9 @@
-package device
+package goble
 
 import (
 	"sort"
+
+	"github.com/srg/blim/internal/device"
 )
 
 // ----------------------------
@@ -23,8 +25,8 @@ func (s *BLEService) KnownName() string {
 	return s.knownName
 }
 
-func (s *BLEService) GetCharacteristics() []Characteristic {
-	result := make([]Characteristic, 0, len(s.Characteristics))
+func (s *BLEService) GetCharacteristics() []device.Characteristic {
+	result := make([]device.Characteristic, 0, len(s.Characteristics))
 	for _, char := range s.Characteristics {
 		result = append(result, char)
 	}

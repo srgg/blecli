@@ -5,7 +5,7 @@ import (
 
 	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
-	"github.com/srg/blim/internal/device"
+	goble "github.com/srg/blim/internal/device/go-ble"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -88,12 +88,12 @@ func (s *MockBLEPeripheralSuite) SetupSuite() {
 	s.TestTimeout = 30 * time.Second
 
 	// Save the original BLE device factory for restoration
-	s.OriginalDeviceFactory = device.DeviceFactory
+	s.OriginalDeviceFactory = goble.DeviceFactory
 
 	// Use t.Cleanup for automatic resource restoration (testify/suite best practice)
 	s.T().Cleanup(func() {
 		if s.OriginalDeviceFactory != nil {
-			device.DeviceFactory = s.OriginalDeviceFactory
+			goble.DeviceFactory = s.OriginalDeviceFactory
 			s.Logger.Debug("Device factory restored via t.Cleanup")
 		}
 	})
@@ -122,8 +122,8 @@ func (s *MockBLEPeripheralSuite) SetupTest() {
 	}
 
 	// Set up the default device factory
-	s.OriginalDeviceFactory = device.DeviceFactory
-	device.DeviceFactory = func() (blelib.Device, error) {
+	s.OriginalDeviceFactory = goble.DeviceFactory
+	goble.DeviceFactory = func() (blelib.Device, error) {
 		return s.PeripheralBuilder.Build(), nil
 	}
 
@@ -135,7 +135,7 @@ func (s *MockBLEPeripheralSuite) SetupTest() {
 func (s *MockBLEPeripheralSuite) TearDownTest() {
 	// Restore device factory to prevent nil pointer panics in subsequent tests
 	if s.OriginalDeviceFactory != nil {
-		device.DeviceFactory = s.OriginalDeviceFactory
+		goble.DeviceFactory = s.OriginalDeviceFactory
 	}
 
 	// Reset peripheral builder to clean state

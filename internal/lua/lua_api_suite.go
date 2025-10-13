@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/srg/blim/internal/device"
+	goble "github.com/srg/blim/internal/device/go-ble"
+	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
 	"github.com/stretchr/testify/require"
 	orderedmap "github.com/wk8/go-ordered-map/v2"
@@ -404,7 +406,7 @@ func (suite *LuaApiSuite) SetupTest() {
 
 func (suite *LuaApiSuite) createLuaApi() *BLEAPI2 {
 	// Create a BLE Device with mocked ble.Device
-	dev := device.NewDeviceWithAddress("00:00:00:00:00:01", suite.Logger)
+	dev := devicefactory.NewDevice("00:00:00:00:00:01", suite.Logger)
 
 	// Set up mock connection with test services and characteristics
 	// Use context with 10s timeout for safety, but don't cancel it immediately
@@ -1683,9 +1685,9 @@ func (b *PeripheralDataSimulatorBuilder) Simulate(verbose bool) (*PeripheralData
 func (b *PeripheralDataSimulatorBuilder) SimulateFor(conn device.Connection, verbose bool) (*PeripheralDataSimulatorBuilder, error) {
 	b.suite.NotNil(conn, "Connection should be available")
 
-	bleConn, ok := conn.(*device.BLEConnection)
+	bleConn, ok := conn.(*goble.BLEConnection)
 	if !ok {
-		return nil, fmt.Errorf("connection is not a *device.BLEConnection (got %T)", conn)
+		return nil, fmt.Errorf("connection is not a *goble.BLEConnection (got %T)", conn)
 	}
 
 	// Find maximum number of values across all characteristics
@@ -1743,7 +1745,15 @@ func (b *PeripheralDataSimulatorBuilder) SimulateFor(conn device.Connection, ver
 						notificationCount, serviceUUID, charUUID, data, len(data))
 				}
 
-				bleConn.ProcessCharacteristicNotification(testChar, data)
+				// Type-assert to *goble.BLECharacteristic for ProcessCharacteristicNotification
+				bleChar, ok := testChar.(*goble.BLECharacteristic)
+				if !ok {
+					errorCount++
+					b.logf("ERROR: Characteristic %s:%s is not a *goble.BLECharacteristic (got %T)", serviceUUID, charUUID, testChar)
+					continue
+				}
+
+				bleConn.ProcessCharacteristicNotification(bleChar, data)
 			}
 		}
 	}

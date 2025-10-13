@@ -1,4 +1,4 @@
-package device
+package goble
 
 import (
 	"context"
@@ -7,33 +7,18 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/srg/blim/internal/device"
 )
 
 // ----------------------------
 // Subscription
 // ----------------------------
 
-type StreamMode int
-
-const (
-	StreamEveryUpdate StreamMode = iota
-	StreamBatched
-	StreamAggregated
-)
-
-type Record struct {
-	TsUs        int64
-	Seq         uint64
-	Values      map[string][]byte   // Single value per characteristic (EveryUpdate/Aggregated modes)
-	BatchValues map[string][][]byte // Multiple values per characteristic (Batched mode)
-	Flags       uint32
-}
-
-func newRecord(mode StreamMode) *Record {
-	r := &Record{
+func newRecord(mode device.StreamMode) *device.Record {
+	r := &device.Record{
 		TsUs: time.Now().UnixMicro(),
 	}
-	if mode == StreamBatched {
+	if mode == device.StreamBatched {
 		r.BatchValues = make(map[string][][]byte)
 	} else {
 		r.Values = make(map[string][]byte)
@@ -43,9 +28,9 @@ func newRecord(mode StreamMode) *Record {
 
 type Subscription struct {
 	Chars    []*BLECharacteristic
-	Mode     StreamMode
+	Mode     device.StreamMode
 	MaxRate  time.Duration
-	Callback func(*Record)
+	Callback func(*device.Record)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -117,11 +102,11 @@ func (m *SubscriptionManager) Done() {
 // Subscribe subscribes to notifications from multiple services and characteristics with streaming patterns.
 // Supports advanced subscription with streaming patterns and callbacks:
 //
-//	connection.Subscribe([]*SubscribeOptions{
-//	  { ServiceUUID: "0000180d-0000-1000-8000-00805f9b34fb", Characteristics: []string{"00002a37-0000-1000-8000-00805f9b34fb"} },
-//	  { ServiceUUID: "1000180d-0000-1000-8000-00805f9b34fb", Characteristics: []string{"10002a37-0000-1000-8000-00805f9b34fb"} }
-//	}, StreamEveryUpdate, 0, func(record *Record) { ... })
-func (c *BLEConnection) Subscribe(opts []*SubscribeOptions, mode StreamMode, maxRate time.Duration, callback func(*Record)) error {
+//	connection.Subscribe([]*device.SubscribeOptions{
+//	  { Service: "0000180d-0000-1000-8000-00805f9b34fb", Characteristics: []string{"00002a37-0000-1000-8000-00805f9b34fb"} },
+//	  { Service: "1000180d-0000-1000-8000-00805f9b34fb", Characteristics: []string{"10002a37-0000-1000-8000-00805f9b34fb"} }
+//	}, device.StreamEveryUpdate, 0, func(record *device.Record) { ... })
+func (c *BLEConnection) Subscribe(opts []*device.SubscribeOptions, mode device.StreamMode, maxRate time.Duration, callback func(*device.Record)) error {
 	// Validate parameters before acquiring any locks or allocating resources
 	if callback == nil {
 		return fmt.Errorf("no callback specified in Lua subscription")
@@ -222,7 +207,7 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 
 	// Create ticker for all modes with appropriate interval
 	var ticker *time.Ticker
-	if sub.Mode == StreamBatched || sub.Mode == StreamAggregated {
+	if sub.Mode == device.StreamBatched || sub.Mode == device.StreamAggregated {
 		if sub.MaxRate <= 0 {
 			// Default to DefaultBatchedInterval for batched/aggregated modes if MaxRate is 0 or negative
 			sub.MaxRate = DefaultBatchedInterval
@@ -239,8 +224,8 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 		case <-sub.ctx.Done():
 			return
 		case <-ticker.C:
-			if sub.Mode == StreamBatched {
-				record := newRecord(StreamBatched)
+			if sub.Mode == device.StreamBatched {
+				record := newRecord(device.StreamBatched)
 				for _, c := range sub.Chars {
 					// Drain all available updates for this characteristic
 					for {
@@ -262,8 +247,8 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 				if len(record.BatchValues) > 0 {
 					sub.Callback(record)
 				}
-			} else if sub.Mode == StreamAggregated {
-				record := newRecord(StreamAggregated)
+			} else if sub.Mode == device.StreamAggregated {
+				record := newRecord(device.StreamAggregated)
 				for _, c := range sub.Chars {
 					select {
 					case val := <-c.updates:
@@ -282,13 +267,13 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 				if len(record.Values) > 0 {
 					sub.Callback(record)
 				}
-			} else if sub.Mode == StreamEveryUpdate {
+			} else if sub.Mode == device.StreamEveryUpdate {
 				for _, char := range sub.Chars {
 					select {
 					case <-sub.ctx.Done():
 						return
 					case val := <-char.updates:
-						record := newRecord(StreamEveryUpdate)
+						record := newRecord(device.StreamEveryUpdate)
 						record.Values[char.UUID()] = val.Data
 						record.TsUs = val.TsUs
 						if val.Flags != 0 {

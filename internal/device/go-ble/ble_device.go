@@ -1,4 +1,4 @@
-package device
+package goble
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
+	"github.com/srg/blim/internal/device"
 )
 
 const (
@@ -27,7 +28,7 @@ const (
 // BLEAdvertisedService implements the Service interface for advertised services
 type BLEAdvertisedService struct {
 	uuid            string
-	characteristics []Characteristic
+	characteristics []device.Characteristic
 }
 
 func (s *BLEAdvertisedService) UUID() string {
@@ -38,7 +39,7 @@ func (s *BLEAdvertisedService) KnownName() string {
 	return "" // Advertised services don't have known names until connected
 }
 
-func (s *BLEAdvertisedService) GetCharacteristics() []Characteristic {
+func (s *BLEAdvertisedService) GetCharacteristics() []device.Characteristic {
 	return s.characteristics
 }
 
@@ -183,7 +184,7 @@ func (d *BLEDevice) GetServiceData() map[string][]byte {
 }
 
 // Connect establishes a BLE connection and populates live characteristics
-func (d *BLEDevice) Connect(ctx context.Context, opts *ConnectOptions) error {
+func (d *BLEDevice) Connect(ctx context.Context, opts *device.ConnectOptions) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -194,7 +195,7 @@ func (d *BLEDevice) Connect(ctx context.Context, opts *ConnectOptions) error {
 
 	// Set default options if not provided
 	if opts == nil {
-		opts = &ConnectOptions{
+		opts = &device.ConnectOptions{
 			ConnectTimeout: 30 * time.Second,
 		}
 	}
@@ -215,19 +216,22 @@ func (d *BLEDevice) Connect(ctx context.Context, opts *ConnectOptions) error {
 	if _, exists := d.connection.services[gapServiceUUID]; exists {
 		// Get the Device Name characteristic
 
-		if char, err := d.connection.GetCharacteristic(gapServiceUUID, deviceNameChar); err == nil && char.BLEChar != nil {
-			// Read the characteristic value
-			if data, err := d.connection.client.ReadCharacteristic(char.BLEChar); err == nil && len(data) > 0 {
-				name := string(data)
-				name = strings.TrimRight(name, "\x00")
-				name = strings.TrimSpace(name)
+		if char, err := d.connection.GetCharacteristic(gapServiceUUID, deviceNameChar); err == nil {
+			// Type-assert to *BLECharacteristic to access BLEChar field
+			if bleChar, ok := char.(*BLECharacteristic); ok && bleChar.BLEChar != nil {
+				// Read the characteristic value
+				if data, err := d.connection.client.ReadCharacteristic(bleChar.BLEChar); err == nil && len(data) > 0 {
+					name := string(data)
+					name = strings.TrimRight(name, "\x00")
+					name = strings.TrimSpace(name)
 
-				if len(name) > 0 && isValidDeviceName(name) {
-					d.name = name
-					d.logger.WithFields(logrus.Fields{
-						"address": d.address,
-						"name":    name,
-					}).Debug("Resolved device name from GAP")
+					if len(name) > 0 && isValidDeviceName(name) {
+						d.name = name
+						d.logger.WithFields(logrus.Fields{
+							"address": d.address,
+							"name":    name,
+						}).Debug("Resolved device name from GAP")
+					}
 				}
 			}
 		}
@@ -236,7 +240,7 @@ func (d *BLEDevice) Connect(ctx context.Context, opts *ConnectOptions) error {
 	return nil
 }
 
-// Disconnect closes connection and clears live handles
+// Disconnect closes the connection and clears live handles
 func (d *BLEDevice) Disconnect() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -397,13 +401,13 @@ func (d *BLEDevice) GetBLEServices() ([]*BLEService, error) {
 }
 
 // GetCharacteristics returns all characteristics as device.Characteristic
-func (d *BLEDevice) GetCharacteristics() ([]Characteristic, error) {
+func (d *BLEDevice) GetCharacteristics() ([]device.Characteristic, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
 	// Return connected characteristics if device is connected
 	if d.isConnectedInternal() {
-		var result []Characteristic
+		var result []device.Characteristic
 		for _, service := range d.connection.services {
 			for _, char := range service.Characteristics {
 				result = append(result, char)
@@ -424,7 +428,7 @@ func (d *BLEDevice) SetDataHandler(f func(uuid string, data []byte)) {
 }
 
 // GetConnection returns the BLE connection interface
-func (d *BLEDevice) GetConnection() Connection {
+func (d *BLEDevice) GetConnection() device.Connection {
 	return d.connection
 }
 

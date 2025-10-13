@@ -1,4 +1,4 @@
-package device
+package goble
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-ble/ble"
 	"github.com/srg/blim/internal/bledb"
+	"github.com/srg/blim/internal/device"
 )
 
 // ----------------------------
@@ -106,8 +107,8 @@ func drainAndReleaseChannel(ch chan *BLEValue) {
 type BLECharacteristic struct {
 	uuid        string
 	knownName   string
-	properties  Properties
-	descriptors []Descriptor
+	properties  device.Properties
+	descriptors []device.Descriptor
 	value       []byte
 	BLEChar     *ble.Characteristic
 	connection  *BLEConnection // reference to parent connection for reading
@@ -118,9 +119,9 @@ type BLECharacteristic struct {
 	subs    []func(*BLEValue)
 }
 
-func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection, descriptors []Descriptor) *BLECharacteristic {
+func NewCharacteristic(c *ble.Characteristic, buffer int, conn *BLEConnection, descriptors []device.Descriptor) *BLECharacteristic {
 	rawUUID := c.UUID.String()
-	uuid := NormalizeUUID(rawUUID)
+	uuid := device.NormalizeUUID(rawUUID)
 
 	return &BLECharacteristic{
 		uuid:        uuid,                                // store normalized
@@ -194,11 +195,11 @@ func (c *BLECharacteristic) KnownName() string {
 	return c.knownName
 }
 
-func (c *BLECharacteristic) GetProperties() Properties {
+func (c *BLECharacteristic) GetProperties() device.Properties {
 	return c.properties
 }
 
-func (c *BLECharacteristic) GetDescriptors() []Descriptor {
+func (c *BLECharacteristic) GetDescriptors() []device.Descriptor {
 	return c.descriptors
 }
 

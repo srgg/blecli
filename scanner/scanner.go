@@ -10,6 +10,7 @@ import (
 	blelib "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/lua"
 )
 
@@ -85,7 +86,7 @@ func (s *Scanner) Scan(ctx context.Context, opts *ScanOptions, progressCallback 
 	// Report scanning phase
 	progressCallback("Scanning")
 
-	dev, err := device.DeviceFactory()
+	dev, err := devicefactory.DeviceFactory()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create BLE device: %w", err)
 	}
@@ -123,7 +124,7 @@ func (s *Scanner) handleAdvertisement(adv blelib.Advertisement) {
 		if !s.shouldIncludeDevice(adv, s.scanOptions) {
 			return
 		}
-		dev, existing = s.devices.GetOrInsert(deviceID, device.NewDevice(adv, s.logger))
+		dev, existing = s.devices.GetOrInsert(deviceID, devicefactory.NewDeviceFromAdvertisement(adv, s.logger))
 	}
 
 	event := DeviceEvent{

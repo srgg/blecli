@@ -9,7 +9,7 @@ import (
 
 	ble "github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
-	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
 	"github.com/srg/blim/internal/testutils/mocks"
 	"github.com/srg/blim/pkg/config"
@@ -73,7 +73,7 @@ func (s *ScanInterruptSuite) SetupTest() {
 	}).Return(nil)
 
 	// Update device factory with our customized device
-	device.DeviceFactory = func() (ble.Device, error) {
+	devicefactory.DeviceFactory = func() (ble.Device, error) {
 		return mockDevice, nil
 	}
 }

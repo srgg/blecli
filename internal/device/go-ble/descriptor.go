@@ -1,4 +1,4 @@
-package device
+package goble
 
 import (
 	"fmt"
@@ -7,6 +7,7 @@ import (
 	"github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/bledb"
+	"github.com/srg/blim/internal/device"
 )
 
 const (
@@ -31,7 +32,7 @@ type BLEDescriptor struct {
 // For well-known descriptor UUIDs (0x2900-0x2906), values are automatically parsed.
 func newDescriptor(d *ble.Descriptor, client ble.Client, timeout time.Duration, logger *logrus.Logger) *BLEDescriptor {
 	descRawUUID := d.UUID.String()
-	descUUID := NormalizeUUID(descRawUUID)
+	descUUID := device.NormalizeUUID(descRawUUID)
 
 	bleDesc := &BLEDescriptor{
 		uuid:      descUUID,
@@ -77,11 +78,11 @@ func newDescriptor(d *ble.Descriptor, client ble.Client, timeout time.Duration, 
 			bleDesc.value = result.data
 
 			// Parse well-known descriptors automatically
-			if parsed, err := ParseDescriptorValue(descUUID, result.data); err == nil {
+			if parsed, err := device.ParseDescriptorValue(descUUID, result.data); err == nil {
 				bleDesc.parsedValue = parsed
 			} else {
 				// Parse error - set parsedValue to DescriptorError
-				bleDesc.parsedValue = &DescriptorError{
+				bleDesc.parsedValue = &device.DescriptorError{
 					Reason: "parse_error",
 					Err:    err,
 				}
@@ -94,7 +95,7 @@ func newDescriptor(d *ble.Descriptor, client ble.Client, timeout time.Duration, 
 			}
 		} else {
 			// Read error - set parsedValue to DescriptorError
-			bleDesc.parsedValue = &DescriptorError{
+			bleDesc.parsedValue = &device.DescriptorError{
 				Reason: "read_error",
 				Err:    result.err,
 			}
@@ -107,7 +108,7 @@ func newDescriptor(d *ble.Descriptor, client ble.Client, timeout time.Duration, 
 		}
 	case <-time.After(timeout):
 		// Timeout - set parsedValue to DescriptorError
-		bleDesc.parsedValue = &DescriptorError{
+		bleDesc.parsedValue = &device.DescriptorError{
 			Reason: "timeout",
 			Err:    nil,
 		}

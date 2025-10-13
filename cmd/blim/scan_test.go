@@ -9,6 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
 	"github.com/srg/blim/internal/testutils/mocks"
 	"github.com/stretchr/testify/assert"
@@ -45,8 +46,8 @@ func (suite *ScanTestSuite) SetupSuite() {
 	suite.originalFlags.scanWatch = scanWatch
 
 	// Save the original BLE device factory and inject mock
-	suite.originalDeviceFactory = device.DeviceFactory
-	device.DeviceFactory = func() (blelib.Device, error) {
+	suite.originalDeviceFactory = devicefactory.DeviceFactory
+	devicefactory.DeviceFactory = func() (blelib.Device, error) {
 		mockDevice := &mocks.MockDevice{}
 		// Set up expectations for the Scan method
 		mockDevice.On("Scan", mock.Anything, mock.Anything, mock.Anything).Return(nil)
@@ -57,7 +58,7 @@ func (suite *ScanTestSuite) SetupSuite() {
 // TearDownSuite runs once after all tests in the suite
 func (suite *ScanTestSuite) TearDownSuite() {
 	// Restore original factories and flag values
-	device.DeviceFactory = suite.originalDeviceFactory
+	devicefactory.DeviceFactory = suite.originalDeviceFactory
 	scanDuration = suite.originalFlags.scanDuration
 	scanFormat = suite.originalFlags.scanFormat
 	scanVerbose = suite.originalFlags.scanVerbose

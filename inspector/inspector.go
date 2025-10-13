@@ -6,6 +6,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
+	goble "github.com/srg/blim/internal/device/go-ble"
 )
 
 // ProgressCallback is called when the inspection phase changes
@@ -40,7 +41,7 @@ func InspectDevice[R any](ctx context.Context, address string, opts *InspectOpti
 	progressCallback("Connecting")
 
 	// Create device and connect (reuses BLEConnection.Connect logic - no duplication!)
-	dev := device.NewDeviceWithAddress(address, logger)
+	dev := goble.NewBLEDeviceWithAddress(address, logger)
 	connectOpts := &device.ConnectOptions{
 		ConnectTimeout:        opts.ConnectTimeout,
 		DescriptorReadTimeout: opts.DescriptorReadTimeout,

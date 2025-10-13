@@ -1,7 +1,8 @@
-package device
+package goble
 
 import (
 	"github.com/go-ble/ble"
+	"github.com/srg/blim/internal/device"
 )
 
 // BLEProperty represents a single BLE characteristic property with its bit flag value and human-readable name.
@@ -35,7 +36,7 @@ type BLEProperties struct {
 }
 
 // NewProperties creates a Properties instance from ble.Property bit flags.
-func NewProperties(p ble.Property) Properties {
+func NewProperties(p ble.Property) device.Properties {
 	props := &BLEProperties{}
 
 	if p&ble.CharBroadcast != 0 {
@@ -67,7 +68,7 @@ func NewProperties(p ble.Property) Properties {
 }
 
 // Broadcast returns the Broadcast property if present, nil otherwise.
-func (p *BLEProperties) Broadcast() Property {
+func (p *BLEProperties) Broadcast() device.Property {
 	if p.broadcast == nil {
 		return nil
 	}
@@ -75,7 +76,7 @@ func (p *BLEProperties) Broadcast() Property {
 }
 
 // Read returns the Read property if present, nil otherwise.
-func (p *BLEProperties) Read() Property {
+func (p *BLEProperties) Read() device.Property {
 	if p.read == nil {
 		return nil
 	}
@@ -83,7 +84,7 @@ func (p *BLEProperties) Read() Property {
 }
 
 // Write returns the Write property if present, nil otherwise.
-func (p *BLEProperties) Write() Property {
+func (p *BLEProperties) Write() device.Property {
 	if p.write == nil {
 		return nil
 	}
@@ -91,7 +92,7 @@ func (p *BLEProperties) Write() Property {
 }
 
 // WriteWithoutResponse returns the WriteWithoutResponse property if present, nil otherwise.
-func (p *BLEProperties) WriteWithoutResponse() Property {
+func (p *BLEProperties) WriteWithoutResponse() device.Property {
 	if p.writeWithoutResponse == nil {
 		return nil
 	}
@@ -99,7 +100,7 @@ func (p *BLEProperties) WriteWithoutResponse() Property {
 }
 
 // Notify returns the Notify property if present, nil otherwise.
-func (p *BLEProperties) Notify() Property {
+func (p *BLEProperties) Notify() device.Property {
 	if p.notify == nil {
 		return nil
 	}
@@ -107,7 +108,7 @@ func (p *BLEProperties) Notify() Property {
 }
 
 // Indicate returns the Indicate property if present, nil otherwise.
-func (p *BLEProperties) Indicate() Property {
+func (p *BLEProperties) Indicate() device.Property {
 	if p.indicate == nil {
 		return nil
 	}
@@ -115,7 +116,7 @@ func (p *BLEProperties) Indicate() Property {
 }
 
 // AuthenticatedSignedWrites returns the AuthenticatedSignedWrites property if present, nil otherwise.
-func (p *BLEProperties) AuthenticatedSignedWrites() Property {
+func (p *BLEProperties) AuthenticatedSignedWrites() device.Property {
 	if p.authenticatedSignedWrites == nil {
 		return nil
 	}
@@ -123,7 +124,7 @@ func (p *BLEProperties) AuthenticatedSignedWrites() Property {
 }
 
 // ExtendedProperties returns the ExtendedProperties property if present, nil otherwise.
-func (p *BLEProperties) ExtendedProperties() Property {
+func (p *BLEProperties) ExtendedProperties() device.Property {
 	if p.extendedProperties == nil {
 		return nil
 	}

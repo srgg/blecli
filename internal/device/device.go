@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/go-ble/ble"
-	"github.com/sirupsen/logrus"
 )
 
 //nolint:revive // DeviceInfo name is intentional for clarity when used as a device.DeviceInfo
@@ -36,7 +35,7 @@ type Device interface {
 type Connection interface {
 	GetServices() []Service
 	GetService(uuid string) (Service, error)
-	GetCharacteristic(service, uuid string) (*BLECharacteristic, error)
+	GetCharacteristic(service, uuid string) (Characteristic, error)
 	Subscribe(opts []*SubscribeOptions, pattern StreamMode, maxRate time.Duration, callback func(*Record)) error
 }
 
@@ -95,12 +94,20 @@ type ConnectOptions struct {
 	Services              []SubscribeOptions
 }
 
-// NewDevice creates a Device from a BLE advertisement
-func NewDevice(adv ble.Advertisement, logger *logrus.Logger) Device {
-	return NewBLEDeviceFromAdvertisement(adv, logger)
-}
+// StreamMode defines how subscription data is delivered
+type StreamMode int
 
-// NewDeviceWithAddress creates a Device with the specified address
-func NewDeviceWithAddress(address string, logger *logrus.Logger) Device {
-	return NewBLEDeviceWithAddress(address, logger)
+const (
+	StreamEveryUpdate StreamMode = iota
+	StreamBatched
+	StreamAggregated
+)
+
+// Record represents a subscription notification record
+type Record struct {
+	TsUs        int64
+	Seq         uint64
+	Values      map[string][]byte   // Single value per characteristic (EveryUpdate/Aggregated modes)
+	BatchValues map[string][][]byte // Multiple values per characteristic (Batched mode)
+	Flags       uint32
 }
