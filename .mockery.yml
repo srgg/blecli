@@ -1,33 +1,25 @@
-# .mockery.yml
-resolve-type-alias: false
-disable-version-string: true
-issue-845-fix: true
-
 packages:
   github.com/go-ble/ble:
+    config:
+      dir: "internal/testutils/mocks/goble"
     interfaces:
       Addr:
         config:
-          dir: "internal/testutils/mocks"
-          outpkg: mocks
+          filename: "mock_BleClient.go"
       Advertisement:
         config:
-          dir: "internal/testutils/mocks"
-          outpkg: "mocks"
-          mockname: BleAdvertisementMock
           filename: "mock_BleAdvertisement.go"
       Device:
         config:
-          dir: "internal/testutils/mocks"
-          outpkg: "mocks"
+          filename: "mock_BleAdvertisement.go"
       Client:
         config:
-          dir: "internal/testutils/mocks"
-          outpkg: "mocks"
+          filename: "mock_BleClient.go"
+
   github.com/srg/blim/internal/device:
+    config:
+      dir: "internal/testutils/mocks/device"
     interfaces:
       Advertisement:
         config:
-          dir: "internal/testutils/mocks"
-          outpkg: mocks
-          mockname: DeviceAdvertisementMock
+          filename: "mock_DeviceAdvertisement.go"

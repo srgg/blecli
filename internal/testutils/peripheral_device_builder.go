@@ -9,7 +9,7 @@ import (
 
 	blelib "github.com/go-ble/ble"
 	"github.com/srg/blim/internal/device"
-	"github.com/srg/blim/internal/testutils/mocks"
+	blemocks "github.com/srg/blim/internal/testutils/mocks/goble"
 	"github.com/stretchr/testify/mock"
 	"gopkg.in/yaml.v3"
 )
@@ -244,8 +244,8 @@ func parseCharacteristicProperties(props string) blelib.Property {
 
 // Build creates a mocked ble.Device with the configured profile
 func (b *PeripheralDeviceBuilder) Build() blelib.Device {
-	mockDevice := &mocks.MockDevice{}
-	mockClient := &mocks.MockClient{}
+	mockDevice := &blemocks.MockDevice{}
+	mockClient := &blemocks.MockClient{}
 
 	// Create the BLE profile with services and characteristics
 	var bleServices []*blelib.Service
@@ -332,11 +332,11 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 		// Simulate discovering all configured advertisements
 		for _, devAdv := range b.scanAdvertisements {
 			// Create an inline adapter that wraps the device.Advertisement as ble.Advertisement
-			mockAddr := &mocks.MockAddr{}
+			mockAddr := &blemocks.MockAddr{}
 			mockAddr.On("String").Return(devAdv.Addr())
 
 			// Create ble.Advertisement adapter
-			adapter := &mocks.BleAdvertisementMock{}
+			adapter := &blemocks.MockAdvertisement{}
 			adapter.On("LocalName").Return(devAdv.LocalName())
 			adapter.On("ManufacturerData").Return(devAdv.ManufacturerData())
 			adapter.On("TxPowerLevel").Return(devAdv.TxPowerLevel())

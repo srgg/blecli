@@ -9,7 +9,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
 	goble "github.com/srg/blim/internal/device/go-ble"
-	"github.com/srg/blim/internal/testutils/mocks"
+	devicemocks "github.com/srg/blim/internal/testutils/mocks/device"
 )
 
 // AdvertisementBuilder builds mocked BLE advertisements for testing.
@@ -194,12 +194,11 @@ func (b *AdvertisementBuilder) FromJSON(jsonStrFmt string, args ...interface{}) 
 	return b
 }
 
-// Build creates a MockAdvertisement that implements ble.Advertisement interface.
+// Build creates a MockAdvertisement that implements device.Advertisement interface.
 // All mock expectations are set based on explicitly configured fields only.
 // Following testify best practices for mock setup.
-func (b *AdvertisementBuilder) Build() *mocks.DeviceAdvertisementMock {
-	//adv := &mocks.MockAdvertisement{}
-	adv := &mocks.DeviceAdvertisementMock{}
+func (b *AdvertisementBuilder) Build() *devicemocks.MockAdvertisement {
+	adv := &devicemocks.MockAdvertisement{}
 
 	// Convert service data to expected format
 	var deviceServiceData []struct {

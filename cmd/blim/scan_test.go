@@ -10,7 +10,7 @@ import (
 	"github.com/srg/blim/internal/device"
 	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
-	"github.com/srg/blim/internal/testutils/mocks"
+	blemocks "github.com/srg/blim/internal/testutils/mocks/goble"
 	"github.com/srg/blim/scanner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -47,7 +47,7 @@ func (suite *ScanTestSuite) SetupSuite() {
 	// Save the original BLE device factory and inject mock
 	suite.originalDeviceFactory = devicefactory.DeviceFactory
 	devicefactory.DeviceFactory = func() (device.ScanningDevice, error) {
-		mockDevice := &mocks.MockDevice{}
+		mockDevice := &blemocks.MockDevice{}
 		// Set up expectations for the Scan method
 		mockDevice.On("Scan", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		// Wrap mock device to implement device.ScanningDevice interface

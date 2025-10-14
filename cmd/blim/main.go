@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"unicode"
 
 	"github.com/spf13/cobra"
 )
@@ -12,6 +13,14 @@ var (
 	commit  = "none"
 	date    = "unknown"
 )
+
+// formatVersion adds 'v' prefix if version starts with a digit
+func formatVersion(ver string) string {
+	if len(ver) > 0 && unicode.IsDigit(rune(ver[0])) {
+		return "v" + ver
+	}
+	return ver
+}
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -26,7 +35,7 @@ var rootCmd = &cobra.Command{
 - PTY bridge for serial device emulation
 
 Perfect for IoT development, device testing, and BLE protocol exploration.`,
-	Version: fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date),
+	Version: formatVersion(version),
 }
 
 func main() {
@@ -47,6 +56,8 @@ func init() {
 	rootCmd.AddCommand(inspectCmd)
 
 	// Global flags
-	//rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose output")
 	rootCmd.PersistentFlags().String("log-level", "", "Log level (debug, info, warn, error)")
+
+	// Add -v as short flag for --version
+	rootCmd.Flags().BoolP("version", "v", false, "Show version information")
 }
