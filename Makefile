@@ -30,7 +30,7 @@ BUILD_DATE ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Go configuration
 GO := go
 GOFLAGS ?=
-GO_BUILD_FLAGS := $(GOFLAGS) -tags luajit
+GO_BUILD_FLAGS := $(GOFLAGS) -tags luajit 
 GO_TEST_FLAGS := $(GO_BUILD_FLAGS) -tags test
 GO_LDFLAGS := -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(BUILD_DATE)"
 

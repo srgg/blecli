@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"syscall"
 	"testing"
 	"time"
 
@@ -45,6 +46,7 @@ type testBridgeInfo struct {
 	ttyName        string
 	ttySymlinkPath string
 	ptyIO          *MockStrategy
+	readCallback   func([]byte) // Store callback for testing
 }
 
 func (t *testBridgeInfo) GetTTYName() string {
@@ -57,6 +59,17 @@ func (t *testBridgeInfo) GetTTYSymlink() string {
 
 func (t *testBridgeInfo) GetPTY() io.ReadWriter {
 	return t.ptyIO
+}
+
+func (t *testBridgeInfo) SetPTYReadCallback(cb func([]byte)) {
+	t.readCallback = cb
+}
+
+// TriggerCallback simulates PTY data arrival for testing
+func (t *testBridgeInfo) TriggerCallback(data []byte) {
+	if t.readCallback != nil {
+		t.readCallback(data)
+	}
 }
 
 // BLEAPI2TestSuite
@@ -95,7 +108,7 @@ func (suite *LuaApiTestSuite) ExecuteScript(script string) error {
 //	generated through the YAML framework (which always generates valid subscription scripts)
 func (suite *LuaApiTestSuite) TestErrorHandling() {
 	suite.Run("Lua: Missing callback", func() {
-		// GOAL: Verify blim.subscribe() returns clear error when Callback field is missing
+		// GOAL: Verify blim.subscribe() returns a clear error when the Callback field is missing
 		//
 		// TEST SCENARIO: Call subscribing without Callback field → Lua error raised → verify error message
 
@@ -118,7 +131,7 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 	suite.Run("Lua: Invalid argument type", func() {
 		// GOAL: Verify blim.subscribe() returns clear error when passed non-table argument
 		//
-		// TEST SCENARIO: Call subscribe with string instead of table → Lua error raised → verify error message
+		// TEST SCENARIO: Call subscribe() with string instead of table → Lua error raised → verify error message
 
 		err := suite.ExecuteScript(`blim.subscribe("not a table")`)
 		suite.AssertLuaError(err, "Error: subscribe() expects a lua table argument")
@@ -127,7 +140,7 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 	suite.Run("Lua: Callback causes panic", func() {
 		// GOAL: Verify that panics in subscription callbacks are recovered and don't crash the system
 		//
-		// TEST SCENARIO: Create subscription with callback that causes Lua panic → send notification → panic recovered → verify error logged
+		// TEST SCENARIO: Create a subscription with callback that causes Lua panic → send notification → panic recovered → verify error logged
 
 		// Create a subscription with a callback that will cause a panic when it tries to access nil values
 		script := `
@@ -165,6 +178,68 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 		suite.NoError(err, "System should continue working after callback panic")
 	})
 
+	suite.Run("Lua: Callback handles missing UUID in record.Values", func() {
+		// GOAL: Verify that accessing a non-existent UUID in the record.Values returns nil and can be gracefully handled
+		//
+		// TEST SCENARIO: Create subscription → send notification → callback accesses non-existent UUID → nil returned → no crash
+
+		script := `
+			received_count = 0
+			nil_access_count = 0
+			valid_data_count = 0
+
+			blim.subscribe{
+				services = {
+					{
+						service = "1234",
+						chars = {"5678"}
+					}
+				},
+				Mode = "EveryUpdate",
+				MaxRate = 0,
+				Callback = function(record)
+					received_count = received_count + 1
+
+					-- Access the valid UUID that exists in the notification
+					local valid_data = record.Values["5678"]
+					if valid_data then
+						valid_data_count = valid_data_count + 1
+					end
+
+					-- Try to access a non-existent UUID - should return nil
+					local missing_data = record.Values["9999"]
+					if missing_data == nil then
+						nil_access_count = nil_access_count + 1
+					end
+
+					-- Verify we can handle nil gracefully without crash
+					assert(missing_data == nil, "non-existent UUID should return nil")
+					assert(valid_data ~= nil, "valid UUID should have data")
+				end
+			}
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should successfully create subscription with nil-safe callback")
+
+		// Send notification with the subscribed characteristic
+		suite.NewPeripheralDataSimulator().
+			WithService("1234").
+			WithCharacteristic("5678", []byte{0x01, 0x02}).
+			Simulate(false)
+
+		// Give time for callback to execute
+		time.Sleep(50 * time.Millisecond)
+
+		// Verify callback was invoked and handled nil access gracefully
+		script = `
+			assert(received_count == 1, "callback should be invoked once")
+			assert(valid_data_count == 1, "valid UUID should be present")
+			assert(nil_access_count == 1, "non-existent UUID should return nil")
+		`
+		err = suite.ExecuteScript(script)
+		suite.NoError(err, "Callback should handle missing UUID access gracefully")
+	})
+
 	// NOTE: The following error tests are in YAML (lua-api-test-test-scenarios.yaml):
 	// - "Error Handling: Missing Services"
 	// - "Error Handling: Non-existent Service"
@@ -186,7 +261,7 @@ func (suite *LuaApiTestSuite) TestSubscriptionScenarios() {
 // TestCharacteristicFunction tests the blim.characteristic() function
 func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	suite.Run("Characteristic without descriptors", func() {
-		// GOAL: Verify characteristic handle has empty descriptors array when no descriptors present
+		// GOAL: Verify characteristic handle has an empty descriptors array when no descriptors present
 		//
 		// TEST SCENARIO: Lookup characteristic without descriptors → descriptors is empty table → verify length is 0
 
@@ -201,7 +276,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Properties field validation", func() {
-		// GOAL: Verify properties field is table with at least one property sub-table (read/write/notify/indicate)
+		// GOAL: Verify property field is a table with at least one property sub-table (read/write/notify/indicate)
 		//
 		// TEST SCENARIO: Lookup characteristic → properties is table → verify at least one property is set (truthy)
 
@@ -343,9 +418,14 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 			assert((char1.properties.write ~= nil) == (char2.properties.write ~= nil), "write property presence should be consistent")
 			assert((char1.properties.notify ~= nil) == (char2.properties.notify ~= nil), "notify property presence should be consistent")
 			assert((char1.properties.indicate ~= nil) == (char2.properties.indicate ~= nil), "indicate property presence should be consistent")
-			-- If both have same property, verify values match
-			if char1.properties.read and char2.properties.read then
-				assert(char1.properties.read.value == char2.properties.read.value, "read property value should be consistent")
+
+			-- Verify property values match when both present (unconditional assertion)
+			-- If only one has the property, presence check above already failed
+			local both_have_read = (char1.properties.read ~= nil) and (char2.properties.read ~= nil)
+			local neither_has_read = (char1.properties.read == nil) and (char2.properties.read == nil)
+			assert(both_have_read or neither_has_read, "read property presence MUST match (verified above)")
+			if both_have_read then
+				assert(char1.properties.read.value == char2.properties.read.value, "read property value MUST be consistent")
 			end
 
 			assert(#char1.descriptors == #char2.descriptors, "descriptor count should be consistent")
@@ -682,6 +762,712 @@ func (suite *LuaApiTestSuite) TestLuaBridgeAccess() {
 	})
 }
 
+// TestPTYWrite tests pty_write() function through the Lua API
+func (suite *LuaApiTestSuite) TestPTYWrite() {
+	suite.Run("Successful write returns bytes written", func() {
+		// GOAL: Verify pty_write() successfully writes data and returns byte count
+		//
+		// TEST SCENARIO: Set up bridge → call pty_write("test") → verify returns byte count and no error
+
+		// Create a mock strategy to capture written data
+		var writtenData []byte
+		mockStrategy := &MockStrategy{
+			WriteFunc: func(data []byte) (int, error) {
+				writtenData = append(writtenData, data...)
+				return len(data), nil
+			},
+		}
+
+		testBridge := &testBridgeInfo{
+			ttyName:        "/dev/ttys999",
+			ttySymlinkPath: "",
+			ptyIO:          mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local bytes, err = blim.bridge.pty_write("Hello PTY")
+			assert(err == nil, "pty_write should not return error, got: " .. tostring(err))
+			assert(bytes == 9, "should write 9 bytes, got: " .. tostring(bytes))
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should successfully write to PTY")
+		suite.Equal("Hello PTY", string(writtenData), "Should write correct data")
+	})
+
+	suite.Run("Handles binary data", func() {
+		// GOAL: Verify pty_write() correctly handles binary data with null bytes and non-printable characters
+		//
+		// TEST SCENARIO: Write binary data with \x00 bytes → verify exact bytes written
+
+		var writtenData []byte
+		mockStrategy := &MockStrategy{
+			WriteFunc: func(data []byte) (int, error) {
+				writtenData = append(writtenData, data...)
+				return len(data), nil
+			},
+		}
+
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local binary_data = "\x01\x02\x00\xFF\x03"
+			local bytes, err = blim.bridge.pty_write(binary_data)
+			assert(err == nil, "pty_write should not return error")
+			assert(bytes == 5, "should write 5 bytes")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle binary data")
+		suite.Equal([]byte{0x01, 0x02, 0x00, 0xFF, 0x03}, writtenData, "Should preserve binary data")
+	})
+
+	suite.Run("Error on write failure", func() {
+		// GOAL: Verify pty_write() returns error when Write() fails
+		//
+		// TEST SCENARIO: Mock Write() returns error → pty_write() returns (nil, error_message)
+
+		mockStrategy := &MockStrategy{
+			WriteFunc: func(data []byte) (int, error) {
+				return 0, fmt.Errorf("simulated write error")
+			},
+		}
+
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local bytes, err = blim.bridge.pty_write("test")
+			assert(bytes == nil, "bytes should be nil on error")
+			assert(err ~= nil, "should return error")
+			assert(type(err) == "string", "error should be string")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle write errors")
+	})
+
+	suite.Run("Invalid argument type", func() {
+		// GOAL: Verify pty_write() returns error when called with non-string argument
+		//
+		// TEST SCENARIO: Call pty_write(123) → error returned
+
+		mockStrategy := &MockStrategy{}
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local bytes, err = blim.bridge.pty_write(123)
+			assert(bytes == nil, "bytes should be nil on type error")
+			assert(err ~= nil, "should return error for invalid type")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should reject non-string arguments")
+	})
+
+	suite.Run("Error when called without bridge", func() {
+		// GOAL: Verify pty_write() returns error when bridge not set
+		//
+		// TEST SCENARIO: Call pty_write() without SetBridge() → error returned
+
+		// Don't set bridge
+		script := `
+			blim.bridge.pty_write("test")
+		`
+		err := suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "not available (not running in bridge mode)")
+	})
+
+	suite.Run("Handles empty string write", func() {
+		// GOAL: Verify pty_write() correctly handles empty string (0 bytes written)
+		//
+		// TEST SCENARIO: Write empty string → returns 0 bytes and no error
+
+		var writeCallCount int
+		mockStrategy := &MockStrategy{
+			WriteFunc: func(data []byte) (int, error) {
+				writeCallCount++
+				return len(data), nil
+			},
+		}
+
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local bytes, err = blim.bridge.pty_write("")
+			assert(err == nil, "pty_write MUST not return error for empty string")
+			assert(bytes == 0, "MUST write 0 bytes for empty string, got: " .. tostring(bytes))
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle empty string write")
+		suite.Equal(1, writeCallCount, "Write should be called once even for empty string")
+	})
+}
+
+// TestPTYRead tests pty_read() function through the Lua API
+func (suite *LuaApiTestSuite) TestPTYRead() {
+	suite.Run("Successful read returns data", func() {
+		// GOAL: Verify pty_read() successfully reads buffered data
+		//
+		// TEST SCENARIO: Mock Read() returns data → pty_read() returns (data, nil)
+
+		mockStrategy := &MockStrategy{
+			ReadFunc: func(p []byte) (int, error) {
+				data := []byte("Response data")
+				copy(p, data)
+				return len(data), nil
+			},
+		}
+
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local data, err = blim.bridge.pty_read()
+			assert(err == nil, "pty_read should not return error")
+			assert(data == "Response data", "should read correct data")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should successfully read from PTY")
+	})
+
+	suite.Run("Handles binary data", func() {
+		// GOAL: Verify pty_read() preserves binary data including null bytes
+		//
+		// TEST SCENARIO: Read binary data with \x00 → verify exact bytes returned
+
+		mockStrategy := &MockStrategy{
+			ReadFunc: func(p []byte) (int, error) {
+				data := []byte{0xFF, 0x00, 0x01, 0x7F}
+				copy(p, data)
+				return len(data), nil
+			},
+		}
+
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local data, err = blim.bridge.pty_read()
+			assert(err == nil, "should not return error")
+			assert(#data == 4, "should read 4 bytes")
+			assert(string.byte(data, 1) == 0xFF, "first byte should be 0xFF")
+			assert(string.byte(data, 2) == 0x00, "second byte should be 0x00")
+			assert(string.byte(data, 3) == 0x01, "third byte should be 0x01")
+			assert(string.byte(data, 4) == 0x7F, "fourth byte should be 0x7F")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should preserve binary data")
+	})
+
+	suite.Run("Returns empty string when EAGAIN", func() {
+		// GOAL: Verify pty_read() returns ("", nil) when no data available (EAGAIN)
+		//
+		// TEST SCENARIO: Mock Read() returns EAGAIN → pty_read() returns ("", nil)
+
+		mockStrategy := &MockStrategy{
+			ReadFunc: func(p []byte) (int, error) {
+				return 0, syscall.EAGAIN
+			},
+		}
+
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local data, err = blim.bridge.pty_read()
+			assert(err == nil, "should not return error for EAGAIN")
+			assert(data == "", "should return empty string when no data available")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle EAGAIN gracefully")
+	})
+
+	suite.Run("Custom buffer size", func() {
+		// GOAL: Verify pty_read() respects custom max_bytes parameter
+		//
+		// TEST SCENARIO: Call pty_read(128) → verify buffer size passed to Read()
+
+		var requestedSize int
+		mockStrategy := &MockStrategy{
+			ReadFunc: func(p []byte) (int, error) {
+				requestedSize = len(p)
+				data := []byte("test")
+				copy(p, data)
+				return len(data), nil
+			},
+		}
+
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local data, err = blim.bridge.pty_read(128)
+			assert(err == nil, "should not return error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should accept custom buffer size")
+		suite.Equal(128, requestedSize, "Should use custom buffer size")
+	})
+
+	suite.Run("Error when called without bridge", func() {
+		// GOAL: Verify pty_read() returns error when bridge not set
+		//
+		// TEST SCENARIO: Call pty_read() without SetBridge() → error returned
+
+		// Don't set the bridge
+		script := `
+			blim.bridge.pty_read()
+		`
+		err := suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "not available (not running in bridge mode)")
+	})
+
+	suite.Run("Error with zero max_bytes", func() {
+		// GOAL: Verify pty_read() returns error when max_bytes is zero
+		//
+		// TEST SCENARIO: Call pty_read(0) → error returned with nil data
+
+		mockStrategy := &MockStrategy{}
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local data, err = blim.bridge.pty_read(0)
+			assert(data == nil, "data MUST be nil on error")
+			assert(err ~= nil, "MUST return error for zero max_bytes")
+			assert(type(err) == "string", "error MUST be string")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should reject zero max_bytes")
+	})
+
+	suite.Run("Error with negative max_bytes", func() {
+		// GOAL: Verify pty_read() returns error when max_bytes is negative
+		//
+		// TEST SCENARIO: Call pty_read(-1) → error returned with nil data
+
+		mockStrategy := &MockStrategy{}
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local data, err = blim.bridge.pty_read(-1)
+			assert(data == nil, "data MUST be nil on error")
+			assert(err ~= nil, "MUST return error for negative max_bytes")
+			assert(type(err) == "string", "error MUST be string")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should reject negative max_bytes")
+	})
+
+	suite.Run("Returns empty string on EOF", func() {
+		// GOAL: Verify pty_read() returns ("", nil) when Read() returns EOF
+		//
+		// TEST SCENARIO: Mock Read() returns EOF → pty_read() returns ("", nil)
+
+		mockStrategy := &MockStrategy{
+			ReadFunc: func(p []byte) (int, error) {
+				return 0, io.EOF
+			},
+		}
+
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local data, err = blim.bridge.pty_read()
+			assert(err == nil, "MUST not return error for EOF")
+			assert(data == "", "MUST return empty string on EOF")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle EOF gracefully")
+	})
+
+	suite.Run("Error on non-EAGAIN read failure", func() {
+		// GOAL: Verify pty_read() returns error when Read() fails with non-EAGAIN error
+		//
+		// TEST SCENARIO: Mock Read() returns generic error → pty_read() returns (nil, error_message)
+
+		mockStrategy := &MockStrategy{
+			ReadFunc: func(p []byte) (int, error) {
+				return 0, fmt.Errorf("simulated read failure")
+			},
+		}
+
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			local data, err = blim.bridge.pty_read()
+			assert(data == nil, "data MUST be nil on error")
+			assert(err ~= nil, "MUST return error on read failure")
+			assert(type(err) == "string", "error MUST be string")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle read errors")
+	})
+}
+
+// TestPTYOnData tests pty_on_data() callback registration and invocation
+func (suite *LuaApiTestSuite) TestPTYOnData() {
+	suite.Run("Register callback and receive data", func() {
+		// GOAL: Verify pty_on_data() registers callback that receives data when PTY data arrives
+		//
+		// TEST SCENARIO: Register callback → simulate PTY data → callback invoked with correct data
+
+		mockStrategy := &MockStrategy{}
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			-- Storage for callback data
+			received_data = nil
+
+			-- Register callback
+			blim.bridge.pty_on_data(function(data)
+				received_data = data
+			end)
+
+			-- Callback registered, waiting for data
+			assert(received_data == nil, "should not have received data yet")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should register callback")
+
+		// Simulate PTY data arrival
+		testBridge.TriggerCallback([]byte("test data"))
+
+		// Verify callback was invoked
+		script = `
+			assert(received_data ~= nil, "callback MUST receive data")
+			assert(received_data == "test data", "callback MUST receive correct data")
+		`
+		err = suite.ExecuteScript(script)
+		suite.NoError(err, "Callback should receive data")
+	})
+
+	suite.Run("Unregister callback with nil", func() {
+		// GOAL: Verify passing nil to pty_on_data() unregisters the callback
+		//
+		// TEST SCENARIO: Register callback → unregister with nil → trigger data → callback not invoked
+
+		mockStrategy := &MockStrategy{}
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			-- Storage for callback data
+			call_count = 0
+
+			-- Register callback
+			blim.bridge.pty_on_data(function(data)
+				call_count = call_count + 1
+			end)
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should register callback")
+
+		// Trigger once to verify it works
+		testBridge.TriggerCallback([]byte("first"))
+
+		script = `
+			assert(call_count == 1, "callback MUST be called once")
+
+			-- Unregister callback
+			blim.bridge.pty_on_data(nil)
+		`
+		err = suite.ExecuteScript(script)
+		suite.NoError(err, "Should unregister callback")
+
+		// Trigger again - should not increment
+		testBridge.TriggerCallback([]byte("second"))
+
+		script = `
+			assert(call_count == 1, "callback MUST not be called after unregister")
+		`
+		err = suite.ExecuteScript(script)
+		suite.NoError(err, "Callback should not be invoked after unregister")
+	})
+
+	suite.Run("Error when called without bridge", func() {
+		// GOAL: Verify pty_on_data() returns error when bridge not set
+		//
+		// TEST SCENARIO: Call pty_on_data() without SetBridge() → error returned
+
+		// Don't set bridge
+		script := `
+			blim.bridge.pty_on_data(function(data) end)
+		`
+		err := suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "not available (not running in bridge mode)")
+	})
+
+	suite.Run("Error with invalid argument type", func() {
+		// GOAL: Verify pty_on_data() returns error when called with non-function argument
+		//
+		// TEST SCENARIO: Call pty_on_data("string") → error returned
+
+		mockStrategy := &MockStrategy{}
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			blim.bridge.pty_on_data("not a function")
+		`
+		err := suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "expects a function or nil argument")
+	})
+
+	suite.Run("Callback receives binary data", func() {
+		// GOAL: Verify pty_on_data() callback receives binary-safe data including null bytes
+		//
+		// TEST SCENARIO: Register callback → send binary data with \x00 → callback receives exact bytes
+
+		mockStrategy := &MockStrategy{}
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			-- Storage for callback data
+			received_bytes = nil
+
+			-- Register callback
+			blim.bridge.pty_on_data(function(data)
+				received_bytes = {}
+				for i = 1, #data do
+					received_bytes[i] = string.byte(data, i)
+				end
+			end)
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should register callback")
+
+		// Trigger with binary data
+		testBridge.TriggerCallback([]byte{0x01, 0x00, 0xFF, 0x7F})
+
+		script = `
+			assert(received_bytes ~= nil, "callback MUST receive data")
+			assert(#received_bytes == 4, "callback MUST receive 4 bytes")
+			assert(received_bytes[1] == 0x01, "first byte MUST be 0x01")
+			assert(received_bytes[2] == 0x00, "second byte MUST be 0x00")
+			assert(received_bytes[3] == 0xFF, "third byte MUST be 0xFF")
+			assert(received_bytes[4] == 0x7F, "fourth byte MUST be 0x7F")
+		`
+		err = suite.ExecuteScript(script)
+		suite.NoError(err, "Callback should receive binary data")
+	})
+
+	suite.Run("Multiple data arrivals invoke callback correctly", func() {
+		// GOAL: Verify callback receives multiple consecutive data arrivals correctly
+		//
+		// TEST SCENARIO: Register callback → trigger 3 times with different data → verify all 3 received
+
+		mockStrategy := &MockStrategy{}
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			-- Storage for callback data
+			received_data = {}
+
+			-- Register callback
+			blim.bridge.pty_on_data(function(data)
+				table.insert(received_data, data)
+			end)
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should register callback")
+
+		// Trigger 3 times with different data
+		testBridge.TriggerCallback([]byte("first"))
+		testBridge.TriggerCallback([]byte("second"))
+		testBridge.TriggerCallback([]byte("third"))
+
+		script = `
+			assert(#received_data == 3, "callback MUST be invoked 3 times")
+			assert(received_data[1] == "first", "first data MUST be correct")
+			assert(received_data[2] == "second", "second data MUST be correct")
+			assert(received_data[3] == "third", "third data MUST be correct")
+		`
+		err = suite.ExecuteScript(script)
+		suite.NoError(err, "Callback should receive all data arrivals")
+	})
+
+	suite.Run("Callback replacement updates handler correctly", func() {
+		// GOAL: Verify registering new callback replaces old one and old callback is not invoked
+		//
+		// TEST SCENARIO: Register callback A → trigger data → register callback B → trigger data → only B receives second
+
+		mockStrategy := &MockStrategy{}
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			-- Storage for callbacks
+			callback_a_count = 0
+			callback_b_count = 0
+
+			-- Register first callback
+			blim.bridge.pty_on_data(function(data)
+				callback_a_count = callback_a_count + 1
+			end)
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should register first callback")
+
+		// Trigger once for callback A
+		testBridge.TriggerCallback([]byte("for_a"))
+
+		script = `
+			assert(callback_a_count == 1, "callback A MUST be called once")
+			assert(callback_b_count == 0, "callback B MUST not be called yet")
+
+			-- Register second callback (should replace first)
+			blim.bridge.pty_on_data(function(data)
+				callback_b_count = callback_b_count + 1
+			end)
+		`
+		err = suite.ExecuteScript(script)
+		suite.NoError(err, "Should register second callback")
+
+		// Trigger once for callback B
+		testBridge.TriggerCallback([]byte("for_b"))
+
+		script = `
+			assert(callback_a_count == 1, "callback A MUST not be called again")
+			assert(callback_b_count == 1, "callback B MUST be called once")
+		`
+		err = suite.ExecuteScript(script)
+		suite.NoError(err, "Only new callback should be invoked")
+	})
+
+	suite.Run("Callback error recovery prevents crash", func() {
+		// GOAL: Verify panic in the callback is recovered and Lua API continues working
+		//
+		// TEST SCENARIO: Register callback that panics → trigger data → panic recovered → system still works
+
+		mockStrategy := &MockStrategy{}
+		testBridge := &testBridgeInfo{
+			ttyName: "/dev/ttys999",
+			ptyIO:   mockStrategy,
+		}
+
+		suite.LuaApi.SetBridge(testBridge)
+
+		script := `
+			-- Register callback that will panic
+			blim.bridge.pty_on_data(function(data)
+				-- This will cause a Lua error/panic
+				local x = nil
+				local y = x.foo.bar  -- attempt to index nil
+			end)
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should register callback even if it will panic")
+
+		// Trigger callback - should panic but be recovered
+		testBridge.TriggerCallback([]byte("trigger panic"))
+
+		// Give time for the async callback to execute and panic to be recovered
+		time.Sleep(50 * time.Millisecond)
+
+		// Verify system still works by registering a new callback
+		script = `
+			good_callback_count = 0
+
+			-- Register new callback that works
+			blim.bridge.pty_on_data(function(data)
+				good_callback_count = good_callback_count + 1
+			end)
+		`
+		err = suite.ExecuteScript(script)
+		suite.NoError(err, "Should register new callback after panic recovery")
+
+		// Trigger new callback to verify system works
+		testBridge.TriggerCallback([]byte("after recovery"))
+
+		script = `
+			assert(good_callback_count == 1, "new callback MUST work after panic recovery")
+		`
+		err = suite.ExecuteScript(script)
+		suite.NoError(err, "System should continue working after callback panic")
+	})
+}
+
 // TestWellKnownDescriptorTypes validates well-known BLE descriptor value parsing and exposure
 // by executing YAML-defined test scenarios.
 //
@@ -696,7 +1482,7 @@ func (suite *LuaApiTestSuite) TestWellKnownDescriptorTypes() {
 	suite.RunTestCasesFromFile("test-scenarios/lua-api-well-known-descriptor-types-scenarios.yaml")
 }
 
-// TestBLEAPI2TestSuite runs the test suite using testify/suite
-func TestBLEAPI2TestSuite(t *testing.T) {
+// TestLuaAPITestSuite runs the test suite using testify/suite
+func TestLuaAPITestSuite(t *testing.T) {
 	suitelib.Run(t, new(LuaApiTestSuite))
 }

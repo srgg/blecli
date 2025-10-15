@@ -29,7 +29,7 @@ import (
 func ExecuteDeviceScriptWithOutput(
 	ctx context.Context,
 	dev device.Device,
-	luaAPI *BLEAPI2,
+	luaAPI *LuaAPI,
 	logger *logrus.Logger,
 	script string,
 	args map[string]string,

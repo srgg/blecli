@@ -17,9 +17,10 @@ import (
 
 // BridgeInfo bridge information exposed to Lua
 type BridgeInfo interface {
-	GetTTYName() string    // TTY device name if created
-	GetTTYSymlink() string // Symlink path (empty if not created)
-	GetPTY() io.ReadWriter // PTY I/O as a standard Go interface (non-blocking reads /writes via ring buffers)
+	GetTTYName() string                 // TTY device name if created
+	GetTTYSymlink() string              // Symlink path (empty if not created)
+	GetPTY() io.ReadWriter              // PTY I/O as a standard Go interface (non-blocking reads /writes via ring buffers)
+	SetPTYReadCallback(cb func([]byte)) // Set callback for PTY data arrival (nil to unregister)
 }
 
 // LuaSubscriptionTable Lua subscription configuration
@@ -30,9 +31,9 @@ type LuaSubscriptionTable struct {
 	CallbackRef int                       `json:"-"` // Lua function reference
 }
 
-// BLEAPI2 represents the new BLE API that supports Lua subscriptions
+// LuaAPI represents the new BLE API that supports Lua subscriptions
 // This replaces the old TTY-based bridge with direct subscription support
-type BLEAPI2 struct {
+type LuaAPI struct {
 	device    device.Device
 	LuaEngine *LuaEngine
 	logger    *logrus.Logger
@@ -40,8 +41,8 @@ type BLEAPI2 struct {
 }
 
 // NewBLEAPI2 creates a new BLE API instance with subscription support
-func NewBLEAPI2(device device.Device, logger *logrus.Logger) *BLEAPI2 {
-	r := &BLEAPI2{
+func NewBLEAPI2(device device.Device, logger *logrus.Logger) *LuaAPI {
+	r := &LuaAPI{
 		device:    device,
 		logger:    logger,
 		LuaEngine: NewLuaEngine(logger),
@@ -51,14 +52,14 @@ func NewBLEAPI2(device device.Device, logger *logrus.Logger) *BLEAPI2 {
 	return r
 }
 
-func (api *BLEAPI2) GetDevice() device.Device {
+func (api *LuaAPI) GetDevice() device.Device {
 	return api.device
 }
 
 // SetBridge sets the bridge information and updates the PTY strategy.
 // When a bridge is set, the ptyio field is updated to use the bridge's PTY I/O strategy.
 // When the bridge is nil, the ptyio field reverts to NilPTYIO.
-func (api *BLEAPI2) SetBridge(bridge BridgeInfo) {
+func (api *LuaAPI) SetBridge(bridge BridgeInfo) {
 	api.logger.WithFields(logrus.Fields{
 		"bridge_set": bridge != nil,
 		"api_ptr":    fmt.Sprintf("%p", api),
@@ -69,7 +70,7 @@ func (api *BLEAPI2) SetBridge(bridge BridgeInfo) {
 // registerBridgeInfo registers the blim.bridge table with runtime bridge checking
 // This is called internally during API registration within the DoWithState block
 // Stack: expects _blim_internal table at top (-1)
-func (api *BLEAPI2) registerBridgeInfo(L *lua.State) {
+func (api *LuaAPI) registerBridgeInfo(L *lua.State) {
 	L.PushString("bridge")
 
 	// Create a bridge table with getter functions that check at runtime
@@ -105,6 +106,11 @@ func (api *BLEAPI2) registerBridgeInfo(L *lua.State) {
 	// Returns: (bytes_written, nil) on success or (nil, error_message) on failure
 	L.PushString("pty_write")
 	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.pty_write", func(L *lua.State) int {
+		if api.bridge == nil {
+			L.RaiseError("pty_write() is not available (not running in bridge mode)")
+			return 0
+		}
+
 		// Get PTY I/O strategy (minimal LuaPTY interface - no Close/TTYName exposed)
 		ptyIO := api.bridge.GetPTY()
 
@@ -145,6 +151,11 @@ func (api *BLEAPI2) registerBridgeInfo(L *lua.State) {
 	// max_bytes defaults to 4096 if not specified
 	L.PushString("pty_read")
 	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.pty_read", func(L *lua.State) int {
+		if api.bridge == nil {
+			L.RaiseError("pty_read() is not available (not running in bridge mode)")
+			return 0
+		}
+
 		// Get PTY I/O (io.ReadWriter interface)
 		ptyIO := api.bridge.GetPTY()
 
@@ -185,6 +196,43 @@ func (api *BLEAPI2) registerBridgeInfo(L *lua.State) {
 	}))
 	L.SetTable(-3)
 
+	// Add pty_on_data function - registers Lua callback for PTY data arrival
+	// Usage: blim.bridge.pty_on_data(function(data) ... end)
+	// Pass nil to unregister: blim.bridge.pty_on_data(nil)
+	L.PushString("pty_on_data")
+	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction("bridge.pty_on_data", func(L *lua.State) int {
+		if api.bridge == nil {
+			L.RaiseError("pty_on_data() is not available (not running in bridge mode)")
+			return 0
+		}
+
+		// Check if nil was passed (unregister callback)
+		if L.IsNil(1) {
+			api.logger.Debug("[pty_on_data] Unregistering PTY callback")
+			api.bridge.SetPTYReadCallback(nil)
+			return 0
+		}
+
+		// Validate argument - must be a function
+		if !L.IsFunction(1) {
+			L.RaiseError("pty_on_data() expects a function or nil argument")
+			return 0
+		}
+
+		// Store reference to the callback function in Lua registry
+		callbackRef := L.Ref(lua.LUA_REGISTRYINDEX)
+
+		api.logger.WithField("callback_ref", callbackRef).Debug("[pty_on_data] Registering PTY callback")
+
+		// Create Go callback that dispatches to Lua
+		api.bridge.SetPTYReadCallback(func(data []byte) {
+			api.callPTYDataCallback(callbackRef, data)
+		})
+
+		return 0
+	}))
+	L.SetTable(-3)
+
 	// Set _blim_internal.bridge = <table with getter functions>
 	L.SetTable(-3)
 }
@@ -199,7 +247,7 @@ func (api *BLEAPI2) registerBridgeInfo(L *lua.State) {
 //	    // your implementation
 //	})
 //	L.SetTable(-3)
-func (api *BLEAPI2) SafePushGoFunction(L *lua.State, name string, fn func(*lua.State) int) {
+func (api *LuaAPI) SafePushGoFunction(L *lua.State, name string, fn func(*lua.State) int) {
 	L.PushString(name)
 	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction(name+"()", fn))
 }
@@ -218,30 +266,30 @@ func parseStreamPattern(pattern string) device.StreamMode {
 	}
 }
 
-func (api *BLEAPI2) ExecuteScript(ctx context.Context, script string) error {
+func (api *LuaAPI) ExecuteScript(ctx context.Context, script string) error {
 	return api.LuaEngine.ExecuteScript(ctx, script)
 }
 
-func (api *BLEAPI2) LoadScriptFile(filename string) error {
+func (api *LuaAPI) LoadScriptFile(filename string) error {
 	return api.LuaEngine.LoadScriptFile(filename)
 }
 
-func (api *BLEAPI2) LoadScript(script, name string) error {
+func (api *LuaAPI) LoadScript(script, name string) error {
 	return api.LuaEngine.LoadScript(script, name)
 }
 
-func (api *BLEAPI2) Reset() {
+func (api *LuaAPI) Reset() {
 	api.LuaEngine.Reset()
 	api.registerBlimAPI() // Register _blim_internal for Lua wrapper
 }
 
-func (api *BLEAPI2) OutputChannel() <-chan LuaOutputRecord {
+func (api *LuaAPI) OutputChannel() <-chan LuaOutputRecord {
 	return api.LuaEngine.OutputChannel()
 }
 
 // registerBlimAPI registers the internal BLE API (_blim_internal) for Lua wrapper
 // This demonstrates the CGO-like approach where Lua wraps Go functions
-func (api *BLEAPI2) registerBlimAPI() {
+func (api *LuaAPI) registerBlimAPI() {
 	api.LuaEngine.DoWithState(func(L *lua.State) interface{} {
 		// Create _blim_internal table
 		L.NewTable()
@@ -269,7 +317,7 @@ func (api *BLEAPI2) registerBlimAPI() {
 }
 
 // registerSubscribeFunction registers the ble.subscribe() function
-func (api *BLEAPI2) registerSubscribeFunction(L *lua.State) {
+func (api *LuaAPI) registerSubscribeFunction(L *lua.State) {
 	api.SafePushGoFunction(L, "subscribe", func(L *lua.State) int {
 		// Expect a table as the first argument
 		if !L.IsTable(1) {
@@ -322,7 +370,7 @@ func (api *BLEAPI2) registerSubscribeFunction(L *lua.State) {
 // For ble.list(), this allows:
 //  1. Ordered iteration: for i, uuid in ipairs(services) do ... end
 //  2. UUID-based lookup: services[uuid] to get service info
-func (api *BLEAPI2) registerListFunction(L *lua.State) {
+func (api *LuaAPI) registerListFunction(L *lua.State) {
 	api.SafePushGoFunction(L, "list", func(L *lua.State) int {
 		// Get connection when function is called, not when registered
 		connection := api.device.GetConnection()
@@ -382,7 +430,7 @@ func (api *BLEAPI2) registerListFunction(L *lua.State) {
 }
 
 // registerDeviceInfo registers the ble.device table with device information
-func (api *BLEAPI2) registerDeviceInfo(L *lua.State) {
+func (api *LuaAPI) registerDeviceInfo(L *lua.State) {
 	dev := api.device
 
 	L.PushString("device")
@@ -458,7 +506,7 @@ func (api *BLEAPI2) registerDeviceInfo(L *lua.State) {
 }
 
 // parseSubscriptionTable parses the Lua table into a LuaSubscriptionTable
-func (api *BLEAPI2) parseSubscriptionTable(L *lua.State, tableIndex int) (*LuaSubscriptionTable, error) {
+func (api *LuaAPI) parseSubscriptionTable(L *lua.State, tableIndex int) (*LuaSubscriptionTable, error) {
 	config := &LuaSubscriptionTable{}
 
 	// Convert relative index to absolute index
@@ -513,7 +561,7 @@ func (api *BLEAPI2) parseSubscriptionTable(L *lua.State, tableIndex int) (*LuaSu
 }
 
 // parseServicesArray parses the service array from the Lua table
-func (api *BLEAPI2) parseServicesArray(L *lua.State, tableIndex int) ([]device.SubscribeOptions, error) {
+func (api *LuaAPI) parseServicesArray(L *lua.State, tableIndex int) ([]device.SubscribeOptions, error) {
 	var services []device.SubscribeOptions
 
 	// Convert relative index to absolute index for L.Next()
@@ -531,7 +579,9 @@ func (api *BLEAPI2) parseServicesArray(L *lua.State, tableIndex int) ([]device.S
 			L.PushString("service")
 			L.GetTable(-2)
 			if L.IsString(-1) {
-				service.Service = L.ToString(-1)
+				// Normalize service UUID
+				normalizedService := device.NormalizeUUID(L.ToString(-1))
+				service.Service = normalizedService
 			}
 			L.Pop(1)
 
@@ -555,7 +605,7 @@ func (api *BLEAPI2) parseServicesArray(L *lua.State, tableIndex int) ([]device.S
 }
 
 // parseCharsArray parses the characteristic array from a service
-func (api *BLEAPI2) parseCharsArray(L *lua.State, tableIndex int) []string {
+func (api *LuaAPI) parseCharsArray(L *lua.State, tableIndex int) []string {
 	var chars []string
 
 	// Convert relative index to absolute index for L.Next()
@@ -566,7 +616,9 @@ func (api *BLEAPI2) parseCharsArray(L *lua.State, tableIndex int) []string {
 	L.PushNil()
 	for L.Next(tableIndex) != 0 {
 		if L.IsString(-1) {
-			chars = append(chars, L.ToString(-1))
+			// Normalize characteristic UUID
+			normalizedChar := device.NormalizeUUID(L.ToString(-1))
+			chars = append(chars, normalizedChar)
 		}
 		L.Pop(1) // Pop value, keep key for next iteration
 	}
@@ -575,7 +627,7 @@ func (api *BLEAPI2) parseCharsArray(L *lua.State, tableIndex int) []string {
 }
 
 // executeSubscription creates and starts the actual BLE subscription
-func (api *BLEAPI2) executeSubscription(config *LuaSubscriptionTable) error {
+func (api *LuaAPI) executeSubscription(config *LuaSubscriptionTable) error {
 	api.logger.WithFields(logrus.Fields{
 		"services": len(config.Services),
 		"mode":     config.Mode,
@@ -607,8 +659,86 @@ func (api *BLEAPI2) executeSubscription(config *LuaSubscriptionTable) error {
 	return api.device.GetConnection().Subscribe(opts, pattern, maxRate, callback)
 }
 
+// callPTYDataCallback calls the Lua callback function when PTY data arrives
+func (api *LuaAPI) callPTYDataCallback(callbackRef int, data []byte) error {
+	if callbackRef == lua.LUA_NOREF {
+		return nil
+	}
+
+	// Outer panic handler: catches ALL panics (including LuaError from StackTrace crashes)
+	// This ensures one callback's error doesn't crash the PTY dispatcher
+	defer func() {
+		if r := recover(); r != nil {
+			// Log ALL panics (LuaError or otherwise) and recover gracefully
+			stack := string(debug.Stack())
+			api.logger.Errorf("PTY Lua callback panic (recovered): %v\nStack:\n%s", r, stack)
+
+			// Send error to stderr for user visibility
+			api.LuaEngine.outputChan.ForceSend(LuaOutputRecord{
+				Content:   fmt.Sprintf("PTY callback error: %v", r),
+				Timestamp: time.Now(),
+				Source:    "stderr",
+			})
+
+			// DANGEROUS - DO NOT DO THIS:
+			// Attempting to clean up Lua state after panic is unsafe because:
+			// 1. SIGSEGV from Lua FFI code means the Lua VM is corrupted
+			// 2. Calling L.SetTop(0) on corrupted state → another SIGSEGV
+			// 3. Go's recover() cannot catch SIGSEGV - process will crash
+			// 4. When L.Call() returns error normally, stack is already cleaned
+			//
+			// OLD DANGEROUS CODE (commented out):
+			// api.LuaEngine.DoWithState(func(L *lua.State) interface{} {
+			//     L.SetTop(0) // ← SIGSEGV if state is corrupted
+			//     return nil
+			// })
+
+			// DO NOT re-panic - allow PTY reading to continue
+		}
+	}()
+
+	api.LuaEngine.DoWithState(func(L *lua.State) interface{} {
+		// Inner panic handler: catches panics from L.Call() (including StackTrace crashes)
+		defer func() {
+			if r := recover(); r != nil {
+				// Re-panic to outer handler for cleanup
+				panic(r)
+			}
+		}()
+
+		// Push the callback function onto the stack using reference
+		L.RawGeti(lua.LUA_REGISTRYINDEX, callbackRef)
+
+		// Push data as string argument (Lua string can contain binary data)
+		L.PushString(string(data))
+
+		// Call the function with one argument (the data string)
+		// This can panic if StackTrace() crashes while building LuaError
+		if err := L.Call(1, 0); err != nil {
+			// Log the error for debugging
+			api.logger.Errorf("PTY Lua callback execution failed: %v", err)
+
+			// Send error to an output channel for user visibility
+			api.LuaEngine.outputChan.ForceSend(LuaOutputRecord{
+				Content:   fmt.Sprintf("PTY callback error: %v", err),
+				Timestamp: time.Now(),
+				Source:    "stderr",
+			})
+
+			// CRITICAL: Reset the Lua stack after an error to prevent corruption
+			// When L.Call() fails, the stack may be left in an inconsistent state
+			// Resetting ensures the next callback starts with a clean stack
+			L.SetTop(0)
+		}
+
+		return nil
+	})
+
+	return nil
+}
+
 // callLuaCallback calls the Lua callback function with the record data
-func (api *BLEAPI2) callLuaCallback(callbackRef int, record *device.Record) error {
+func (api *LuaAPI) callLuaCallback(callbackRef int, record *device.Record) error {
 	if callbackRef == lua.LUA_NOREF {
 		return nil
 	}
@@ -619,20 +749,27 @@ func (api *BLEAPI2) callLuaCallback(callbackRef int, record *device.Record) erro
 		if r := recover(); r != nil {
 			// Log ALL panics (LuaError or otherwise) and recover gracefully
 			stack := string(debug.Stack())
-			api.logger.Errorf("Lua callback panic (recovered): %v\nStack:\n%s", r, stack)
+			api.logger.Errorf("Lua subsribe callback panic (recovered): %v\nStack:\n%s", r, stack)
 
 			// Send error to stderr for user visibility
 			api.LuaEngine.outputChan.ForceSend(LuaOutputRecord{
-				Content:   fmt.Sprintf("Callback error: %v", r),
+				Content:   fmt.Sprintf("Subscribe callback error: %v", r),
 				Timestamp: time.Now(),
 				Source:    "stderr",
 			})
 
-			// Clean up Lua state after panic
-			api.LuaEngine.DoWithState(func(L *lua.State) interface{} {
-				L.SetTop(0) // Reset stack to clean state
-				return nil
-			})
+			// DANGEROUS - DO NOT DO THIS:
+			// Attempting to clean up Lua state after panic is unsafe because:
+			// 1. SIGSEGV from Lua FFI code means the Lua VM is corrupted
+			// 2. Calling L.SetTop(0) on corrupted state → another SIGSEGV
+			// 3. Go's recover() cannot catch SIGSEGV - process will crash
+			// 4. When L.Call() returns error normally, stack is already cleaned
+			//
+			// OLD DANGEROUS CODE (commented out):
+			// api.LuaEngine.DoWithState(func(L *lua.State) interface{} {
+			//     L.SetTop(0) // ← SIGSEGV if state is corrupted
+			//     return nil
+			// })
 
 			// DO NOT re-panic - allow other subscriptions to continue
 		}
@@ -683,7 +820,7 @@ func (api *BLEAPI2) callLuaCallback(callbackRef int, record *device.Record) erro
 			L.SetTable(-3)
 		}
 
-		// Set BatchValues table (for Batched mode)
+		// Set the BatchValues table (for Batched mode)
 		if record.BatchValues != nil {
 			L.PushString("BatchValues")
 			L.NewTable()
@@ -716,7 +853,7 @@ func (api *BLEAPI2) callLuaCallback(callbackRef int, record *device.Record) erro
 				Source:    "stderr",
 			})
 
-			// CRITICAL: Reset Lua stack after error to prevent corruption
+			// CRITICAL: Reset the Lua stack after an error to prevent corruption
 			// When L.Call() fails, the stack may be left in an inconsistent state
 			// Resetting ensures the next callback starts with a clean stack
 			L.SetTop(0)
@@ -729,7 +866,7 @@ func (api *BLEAPI2) callLuaCallback(callbackRef int, record *device.Record) erro
 }
 
 // registerCharacteristicFunction registers the ble.characteristic() function
-func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
+func (api *LuaAPI) registerCharacteristicFunction(L *lua.State) {
 	api.SafePushGoFunction(L, "characteristic", func(L *lua.State) int {
 		// Validate arguments
 		if !L.IsString(1) || !L.IsString(2) {
@@ -754,7 +891,7 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 			return 0
 		}
 
-		// Create handle table with metadata fields
+		// Create a handle table with metadata fields
 		L.NewTable()
 
 		// Field: uuid
@@ -895,7 +1032,7 @@ func (api *BLEAPI2) registerCharacteristicFunction(L *lua.State) {
 // registerSleepFunction registers the blim.sleep() utility function
 // Usage: blim.sleep(milliseconds)
 // Sleeps for the specified number of milliseconds
-func (api *BLEAPI2) registerSleepFunction(L *lua.State) {
+func (api *LuaAPI) registerSleepFunction(L *lua.State) {
 	api.SafePushGoFunction(L, "sleep", func(L *lua.State) int {
 		// Validate argument
 		if !L.IsNumber(1) {
@@ -920,7 +1057,7 @@ func (api *BLEAPI2) registerSleepFunction(L *lua.State) {
 // pushDescriptorParsedValue pushes a parsed descriptor value onto the Lua stack as a table.
 // Handles all known descriptor types (ExtendedProperties, ClientConfig, etc.) and error states.
 // Stack effect: pushes one value (table or string)
-func (api *BLEAPI2) pushDescriptorParsedValue(L *lua.State, parsedValue interface{}) {
+func (api *LuaAPI) pushDescriptorParsedValue(L *lua.State, parsedValue interface{}) {
 	switch v := parsedValue.(type) {
 	case *device.ExtendedProperties:
 		// Push ExtendedProperties as {reliable_write=bool, writable_auxiliaries=bool}
@@ -1000,7 +1137,7 @@ func (api *BLEAPI2) pushDescriptorParsedValue(L *lua.State, parsedValue interfac
 }
 
 // Close cleans up the API resources
-func (api *BLEAPI2) Close() {
+func (api *LuaAPI) Close() {
 	if api.logger != nil {
 		api.logger.WithField("lua_api_ptr", fmt.Sprintf("%p", api)).Debug("Closing lua api...")
 	}

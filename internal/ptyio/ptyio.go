@@ -10,8 +10,16 @@
 //	}
 //	// pty.TTYName() -> "/dev/pts/X"
 //
-//	// Send to slave (non-blocking, may overwrite oldest):
-//	n, err := pty.Write([]byte("hello\n"))
+//	// Send to slave (non-blocking, may drop data if buffer full):
+//	data := []byte("hello\n")
+//	n, err := pty.Write(data)
+//	if err != nil {
+//	    return err
+//	}
+//	if n < len(data) {
+//	    // Buffer overflow - some data was dropped
+//	    log.Printf("Warning: only wrote %d of %d bytes", n, len(data))
+//	}
 //
 //	// Read output produced by slave (non-blocking):
 //	buf := make([]byte, 4096)
@@ -59,9 +67,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/sirupsen/logrus"
@@ -74,6 +84,11 @@ import (
 // This callback is called from background goroutines, so implementations must be thread-safe.
 // The PTY remains in a degraded state after the error - Close() should be called.
 type ErrorCallback func(err error)
+
+// ReadCallback is invoked when data arrives from the PTY slave (background goroutine).
+// Implementations must be thread-safe and must not retain the data slice (copy if needed).
+// Panics are recovered and logged, but will unregister the callback to prevent repeated failures.
+type ReadCallback func(data []byte)
 
 // PTYOptions configures PTY creation with fine-grained control over behavior.
 // Zero values use sensible defaults (see DefaultPollTimeoutMs constant).
@@ -88,9 +103,10 @@ type PTYOptions struct {
 // PTY provides a non-blocking interface to pseudo-terminal devices.
 // Implements io.ReadWriteCloser for compatibility with standard Go interfaces.
 type PTY interface {
-	io.ReadWriteCloser // Standard Go read/write/close interface
-	Stats() Stats      // runtime metrics
-	TTYName() string   // path of a tty device, empty if unknown
+	io.ReadWriteCloser               // Standard Go read/write/close interface
+	Stats() Stats                    // runtime metrics
+	TTYName() string                 // path of a tty device, empty if unknown
+	SetReadCallback(cb ReadCallback) // set callback for async data arrival (nil to unregister)
 }
 
 // Stats provides runtime counters useful for monitoring/backpressure.
@@ -124,13 +140,13 @@ var noopLogger = func() *logrus.Logger {
 
 // ringPTY implements PTY using ring buffers for non-blocking I/O.
 // It wraps a PTY master/slave pair with background goroutines for async read/write,
-// providing backpressure management via ring buffer semantics (oldest data dropped when full).
+// providing backpressure management via ring buffer semantics (the oldest data dropped when full).
 type ringPTY struct {
 	logger         *logrus.Logger
 	tty            *os.File      // slave
 	pty            *os.File      // master
 	onError        ErrorCallback // optional callback for critical errors
-	writeErrorOnce sync.Once     // ensures write error callback is called at most once
+	writeErrorOnce sync.Once     // ensures the write error callback is called at most once
 	readErrorOnce  sync.Once     // ensures read error callback is called at most once
 	pollTimeoutMs  int           // poll timeout in milliseconds
 
@@ -142,6 +158,12 @@ type ringPTY struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
+	// readCb stores ReadCallback (or nil to unregister)
+	// INVARIANT: Must ONLY contain ReadCallback type or nil, never any other type
+	// Violation will cause type assertion panic in dispatcher (recovered but logs error)
+	readCb     atomic.Value
+	readNotify chan struct{} // signals dispatcher that data is available
+
 	closed uint32 // atomic boolean
 
 	// metrics
@@ -151,6 +173,10 @@ type ringPTY struct {
 	writeBytes   uint64
 
 	ttyName string
+
+	// chunkPool reduces GC pressure in high-throughput callback scenarios
+	// Slices are allocated once, reused across callbacks, returned to pool after use
+	chunkPool sync.Pool
 }
 
 // NewPty creates a new PTY ptyx(master)/tty(slave) pair, wraps the master in ringPTY,
@@ -208,9 +234,23 @@ func NewPtyWithOptions(opts *PTYOptions) (PTY, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Get slave name - keep slave FD open so PTY remains in a connected state
-	// External processes can still open additional FDs to the same slave device
+	// Get slave device path (e.g., "/dev/pts/5") for external processes to open
 	slaveName := slave.Name()
+
+	// Design decision: Keep slave FD open for PTY lifetime
+	//
+	// PTY behavior on modern Unix (Linux/macOS):
+	//   - Slave device node (/dev/pts/X) exists as long as master FD is open
+	//   - External processes can open slave by path even after original slave FD is closed
+	//   - Keeping slave FD open is NOT strictly necessary for device availability
+	//
+	// Rationale for keeping it open:
+	//   - Defensive: Ensures at least one open slave FD exists (prevents edge cases)
+	//   - Simplicity: Symmetric lifecycle management (both master+slave closed together)
+	//   - Compatibility: Avoids potential issues on exotic Unix variants
+	//
+	// Trade-off: Consumes one extra file descriptor for PTY lifetime
+	// Alternative: Could close slave here and only keep master (would save 1 FD per PTY)
 
 	// Apply defaults
 	logger := opts.Logger
@@ -234,20 +274,31 @@ func NewPtyWithOptions(opts *PTYOptions) (PTY, error) {
 		cancel:        cancel,
 		onError:       opts.OnError,
 		pollTimeoutMs: pollTimeout,
+		readNotify:    make(chan struct{}, 1), // buffered so the signal never blocks
 	}
 
 	// start goroutines
-	p.wg.Add(2)
-	go p.readLoop()
-	go p.writeLoop()
+	p.wg.Add(3)
+	go p.ttyReadLoop()
+	go p.ttyWriteLoop()
+	go p.ttyStdioAsyncDispatcher()
 
 	return p, nil
 }
 
-func (p *ringPTY) writeLoop() {
-	defer p.wg.Done()
+func (p *ringPTY) ttyWriteLoop() {
+	// Defensive panic recovery ensures wg.Done() always executes
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger.Errorf("writeLoop panicked (recovered): %v", r)
+		}
+		p.wg.Done()
+	}()
 
-	fd := int(p.pty.Fd())
+	// CRITICAL: Capture *os.File reference to prevent nil pointer dereference
+	// Close() sets p.pty = nil, so we must not dereference p.pty after goroutine starts
+	master := p.pty
+	fd := int(master.Fd())
 	pollFd := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLOUT}}
 	buf := make([]byte, 4096) // Write buffer for batching bytes from a ring
 
@@ -280,10 +331,10 @@ func (p *ringPTY) writeLoop() {
 			continue // buffer empty
 		}
 
-		// Write collected bytes to PTY
+		// Write collected bytes to PTY (use captured master reference)
 		offset := 0
 		for offset < n {
-			written, err := p.pty.Write(buf[offset:n])
+			written, err := master.Write(buf[offset:n])
 			if written > 0 {
 				offset += written
 				atomic.AddUint64(&p.writeBytes, uint64(written))
@@ -319,11 +370,21 @@ func (p *ringPTY) writeLoop() {
 	}
 }
 
-func (p *ringPTY) readLoop() {
-	defer p.wg.Done()
-	p.logger.Infof("[PTY readLoop] STARTING for slave %s", p.ttyName)
+func (p *ringPTY) ttyReadLoop() {
+	// Defensive panic recovery ensures wg.Done() always executes
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger.Errorf("readLoop panicked (recovered): %v", r)
+		}
+		p.wg.Done()
+	}()
 
-	fd := int(p.pty.Fd())
+	p.logger.Infof("[TTY Read Loop] STARTING for slave %s", p.ttyName)
+
+	// CRITICAL: Capture *os.File reference to prevent nil pointer dereference
+	// Close() sets p.pty = nil, so we must not dereference p.pty after goroutine starts
+	master := p.pty
+	fd := int(master.Fd())
 	pollFd := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 	buf := make([]byte, 4096) // Read buffer for PTY reads
 
@@ -344,7 +405,7 @@ func (p *ringPTY) readLoop() {
 			continue // timeout, check context
 		}
 
-		n, err := p.pty.Read(buf)
+		n, err := master.Read(buf)
 
 		if n > 0 {
 			// Write bytes to ring buffer (bulk operation)
@@ -354,14 +415,25 @@ func (p *ringPTY) readLoop() {
 				continue
 			}
 
-			// Track dropped bytes: the difference between what we tried to write and what was accepted
+			// Track and warn about dropped bytes from PTY
 			// Note: smallnest/ringbuffer.Write() returns how many bytes were actually written
 			if written < n {
 				dropped := n - written
 				atomic.AddUint64(&p.droppedRead, uint64(dropped))
+				p.logger.Warnf("Read buffer overflow: dropped %d bytes from PTY (received %d, only buffered %d)",
+					dropped, n, written)
 			}
 
 			atomic.AddUint64(&p.readBytes, uint64(written))
+
+			// Notify the async dispatcher that data is available for read
+			if written > 0 && p.readCb.Load() != nil {
+				select {
+				case p.readNotify <- struct{}{}:
+				default:
+					// signal already pending, don't block
+				}
+			}
 		}
 
 		if err != nil {
@@ -397,17 +469,23 @@ func (p *ringPTY) readLoop() {
 //
 // Behavior:
 //   - Data bytes are enqueued to the ring buffer for background transmission
-//   - If buffer is full, oldest bytes may be dropped (ring buffer semantics)
+//   - If buffer is full, oldest bytes are dropped (ring buffer semantics) and only
+//     partial data is queued
+//   - Caller should check the returned byte count to detect buffer overflow
 //
 // Return values:
-//   - (len(data), nil): Data successfully queued
-//   - (0, io.ErrClosedPipe): PTY has been closed
+//   - (n, nil) where n = bytes queued: Successfully queued n bytes (may be < len(data))
+//   - (0, os.ErrClosed): PTY has been closed
 //
-// Note: Returning len(data) does NOT guarantee data was written to PTY,
-// only that it was queued. Use Stats() to monitor actual write progress.
+// IMPORTANT: This follows io.Writer contract - if n < len(data), caller must check
+// the return value to detect data loss. Monitor DroppedWriteCount in Stats() for
+// aggregate dropped byte count.
+//
+// Note: Returning n bytes does NOT guarantee data was transmitted to PTY,
+// only that it was queued. Use Stats() to monitor actual transmission progress.
 func (p *ringPTY) Write(data []byte) (int, error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
-		return 0, io.ErrClosedPipe
+		return 0, os.ErrClosed
 	}
 	if len(data) == 0 {
 		return 0, nil
@@ -420,16 +498,18 @@ func (p *ringPTY) Write(data []byte) (int, error) {
 		return 0, err
 	}
 
-	// Track dropped bytes: the difference between what we tried to write and what was accepted
+	// Track and warn about dropped bytes
 	// Note: smallnest/ringbuffer.Write() returns how many bytes were actually written
 	if written < len(data) {
 		dropped := len(data) - written
 		atomic.AddUint64(&p.droppedWrite, uint64(dropped))
+		p.logger.Warnf("Write buffer overflow: dropped %d bytes (tried to write %d, only queued %d)",
+			dropped, len(data), written)
 	}
 
-	// Note: writeBytes is counted in writeLoop() when actually written to PTY
-	// We return len(data) to indicate all data was accepted (even if some was dropped)
-	return len(data), nil
+	// Return actual bytes written (follows io.Writer contract)
+	// Note: writeBytes is counted in writeLoop() when actually transmitted to PTY
+	return written, nil
 }
 
 // Read implements io.Reader by reading up to len(b) bytes from the buffered input.
@@ -438,14 +518,14 @@ func (p *ringPTY) Write(data []byte) (int, error) {
 // Return values:
 //   - (n, nil) where n > 0: Successfully read n bytes
 //   - (0, syscall.EAGAIN): No data currently available (standard non-blocking I/O semantics)
-//   - (0, io.ErrClosedPipe): PTY has been closed
+//   - (0, os.ErrClosed): PTY has been closed
 //   - (0, nil): Only when len(b) == 0 (standard io.Reader contract)
 //
 // This implements io.Reader with non-blocking semantics. Callers should check for
 // syscall.EAGAIN using errors.Is() and retry with poll/select/timer.
 func (p *ringPTY) Read(b []byte) (n int, err error) {
 	if atomic.LoadUint32(&p.closed) == 1 {
-		return 0, io.ErrClosedPipe
+		return 0, os.ErrClosed
 	}
 	if len(b) == 0 {
 		return 0, nil
@@ -477,33 +557,67 @@ func (p *ringPTY) Close() error {
 	p.cancel()
 
 	// 2. Close FDs to unblock any I/O operations immediately with EBADF
-	//    This ensures goroutines don't wait for poll timeouts (up to 50ms)
-	//    CRITICAL: Must close FD even if Close() fails to prevent goroutine leak
+	//    Note: os.File.Close() always closes the FD even if it returns an error.
+	//    We don't use syscall.Close() as a fallback to avoid double-close bugs
+	//    where the OS reuses the FD number for a different file.
+	//
+	//    CRITICAL: Do NOT set p.pty = nil here. Goroutines have captured local
+	//    references (master := p.pty) but setting to nil before they exit is
+	//    poor defensive practice. Wait for goroutines first, THEN nil the fields.
 	if p.pty != nil {
-		// Capture FD BEFORE Close() - after Close() fails, Fd() may return invalid/undefined values
-		fd := int(p.pty.Fd())
 		if err := p.pty.Close(); err != nil {
-			p.logger.Warnf("failed to close PTY(ptyx): %v, forcing FD close", err)
-			// Force FD closure using pre-captured FD to ensure goroutines get EBADF
-			_ = syscall.Close(fd)
+			p.logger.Warnf("failed to close PTY(ptyx): %v", err)
 		}
-		p.pty = nil
 	}
 
 	if p.tty != nil {
-		// Capture FD BEFORE Close() - after Close() fails, Fd() may return invalid/undefined values
-		fd := int(p.tty.Fd())
 		if err := p.tty.Close(); err != nil {
-			p.logger.Warnf("failed to close PTY(tty): %v, forcing FD close", err)
-			// Force FD closure using pre-captured FD to ensure goroutines get EBADF
-			_ = syscall.Close(fd)
+			p.logger.Warnf("failed to close PTY(tty): %v", err)
 		}
-		p.tty = nil
 	}
 
-	// 3. Wait for goroutines to exit cleanly
-	//    They will exit via context cancellation or EBADF from closed FDs
-	p.wg.Wait()
+	// 3. Wait for goroutines to exit cleanly with timeout
+	//    Goroutines will exit via context cancellation (checked every poll timeout)
+	//    or EBADF from closed FDs. Use a generous timeout to handle slow systems.
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	// Wait with timeout: 3 goroutines * max(pollTimeout, 200ms) + 1s safety margin
+	timeout := time.Duration(p.pollTimeoutMs)*time.Millisecond*3 + time.Second
+	if timeout < 5*time.Second {
+		timeout = 5 * time.Second // Minimum 5s timeout
+	}
+
+	select {
+	case <-done:
+		// All goroutines exited cleanly
+	case <-time.After(timeout):
+		// Goroutine leak scenario: 1-3 goroutines didn't exit within timeout
+		//
+		// Root cause: Goroutines may be blocked in poll() or processing callbacks
+		// They WILL eventually exit (max pollTimeoutMs after context cancel + FD close)
+		// but remain invisible "zombies" until then.
+		//
+		// Impact: In high-churn scenarios (rapid PTY create/close cycles), these
+		// zombie goroutines accumulate and waste resources until they self-terminate.
+		//
+		// Mitigation: Log detailed warning with expected self-termination time.
+		// The goroutines are now orphaned and will clean up themselves.
+		maxAdditionalWait := time.Duration(p.pollTimeoutMs) * time.Millisecond
+		p.logger.Errorf("Close() timed out after %v waiting for goroutines to exit. "+
+			"Goroutines will self-terminate within %v (pollTimeout). "+
+			"PTY=%s. In high-churn scenarios, this indicates zombie goroutine accumulation.",
+			timeout, maxAdditionalWait, p.ttyName)
+		// Continue anyway to avoid blocking forever - goroutines are orphaned but will exit
+	}
+
+	// 4. Goroutines have exited (or timed out and are orphaned)
+	//    Safe to nil out file references now
+	p.pty = nil
+	p.tty = nil
 
 	// Note: Ring buffers don't need explicit Close() like channels do
 	// The smallnest/ringbuffer library handles cleanup automatically
@@ -542,25 +656,187 @@ func createPTY() (master *os.File, slave *os.File, err error) {
 	// Set PTY slave to raw mode for proper terminal behavior
 	if _, err := term.MakeRaw(int(slave.Fd())); err != nil {
 		ptyPath := slave.Name()
+
+		// Cleanup FDs - collect any errors to include in the returned error
+		var cleanupErrs []error
 		if closeErr := master.Close(); closeErr != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "warning: failed to close PTY(ptyx) during cleanup: %v\n", closeErr)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("close PTY(ptyx): %w", closeErr))
 		}
 		if closeErr := slave.Close(); closeErr != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "warning: failed to close PTY(tty) during cleanup: %v\n", closeErr)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("close PTY(tty): %w", closeErr))
+		}
+
+		// Build error message including cleanup failures
+		if len(cleanupErrs) > 0 {
+			return nil, nil, fmt.Errorf("failed to set PTY(tty) %s to raw mode: %w (cleanup errors: %v)", ptyPath, err, cleanupErrs)
 		}
 		return nil, nil, fmt.Errorf("failed to set PTY(tty) %s to raw mode: %w", ptyPath, err)
 	}
 
 	if err := syscall.SetNonblock(int(master.Fd()), true); err != nil {
 		ptyPath := slave.Name()
+
+		// Cleanup FDs - collect any errors to include in the returned error
+		var cleanupErrs []error
 		if closeErr := master.Close(); closeErr != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "warning: failed to close PTY(ptyx) during cleanup: %v\n", closeErr)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("close PTY(ptyx): %w", closeErr))
 		}
 		if closeErr := slave.Close(); closeErr != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "warning: failed to close PTY(tty) during cleanup: %v\n", closeErr)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("close PTY(tty): %w", closeErr))
+		}
+
+		// Build error message including cleanup failures
+		if len(cleanupErrs) > 0 {
+			return nil, nil, fmt.Errorf("failed to set PTY(ptyx) %s to nonblocking mode: %w (cleanup errors: %v)", ptyPath, err, cleanupErrs)
 		}
 		return nil, nil, fmt.Errorf("failed to set PTY(ptyx) %s to nonblocking mode: %w", ptyPath, err)
 	}
 
 	return master, slave, nil
+}
+
+// SetReadCallback sets or clears the callback for data arrival notifications.
+// Pass nil to unregister the callback and stop notifications.
+// The callback is invoked from a background goroutine and must be thread-safe.
+// When setting a new callback, any buffered data will trigger an immediate notification.
+func (p *ringPTY) SetReadCallback(cb ReadCallback) {
+	// Guard against calls after Close() - dispatcher goroutine is dead so no-op
+	if atomic.LoadUint32(&p.closed) == 1 {
+		return
+	}
+
+	// Store new callback atomically (atomic.Value provides linearizable semantics)
+	p.readCb.Store(cb)
+
+	// Wake up dispatcher to process with new callback
+	//
+	// Memory ordering guarantees (Go Memory Model):
+	//   If send succeeds: Store(cb) -[program-order]-> send -[channel-sync]-> receive -[program-order]-> Load()
+	//   Therefore dispatcher is GUARANTEED to see the updated callback via happens-before transitivity.
+	//
+	//   If send hits default (notification already pending from previous data arrival):
+	//   No happens-before relationship exists between this Store() and the pending receive.
+	//   However, dispatcher reloads callback on EACH iteration (see cbIface := p.readCb.Load()),
+	//   so it will see the new callback on the next batch (at most one batch processed with old callback).
+	//   This is acceptable because the callback is reloaded frequently, ensuring eventual consistency.
+	//
+	// Correctness: atomic.Value prevents torn reads/writes, and the dispatcher's per-iteration
+	// reload ensures the new callback is visible within one batch processing cycle (~16 chunks max).
+	select {
+	case p.readNotify <- struct{}{}:
+		// Send succeeded - dispatcher will see updated callback (happens-before guaranteed)
+	default:
+		// Notification already pending - dispatcher will reload callback on next iteration
+	}
+}
+
+func (p *ringPTY) ttyStdioAsyncDispatcher() {
+	// Defensive panic recovery ensures wg.Done() always executes
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger.Errorf("dispatcher panicked (recovered): %v", r)
+		}
+		p.wg.Done()
+	}()
+
+	tmp := make([]byte, 4096)
+	const maxChunksPerIteration = 16
+
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-p.readNotify:
+			// Process all available data with callback protection
+			for {
+				// Check for cancellation before processing next batch
+				select {
+				case <-p.ctx.Done():
+					return
+				default:
+				}
+
+				cbIface := p.readCb.Load()
+				if cbIface == nil {
+					// No callback registered - drain notification and return to outer loop
+					break
+				}
+				// Type assertion with safety check
+				// INVARIANT: readCb must only contain ReadCallback or nil
+				cb, ok := cbIface.(ReadCallback)
+				if !ok {
+					// Invariant violation - should never happen in production
+					p.logger.Errorf("dispatcher: invalid type in readCb: %T (expected ReadCallback)", cbIface)
+					p.readCb.Store(nil) // Clear invalid value
+					break
+				}
+
+				chunksProcessed := 0
+				for chunksProcessed < maxChunksPerIteration {
+					// Check for cancellation during chunk processing
+					select {
+					case <-p.ctx.Done():
+						return
+					default:
+					}
+
+					n, err := p.readBuf.TryRead(tmp)
+					if n == 0 || errors.Is(err, ringbuffer.ErrIsEmpty) {
+						break
+					}
+
+					// Get slice from pool (reduces GC pressure in high-throughput scenarios)
+					var chunk []byte
+					if pooled := p.chunkPool.Get(); pooled != nil {
+						chunk = pooled.([]byte)
+					}
+					// Ensure capacity (pool may return smaller slices or nil)
+					if cap(chunk) < n {
+						chunk = make([]byte, n)
+					} else {
+						chunk = chunk[:n]
+					}
+					copy(chunk, tmp[:n])
+
+					// Protect against callback panics to prevent goroutine death
+					// If callback panics, unregister it and notify error handler
+					panicked := false
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								panicked = true
+								p.logger.Errorf("ReadCallback panicked: %v", r)
+								// Unregister broken callback to prevent repeated panics
+								p.readCb.Store(nil)
+								// Notify error handler about callback failure
+								if p.onError != nil {
+									p.readErrorOnce.Do(func() {
+										p.onError(fmt.Errorf("read callback panic: %v", r))
+									})
+								}
+							}
+							// Return slice to pool (always, even if callback panicked)
+							// Pool accepts any size; it's ok if callback retained and we return different slice
+							p.chunkPool.Put(chunk)
+						}()
+						cb(chunk)
+					}()
+
+					// Stop processing if callback panicked
+					if panicked {
+						break
+					}
+
+					chunksProcessed++
+				}
+
+				if p.readBuf.Length() == 0 || chunksProcessed == 0 {
+					break
+				}
+
+				// Yield to scheduler before next batch
+				runtime.Gosched()
+			}
+		}
+	}
 }

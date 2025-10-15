@@ -24,11 +24,12 @@ const (
 
 // Bridge represents a running BLE-PTY bridge with access to the device and PTY
 type Bridge interface {
-	GetLuaAPI() *lua.BLEAPI2
-	GetTTYName() string    // TTY device name for display
-	GetTTYSymlink() string // Symlink path (empty if not created)
-	GetPTY() io.ReadWriter // PTY I/O as a standard Go interface (for Lua exposure)
-	GetPTYIO() ptyio.PTY   // PTY I/O interface (never nil)
+	GetLuaAPI() *lua.LuaAPI
+	GetTTYName() string                 // TTY device name for display
+	GetTTYSymlink() string              // Symlink path (empty if not created)
+	GetPTY() io.ReadWriter              // PTY I/O as a standard Go interface (for Lua exposure)
+	GetPTYIO() ptyio.PTY                // PTY I/O interface (never nil)
+	SetPTYReadCallback(cb func([]byte)) // Set callback for PTY data arrival (nil to unregister)
 }
 
 // BridgeOptions contains all the configuration for running a bridge
@@ -51,12 +52,12 @@ type BridgeCallback[R any] func(Bridge) (R, error)
 
 // bridgeImpl implements the Bridge interface
 type bridgeImpl struct {
-	luaApi         *lua.BLEAPI2
+	luaApi         *lua.LuaAPI
 	ttySymlinkPath string    // TTY Symlink (empty if not created)
 	pty            ptyio.PTY // PTY I/O interface for async monitoring
 }
 
-func (b *bridgeImpl) GetLuaAPI() *lua.BLEAPI2 {
+func (b *bridgeImpl) GetLuaAPI() *lua.LuaAPI {
 	return b.luaApi
 }
 
@@ -77,6 +78,12 @@ func (b *bridgeImpl) GetPTY() io.ReadWriter {
 
 func (b *bridgeImpl) GetPTYIO() ptyio.PTY {
 	return b.pty
+}
+
+func (b *bridgeImpl) SetPTYReadCallback(cb func([]byte)) {
+	if b.pty != nil {
+		b.pty.SetReadCallback(cb)
+	}
 }
 
 // RunDeviceBridge connects to a BLE device, creates a PTY bridge, and executes the callback with the bridge.
@@ -116,7 +123,7 @@ func RunDeviceBridge[R any](
 
 	// Setup cleanup on error
 	var (
-		luaApi         *lua.BLEAPI2
+		luaApi         *lua.LuaAPI
 		ttySymlinkPath string
 		pty            ptyio.PTY
 	)

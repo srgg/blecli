@@ -71,8 +71,8 @@ func (suite *BridgeSuite) RunBridgeTestCasesFromYAML(yamlContent string) {
 // Provides real PTY slave operations via ptySlaveWrite and ptySlaveRead functions.
 func (suite *BridgeSuite) ExecuteScriptWithCallbacks(
 	script string,
-	before func(luaApi *lua.BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
-	after func(luaApi *lua.BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
+	before func(luaApi *lua.LuaAPI, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
+	after func(luaApi *lua.LuaAPI, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
 ) error {
 	bridgeCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()

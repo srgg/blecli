@@ -174,14 +174,14 @@ type LuaSubscriptionCallbackData struct {
 type ScriptExecutor interface {
 	ExecuteScriptWithCallbacks(
 		script string,
-		before func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
-		after func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
+		before func(luaApi *LuaAPI, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
+		after func(luaApi *LuaAPI, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
 	) error
 }
 
 // LuaApiSuite provides test infrastructure for BLE API testing with Lua integration.
 //
-// It embeds MockBLEPeripheralSuite for peripheral simulation and manages a BLEAPI2 instance
+// It embeds MockBLEPeripheralSuite for peripheral simulation and manages a LuaAPI instance
 // with an output collection for testing Lua script execution.
 //
 // # Overview
@@ -337,7 +337,7 @@ type ScriptExecutor interface {
 type LuaApiSuite struct {
 	testutils.MockBLEPeripheralSuite
 
-	LuaApi           *BLEAPI2
+	LuaApi           *LuaAPI
 	luaOutputCapture *LuaOutputCollector
 	Executor         ScriptExecutor
 	templateData     map[string]interface{} // Template data for dynamic test assertions
@@ -406,7 +406,7 @@ func (suite *LuaApiSuite) SetupTest() {
 	}
 }
 
-func (suite *LuaApiSuite) createLuaApi() *BLEAPI2 {
+func (suite *LuaApiSuite) createLuaApi() *LuaAPI {
 	// Create a BLE Device with mocked ble.Device
 	dev := devicefactory.NewDevice("00:00:00:00:00:01", suite.Logger)
 
@@ -908,7 +908,7 @@ func (suite *LuaApiSuite) executeTestSteps(
 	testCase TestCase,
 	conn device.Connection,
 	collector *LuaOutputCollector,
-	luaApi *BLEAPI2,
+	luaApi *LuaAPI,
 	ptySlaveWrite func([]byte) error,
 	ptySlaveRead func() ([]byte, error),
 ) {
@@ -1026,8 +1026,8 @@ func (suite *LuaApiSuite) validateFinalOutput(testCase TestCase, collector *LuaO
 // Both callbacks receive both PTY functions (write and read) for maximum flexibility.
 func (suite *LuaApiSuite) ExecuteScriptWithCallbacks(
 	script string,
-	before func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
-	after func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
+	before func(luaApi *LuaAPI, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
+	after func(luaApi *LuaAPI, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)),
 ) error {
 	// Stub functions for non-bridge tests - return clear errors if called
 	stubPTYSlaveWrite := func(data []byte) error {
@@ -1079,7 +1079,7 @@ func (suite *LuaApiSuite) RunTestCase(testCase TestCase) {
 	scriptErr := suite.Executor.ExecuteScriptWithCallbacks(
 		script,
 		// Before: setup output collector (both PTY functions available)
-		func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)) {
+		func(luaApi *LuaAPI, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)) {
 			var err error
 			collector, err = NewLuaOutputCollector(luaApi.OutputChannel(), 1024, func(err error) {
 				suite.T().Errorf("Output collector error: %v", err)
@@ -1092,7 +1092,7 @@ func (suite *LuaApiSuite) RunTestCase(testCase TestCase) {
 		},
 
 		// After: execute steps and validate (both PTY functions available)
-		func(luaApi *BLEAPI2, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)) {
+		func(luaApi *LuaAPI, ptySlaveWrite func([]byte) error, ptySlaveRead func() ([]byte, error)) {
 			defer func() {
 				if err := collector.Stop(); err != nil {
 					suite.T().Logf("Warning: failed to stop test collector: %v", err)

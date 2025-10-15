@@ -123,7 +123,7 @@ func (c *BLEConnection) Subscribe(opts []*device.SubscribeOptions, mode device.S
 
 	c.connMutex.Lock()
 
-	// Check if connected (we already hold the lock, so use safe version)
+	// Check if connected (we already hold the lock, so use a safe version)
 	if !c.isConnectedInternal() {
 		c.connMutex.Unlock()
 		return fmt.Errorf("device disconnected - reconnect before subscribing to Lua notifications")
@@ -156,14 +156,14 @@ func (c *BLEConnection) Subscribe(opts []*device.SubscribeOptions, mode device.S
 	// CRITICAL: Enable BLE notifications by calling BLESubscribe for each service
 	// This must be done outside the lock to avoid deadlock (BLESubscribe acquires its own locks)
 	for _, opt := range opts {
-		// BLESubscribe will validate again and call client.Subscribe() to enable CCCD (Client Characteristic Configuration Descriptor)
+		// BLESubscribe will validate again and call the client.Subscribe() to enable CCCD (Client Characteristic Configuration Descriptor)
 		err := c.BLESubscribe(opt)
 		if err != nil {
 			return fmt.Errorf("failed to enable BLE notifications: %w", err)
 		}
 	}
 
-	// Re-acquire lock for creating subscription
+	// Re-acquire lock for creating a subscription
 	c.connMutex.Lock()
 	defer c.connMutex.Unlock()
 
@@ -205,7 +205,7 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 		}
 	}()
 
-	// Create ticker for all modes with appropriate interval
+	// Create a ticker for all modes with the appropriate interval
 	var ticker *time.Ticker
 	if sub.Mode == device.StreamBatched || sub.Mode == device.StreamAggregated {
 		if sub.MaxRate <= 0 {
