@@ -1,7 +1,9 @@
--- Bridge for MotionCal calibration
--- (https://learn.adafruit.com/adafruit-sensorlab-magnetometer-calibration/magnetic-calibration-with-motioncal/)
---
--- High-frequency sensor data processing at 50Hz
+--- MotionCal Bridge
+-- Bidirectional bridge: BLE IMU sensor ↔ MotionCal desktop app via PTY.
+-- Receives 50Hz IMU data (accel/gyro/mag), forwards to MotionCal,
+-- parses calibration data responses.
+-- @module motioncal-bridge
+-- @see https://learn.adafruit.com/adafruit-sensorlab-magnetometer-calibration/magnetic-calibration-with-motioncal/
 
 local ffi = require("ffi")
 local bit = require("bit")
@@ -22,6 +24,10 @@ local cal = ffi.new("ImuCal")
 local HEADER1, HEADER2 = 117, 84
 local PACKET_SIZE = 68
 
+--- Update CRC16 with one byte (MODBUS polynomial 0xA001).
+-- @param crc Current CRC value
+-- @param b Byte to process (0-255)
+-- @return Updated 16-bit CRC value
 local function crc16_update(crc, b)
     crc = bit.bxor(crc, b)
     for _ = 1, 8 do
@@ -34,6 +40,10 @@ local function crc16_update(crc, b)
     return bit.band(crc, 0xFFFF)
 end
 
+--- Verify CRC16 checksum for packet.
+-- @param buf Buffer containing packet data
+-- @param offset Starting offset of packet in buffer
+-- @return true if CRC valid (computed CRC == 0)
 local function verify_crc(buf, offset)
     local crc = 0xFFFF
     for i = 0, PACKET_SIZE - 1 do
@@ -42,12 +52,19 @@ local function verify_crc(buf, offset)
     return crc == 0
 end
 
+--- Extract 16 floats from buffer via FFI memory copy.
+-- @param buf Buffer containing float data
+-- @param offset Starting offset in buffer
+-- @return float[16] cdata array (64 bytes, little-endian IEEE 754)
 local function extract_floats(buf, offset)
     local floats = ffi.new("float[16]")
     ffi.copy(floats, buf.data + buf.offset + offset, 64)
     return floats
 end
 
+--- Print IMU calibration parameters.
+-- Displays: accel zero-g (m/s²), gyro zero-rate (rad/s),
+-- mag hard-iron (µT), mag field (µT), mag soft-iron matrix (3×3).
 local function printCalibration()
     print("IMU calibration:")
     print(string.format("  Accel zero-g:    %.4f %.4f %.4f",
@@ -64,6 +81,10 @@ local function printCalibration()
     end
 end
 
+--- Process calibration data from MotionCal via PTY.
+-- Streaming protocol: header sync, CRC validation, auto-resync.
+-- Packet: [117, 84, 64B data, 2B CRC16] = 68 bytes.
+-- @param ptr Raw binary data chunk from PTY
 function receiveCalibrationChunk(ptr)
     if not ptr or #ptr == 0 then return end
 
@@ -139,14 +160,21 @@ function receiveCalibrationChunk(ptr)
 
         cal.mag_field = f[9]
 
+        -- Soft-iron matrix: corrects magnetic distortion from nearby ferromagnetic materials.
+        -- The correction is a symmetric 3x3 matrix because magnetic permeability is symmetric
+        -- (physics: the material's response to magnetic fields is the same in both directions).
+        -- Arduino protocol exploits this symmetry to send only 6 values instead of 9:
+        --   [0 1 2]     [f10 f13 f14]
+        --   [1 4 5]  =  [f13 f11 f15]  (symmetric: [1]=[3], [2]=[6], [5]=[7])
+        --   [2 5 8]     [f14 f15 f12]
         cal.mag_softiron[0] = f[10]
         cal.mag_softiron[1] = f[13]
         cal.mag_softiron[2] = f[14]
-        cal.mag_softiron[3] = f[13]
+        cal.mag_softiron[3] = f[13] -- Mirror of [1]
         cal.mag_softiron[4] = f[11]
         cal.mag_softiron[5] = f[15]
-        cal.mag_softiron[6] = f[14]
-        cal.mag_softiron[7] = f[15]
+        cal.mag_softiron[6] = f[14] -- Mirror of [2]
+        cal.mag_softiron[7] = f[15] -- Mirror of [5]
         cal.mag_softiron[8] = f[12]
 
         printCalibration()
@@ -155,61 +183,6 @@ function receiveCalibrationChunk(ptr)
         ::continue::
     end
 end
-
-
-
---function receiveCalibrationChunk(ptr)
---    -- Validate we have data
---    if not ptr or #ptr == 0 then
---      return
---    end
---
---
---    for i = 0, #ptr - 1 do
---        local b = ffi.cast("const uint8_t*", ptr)[i]
---
---        -- header sync
---        if calcount == 0 and b ~= HEADER1 then goto continue end
---        if calcount == 1 and b ~= HEADER2 then calcount = 0; goto continue end
---
---        caldata[calcount] = b
---        calcount = calcount + 1
---
---        if calcount < 68 then
---            goto continue
---        end
---
---        -- got full frame
---        local crc = 0xFFFF
---        for j = 0, 67 do crc = crc16_update(crc, caldata[j]) end
---        if crc == 0 then
---            -- good data
---            ffi.copy(cal, caldata + 2, ffi.sizeof(cal))
---            printCalibration()
---            calcount = 0
---        else
---            -- resync search inside buffer
---            local newcount = 0
---            for j = 2, 66 do
---                if caldata[j] == HEADER1 and caldata[j+1] == HEADER2 then
---                    newcount = 68 - j
---                    ffi.copy(caldata, caldata + j, newcount)
---                    break
---                end
---            end
---
---            if newcount > 0 then
---                calcount = newcount
---            elseif caldata[67] == HEADER1 then
---                caldata[0] = HEADER1
---                calcount = 1
---            else
---                calcount = 0
---            end
---        end
---        ::continue::
---    end
---end
 
 blim.bridge.pty_on_data(receiveCalibrationChunk)
 
@@ -236,11 +209,12 @@ local result = {
     mag   = { x = 0, y = 0, z = 0 }
 }
 
---- Parse IMU data with zero allocation
--- IMPORTANT: Returns the SAME table every time (for performance
--- ~0.1-0.5 µs per call at 50 Hz = 0.025-0.25% CPU)
--- @param data string Binary data (36 bytes)
--- @return table IMU data (reused table - copy if you need to store it)
+--- Parse IMU binary data (zero-allocation).
+-- Format: 9×float (36 bytes, little-endian IEEE 754).
+-- WARNING: Returns SAME table every call (reused for performance).
+-- Copy values if storage needed.
+-- @param data Binary data (exactly 36 bytes)
+-- @return table with accel/gyro/mag fields (reused, ~0.1-0.5µs)
 function parse_imu_data(data)
     --  little-endian byte order
     --  4-byte IEEE 754 float (repeated 9 times)
@@ -290,22 +264,19 @@ blim.subscribe {
         --          imu.gyro.x, imu.gyro.y, imu.gyro.z,
         --          imu.mag.x, imu.mag.y, imu. mag.z))
 
-        -- Send to MotionCal via pty
-        -- Format: "Raw:accelX,accelY,accelZ,gyroX,gyroY,gyroZ,magX,magY,magZ"
-
-        -- There is no place with a formal declaration in the MotionCal format, but in some forums:
-        --> Accel in 'raw' format 2^13 (8192) integers
-        --   Gyroscope in Degrees/s rounded to integers
-        --   Mag in microteslas * 10
-        --
-        --> so I assume, it assumes data as I mentioned,
-        --   accel +/- 2^13 int, gyro degrees/s * 16,
-        --   mag *10...though, a confirmation would be great.`
-        --(https://github.com/PaulStoffregen/MotionCal/issues/12)
-
+        -- MotionCal expects:
+        --   Accel: ±2g range as 16-bit signed integers (±8192 = ±2g)
+        --   Gyro: degrees/s * 16 (fixed-point with 4 fractional bits)
+        --   Mag: microtesla * 10 (single decimal precision)
+        --  See https://github.com/PaulStoffregen/MotionCal/issues/12
         blim.bridge.pty_write(string.format("Raw:%d,%d,%d,%d,%d,%d,%d,%d,%d\r\n",
+          -- Convert m/s² to ±2g raw format (8192 LSB/g, 9.8 m/s² = 1g)
           imu.accel.x * 8192/9.8, imu.accel.y * 8192/9.8, imu.accel.z * 8192/9.8,
+
+          -- Convert rad/s to deg/s (* 180/π ≈ 57.29577793) then to raw (* 16 LSB/deg/s)
           imu.gyro.x * 57.29577793 * 16, imu.gyro.y * 57.29577793 * 16, imu.gyro.z * 57.29577793 * 16,
+
+          -- Convert µT to MotionCal format (µT * 10)
           imu.mag.x * 10, imu.mag.y * 10, imu.mag.z * 10)
         )
     end
