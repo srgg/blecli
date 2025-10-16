@@ -111,7 +111,19 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	defer progress.Stop()
 
 	// Bridge callback - executes the Lua script with output streaming
-	bridgeCallback := func(b bridge.Bridge) (error, error) {
+	bridgeCallback := func(b bridge.Bridge) (any, error) {
+
+		// HACK: Create an output drainer to capture output from the Lua API,
+		// 		even though the script execution completed, the bridge is keeping the Lua State open, using it by
+		// 		calling the Lua callbacks until the bridge is canceled.
+		drainer := lua.NewOutputDrainer(ctx, b.GetLuaAPI().OutputChannel(), logger, os.Stdout, os.Stderr)
+
+		defer func() {
+			// Stop the drainer after a script completes
+			drainer.Cancel()
+			drainer.Wait()
+		}()
+
 		// Execute the Lua script
 		err = lua.ExecuteDeviceScriptWithOutput(
 			ctx,
@@ -120,8 +132,8 @@ func runBridge(cmd *cobra.Command, args []string) error {
 			logger,
 			scriptContent,
 			scriptArgs,
-			os.Stdout,
-			os.Stderr,
+			nil,
+			nil,
 			50*time.Millisecond,
 		)
 		if err != nil {

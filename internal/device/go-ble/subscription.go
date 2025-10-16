@@ -8,6 +8,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/groutine"
 )
 
 // ----------------------------
@@ -63,7 +64,11 @@ func (m *SubscriptionManager) Add(sub *Subscription, runner func(*Subscription))
 	m.mu.Unlock()
 
 	m.wg.Add(1)
-	go runner(sub)
+
+	name := fmt.Sprintf("subscription-%d", len(m.subscriptions))
+	groutine.Go(nil, name, func(ctx context.Context) {
+		runner(sub)
+	})
 }
 
 // CancelAll cancels all active subscriptions and clears the list
@@ -135,7 +140,7 @@ func (c *BLEConnection) Subscribe(opts []*device.SubscribeOptions, mode device.S
 		characteristicsToSubscribe, err := c.validateSubscribeOptions(opt, true)
 		if err != nil {
 			c.connMutex.Unlock()
-			return fmt.Errorf("lua subscription %w", err)
+			return fmt.Errorf("lua subscription validation failed: %w", err)
 		}
 
 		// Convert validated BLECharacteristics for Subscription
@@ -273,6 +278,12 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 					case <-sub.ctx.Done():
 						return
 					case val := <-char.updates:
+						if c.logger != nil {
+							c.logger.WithFields(map[string]interface{}{
+								"char": char.UUID(),
+								"len":  len(val.Data),
+							}).Debug("BLE notification received, calling Lua callback")
+						}
 						record := newRecord(device.StreamEveryUpdate)
 						record.Values[char.UUID()] = val.Data
 						record.TsUs = val.TsUs
@@ -280,6 +291,9 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 							record.Flags |= val.Flags
 						}
 						sub.Callback(record)
+						if c.logger != nil {
+							c.logger.Debug("Lua callback returned")
+						}
 						releaseBLEValue(val)
 					default:
 						// No data available, continue to next char

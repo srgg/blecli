@@ -41,7 +41,7 @@ test_cases:
       services:
         - service: "non-existent-service"
           characteristics: ["non-existent-char"]
-    expect_error_message: "missing services: non-existent-service"
+    expect_error_message: "missing services: nonexistentservice"
 
   - name: "Error Handling: Non-existent Characteristic"
     subscription:
@@ -50,7 +50,7 @@ test_cases:
       services:
         - service: "180d"
           characteristics: ["non-existent-char", "2a37"]
-    expect_error_message: "missing characteristics: non-existent-char"
+    expect_error_message: "missing characteristics: nonexistentchar"
 
 # GOAL: Verify that EveryUpdate mode delivers each BLE notification immediately
 #       as a separate callback with a single value per characteristic

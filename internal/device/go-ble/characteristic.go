@@ -1,6 +1,7 @@
 package goble
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -9,6 +10,7 @@ import (
 	"github.com/go-ble/ble"
 	"github.com/srg/blim/internal/bledb"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/groutine"
 )
 
 // ----------------------------
@@ -250,10 +252,10 @@ func (c *BLECharacteristic) ReadWithTimeout(timeout time.Duration) ([]byte, erro
 	}
 	resultCh := make(chan readResult, 1)
 
-	go func() {
+	groutine.Go(context.Background(), fmt.Sprintf("ble-characteristic-read-%s", c.uuid), func(ctx context.Context) {
 		data, err := client.ReadCharacteristic(c.BLEChar)
 		resultCh <- readResult{data: data, err: err}
-	}()
+	})
 
 	select {
 	case result := <-resultCh:

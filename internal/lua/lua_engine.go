@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -14,10 +14,19 @@ import (
 
 	"github.com/aarzilli/golua/lua"
 	"github.com/sirupsen/logrus"
+	"github.com/srg/blim/internal/groutine"
 )
 
 //go:embed lua-libs/json.lua
 var jsonLua string // json.lua is embedded into this string
+
+const (
+	// DefaultOutputChannelCapacity is the default capacity for the Lua output ring buffer.
+	// This buffer stores print() and io.write() output from Lua scripts.
+	// When capacity is reached, the ring buffer overwrites the oldest records (output loss).
+	// Increase this value for scripts with high-frequency output to prevent record loss.
+	DefaultOutputChannelCapacity int = 100
+)
 
 // LuaOutputRecord represents a single output record from Lua script execution
 type LuaOutputRecord struct {
@@ -80,16 +89,24 @@ type LuaEngine struct {
 	outputChan *RingChannel[LuaOutputRecord] // ring buffer for Lua outputs
 }
 
-// NewLuaEngine creates a new Lua engine with full stdout/stderr capture
+// NewLuaEngine creates a new Lua engine with full stdout/stderr capture using the default channel capacity
 func NewLuaEngine(logger *logrus.Logger) *LuaEngine {
+	return NewLuaEngineWithOutputChannelCapacity(logger, DefaultOutputChannelCapacity)
+}
+
+// NewLuaEngineWithOutputChannelCapacity creates a new Lua engine with a custom output channel capacity.
+// The capacity parameter controls the ring buffer capacity for Lua output (print/io.write).
+// When capacity is reached, the ring buffer overwrites the oldest records (output loss).
+// Use a larger capacity for scripts with high-frequency output to prevent record loss.
+func NewLuaEngineWithOutputChannelCapacity(logger *logrus.Logger, capacity int) *LuaEngine {
 	engine := &LuaEngine{
 		logger:     logger,
-		outputChan: NewRingChannel[LuaOutputRecord](100),
+		outputChan: NewRingChannel[LuaOutputRecord](capacity),
 	}
 
 	engine.Reset()
 
-	logger.Info("LuaEngine2 initialized with full Lua output capture")
+	logger.WithField("output_capacity", capacity).Info("LuaEngine initialized with full Lua output capture")
 	return engine
 }
 
@@ -420,7 +437,8 @@ func (e *LuaEngine) safeExecuteScript(ctx context.Context, script string) error 
 
 	done := make(chan error, 1)
 
-	go func() {
+	name := fmt.Sprintf("lua-script-executor-%d", len(script))
+	groutine.Go(ctx, name, func(ctx context.Context) {
 		defer func() {
 			if r := recover(); r != nil {
 				e.outputChan.ForceSend(LuaOutputRecord{
@@ -467,7 +485,7 @@ func (e *LuaEngine) safeExecuteScript(ctx context.Context, script string) error 
 			return nil
 		})
 		done <- execErr
-	}()
+	})
 
 	select {
 	case err := <-done:
@@ -479,7 +497,7 @@ func (e *LuaEngine) safeExecuteScript(ctx context.Context, script string) error 
 
 // LoadScriptFile loads a Lua script from a file
 func (e *LuaEngine) LoadScriptFile(filename string) error {
-	content, err := ioutil.ReadFile(filename)
+	content, err := os.ReadFile(filename)
 	if err != nil {
 		return fmt.Errorf("failed to read script %s: %w", filename, err)
 	}

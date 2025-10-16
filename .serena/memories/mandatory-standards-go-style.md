@@ -10,6 +10,14 @@
 - **Variables:** camelCase (`deviceFactory`, `scanOptions`)
 - **Constants:** PascalCase (exported), camelCase (unexported)
 
+## Select Clause Ordering Rule
+MANDATORY: Order select cases by execution frequency: HOTTEST → COLDEST:
+- HOT      → Main data/work channel (checked every loop iteration)
+- WARM     → Tickers, timeouts (checked periodically)
+- COLD     → Context cancellation (rare)
+- COLDEST  → Shutdown, one-time signals
+
+
 ## Struct Patterns
 
 **MUST use clean struct design with appropriate tags:**

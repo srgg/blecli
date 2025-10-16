@@ -549,7 +549,7 @@ func (c *BLEConnection) BLESubscribe(opts *device.SubscribeOptions) error {
 	characteristicsToSubscribe, err := c.validateSubscribeOptions(opts, true)
 	if err != nil {
 		c.connMutex.RUnlock()
-		return fmt.Errorf("subscription %w", err)
+		return fmt.Errorf("subscription validation failed: %w", err)
 	}
 
 	// If no characteristics support notifications after validation
@@ -610,7 +610,7 @@ func (c *BLEConnection) BLEUnsubscribe(opts *device.SubscribeOptions) error {
 	characteristicsToUnsubscribe, err := c.validateSubscribeOptions(opts, false)
 	if err != nil {
 		c.connMutex.RUnlock()
-		return fmt.Errorf("unsubscribe %w", err)
+		return fmt.Errorf("unsubscribe validation failed: %w", err)
 	}
 
 	// If no characteristics found after validation
@@ -627,7 +627,7 @@ func (c *BLEConnection) BLEUnsubscribe(opts *device.SubscribeOptions) error {
 	client := c.client
 	c.connMutex.RUnlock()
 
-	// All validation passed - proceed with unsubscriptions outside the lockx`x
+	// All validation passed - proceed with unsubscriptions outside the lock
 	var unsubscribeErrors []string
 	for charUUID, char := range characteristicsCopy {
 		if err := c.tryUnsubscribe(client, char, opts.Service, charUUID); err != nil {
@@ -695,7 +695,7 @@ func (c *BLEConnection) unsubscribeInternal(opts *device.SubscribeOptions) error
 	characteristicsToUnsubscribe, err := c.validateSubscribeOptions(opts, false)
 	if err != nil {
 		c.connMutex.RUnlock()
-		return fmt.Errorf("unsubscribe %w", err)
+		return fmt.Errorf("unsubscribe validation failed: %w", err)
 	}
 
 	// If no characteristics found after validation

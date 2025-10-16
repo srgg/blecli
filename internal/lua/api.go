@@ -312,6 +312,9 @@ func (api *LuaAPI) registerBlimAPI() {
 		// Preload the blim.lua scripts (creates global ble and blim)
 		api.LuaEngine.PreloadLuaLibrary(blim.BlimLuaScript, "blim", "blim.lua")
 
+		// Preload
+		api.LuaEngine.PreloadLuaLibrary(blim.FfiBufferLibLuaScript, "ffi_buffer", "ffi.buffer.lua")
+
 		return nil
 	})
 }

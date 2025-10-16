@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hedzr/go-ringbuf/v2/mpmc"
+	"github.com/srg/blim/internal/groutine"
 )
 
 // LuaOutputCollectorMetrics provides lock-free metrics tracking for LuaOutputCollector
@@ -142,7 +144,7 @@ func (c *LuaOutputCollector) Start() error {
 	// - Clearer control flow: timeout → close(c.stop) → goroutine exits cleanly
 	started := make(chan struct{}, 1)
 
-	go func() {
+	groutine.Go(context.Background(), "lua-output-collector", func(ctx context.Context) {
 		// Signal that goroutine is running (non-blocking due to buffer)
 		started <- struct{}{}
 
@@ -152,17 +154,6 @@ func (c *LuaOutputCollector) Start() error {
 		}()
 		for {
 			select {
-			case <-c.stop:
-				// drain remaining messages non-blocking
-				for {
-					select {
-					case <-c.outputChan:
-						// discard remaining messages
-					default:
-						return
-					}
-				}
-				return
 			case rec, ok := <-c.outputChan:
 				if !ok {
 					return // channel closed
@@ -176,9 +167,20 @@ func (c *LuaOutputCollector) Start() error {
 					c.metrics.IncrementRecordsOverwritten(overwrites)
 					c.metrics.IncrementRecordsProcessed()
 				}
+			case <-c.stop:
+				// drain remaining messages non-blocking
+				for {
+					select {
+					case <-c.outputChan:
+						// discard remaining messages
+					default:
+						return
+					}
+				}
+				return
 			}
 		}
-	}()
+	})
 
 	// Wait for goroutine to signal it's running, or timeout
 	select {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/groutine"
 )
 
 // ExecuteDeviceScriptWithOutput executes a Lua script with the given device and arguments,
@@ -60,105 +61,36 @@ func ExecuteDeviceScriptWithOutput(
 	// Combine arg initialization with script content
 	scriptWithArgs := argBuilder.String() + "\n-- User script\n" + script
 
-	var scriptErr error
-
 	// Only drain output if at least one writer is provided
-	// If both stdout and stderr are nil, skip consumption and let caller handle OutputChannel
+	var drainer *OutputDrainer
+
+	// If both stdout and stderr are nil, skip consumption and let the caller handle OutputChannel
 	if stdout != nil || stderr != nil {
-		// Get output channel
-		outputChan := luaAPI.OutputChannel()
+		drainer = NewOutputDrainer(ctx, luaAPI.OutputChannel(), logger, stdout, stderr)
 
-		// Start draining output concurrently with script execution to prevent RingChannel overflow
-		// This ensures output is consumed in real-time, not after the script completes
-		outputDone := make(chan struct{})
-		stopDrain := make(chan struct{})
+		defer func() {
+			// Stop the drainer after a script completes
+			drainer.Cancel()
 
-		go func() {
-			defer close(outputDone)
-			for {
-				select {
-				case record := <-outputChan:
-					// Write output to the appropriate writer
-					if record.Source == "stderr" && stderr != nil {
-						if _, err := fmt.Fprintln(stderr, record.Content); err != nil {
-							logger.WithError(err).Debug("Failed to write to stderr")
-						}
-					} else if record.Source == "stdout" && stdout != nil {
-						if _, err := fmt.Fprint(stdout, record.Content); err != nil {
-							logger.WithError(err).Debug("Failed to write to stdout")
-						}
-					}
-				case <-stopDrain:
-					// Drain any remaining output before stopping
-					for {
-						select {
-						case record := <-outputChan:
-							if record.Source == "stderr" && stderr != nil {
-								if _, err := fmt.Fprintln(stderr, record.Content); err != nil {
-									logger.WithError(err).Debug("Failed to write to stderr during final drain")
-								}
-							} else if record.Source == "stdout" && stdout != nil {
-								if _, err := fmt.Fprint(stdout, record.Content); err != nil {
-									logger.WithError(err).Debug("Failed to write to stdout during final drain")
-								}
-							}
-						default:
-							// No more output, exit
-							return
-						}
-					}
-				case <-ctx.Done():
-					// Context canceled, stop draining
-					return
-				}
+			// Wait for the goroutine to exit with a timeout
+			done := make(chan struct{})
+			groutine.Go(ctx, fmt.Sprintf("drainer-wait-script-%d", len(script)), func(ctx context.Context) {
+				drainer.Wait()
+				close(done)
+			})
+
+			select {
+			case <-done:
+				// finished successfully
+			case <-time.After(drainTimeout / 2):
+				logger.WithField("timeout", drainTimeout/2).Debug("Output drainer did not exit within timeout")
 			}
 		}()
-
-		// Execute the script (synchronous - blocks until script completes)
-		scriptErr = luaAPI.ExecuteScript(ctx, scriptWithArgs)
-
-		// Wait for any remaining buffered output after a script completes
-		// Use timeout to detect when there's no more output
-		timer := time.NewTimer(drainTimeout)
-		defer timer.Stop()
-
-		select {
-		case <-timer.C:
-			// Drain timeout reached
-		case <-ctx.Done():
-			// Context canceled
-		}
-
-		// Signal output goroutine to stop and drain remaining output
-		// Using select to handle a case where the goroutine already exited due to context cancellation
-		select {
-		case stopDrain <- struct{}{}:
-			// Signal sent successfully
-		default:
-			// Goroutine may have already stopped due to context cancellation
-		}
-		close(stopDrain)
-
-		// Wait for the output goroutine to finish with a timeout
-		// Use half of drainTimeout as a reasonable cleanup duration
-		goroutineCleanupTimeout := drainTimeout / 2
-		if goroutineCleanupTimeout < 50*time.Millisecond {
-			goroutineCleanupTimeout = 50 * time.Millisecond
-		}
-
-		select {
-		case <-outputDone:
-			// Goroutine completed successfully
-		case <-time.After(goroutineCleanupTimeout):
-			logger.WithField("timeout", goroutineCleanupTimeout).Debug("Output draining goroutine did not complete within timeout")
-		}
-	} else {
-		// No writers provided - skip consumption, execute script directly
-		scriptErr = luaAPI.ExecuteScript(ctx, scriptWithArgs)
 	}
 
-	if scriptErr != nil {
-		return fmt.Errorf("failed to execute script: %w", scriptErr)
+	// Execute the script (blocking)
+	if err := luaAPI.ExecuteScript(ctx, scriptWithArgs); err != nil {
+		return fmt.Errorf("failed to execute script: %w", err)
 	}
 
 	return nil

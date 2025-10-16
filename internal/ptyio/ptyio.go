@@ -76,6 +76,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/sirupsen/logrus"
 	"github.com/smallnest/ringbuffer"
+	"github.com/srg/blim/internal/groutine"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -279,9 +280,18 @@ func NewPtyWithOptions(opts *PTYOptions) (PTY, error) {
 
 	// start goroutines
 	p.wg.Add(3)
-	go p.ttyReadLoop()
-	go p.ttyWriteLoop()
-	go p.ttyStdioAsyncDispatcher()
+
+	groutine.Go(ctx, "tty-read-loop", func(ctx context.Context) {
+		p.ttyReadLoop()
+	})
+
+	groutine.Go(ctx, "tty-write-loop", func(ctx context.Context) {
+		p.ttyWriteLoop()
+	})
+
+	groutine.Go(ctx, "tty-stdio-async-dispatcher", func(ctx context.Context) {
+		p.ttyStdioAsyncDispatcher()
+	})
 
 	return p, nil
 }
@@ -580,10 +590,11 @@ func (p *ringPTY) Close() error {
 	//    Goroutines will exit via context cancellation (checked every poll timeout)
 	//    or EBADF from closed FDs. Use a generous timeout to handle slow systems.
 	done := make(chan struct{})
-	go func() {
+
+	groutine.Go(context.Background(), "pty-wait-close", func(ctx context.Context) {
 		p.wg.Wait()
 		close(done)
-	}()
+	})
 
 	// Wait with timeout: 3 goroutines * max(pollTimeout, 200ms) + 1s safety margin
 	timeout := time.Duration(p.pollTimeoutMs)*time.Millisecond*3 + time.Second

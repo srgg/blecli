@@ -1,12 +1,15 @@
 package goble
 
 import (
+	"context"
+	"fmt"
 	"time"
 
 	"github.com/go-ble/ble"
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/bledb"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/groutine"
 )
 
 const (
@@ -51,7 +54,7 @@ func newDescriptor(d *ble.Descriptor, client ble.Client, timeout time.Duration, 
 	}
 	resultCh := make(chan readResult, 1)
 
-	go func() {
+	groutine.Go(context.Background(), fmt.Sprintf("ble-descriptor-read-%s", descUUID), func(ctx context.Context) {
 		// First check if descriptor already has a value from discovery
 		if len(d.Value) > 0 {
 			resultCh <- readResult{data: d.Value, err: nil}
@@ -63,7 +66,7 @@ func newDescriptor(d *ble.Descriptor, client ble.Client, timeout time.Duration, 
 		// (doesn't require handles like Linux/Windows implementations).
 		data, err := client.ReadDescriptor(d)
 		resultCh <- readResult{data: data, err: err}
-	}()
+	})
 
 	select {
 	case result := <-resultCh:

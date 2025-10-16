@@ -419,14 +419,14 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 			assert((char1.properties.notify ~= nil) == (char2.properties.notify ~= nil), "notify property presence should be consistent")
 			assert((char1.properties.indicate ~= nil) == (char2.properties.indicate ~= nil), "indicate property presence should be consistent")
 
-			-- Verify property values match when both present (unconditional assertion)
-			-- If only one has the property, presence check above already failed
+			-- Verify property values match when both present - unconditional assertion using logical implication
 			local both_have_read = (char1.properties.read ~= nil) and (char2.properties.read ~= nil)
 			local neither_has_read = (char1.properties.read == nil) and (char2.properties.read == nil)
 			assert(both_have_read or neither_has_read, "read property presence MUST match (verified above)")
-			if both_have_read then
-				assert(char1.properties.read.value == char2.properties.read.value, "read property value MUST be consistent")
-			end
+
+			-- Unconditional assertion: if both have read property, values MUST match
+			assert((not both_have_read) or (char1.properties.read.value == char2.properties.read.value),
+				"read property value MUST be consistent when both have read property")
 
 			assert(#char1.descriptors == #char2.descriptors, "descriptor count should be consistent")
 		`
@@ -530,17 +530,24 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 					local char = blim.characteristic(service_uuid, char_uuid)
 					total_checked = total_checked + 1
 
-					-- Read ALWAYS, but only verify success if readable
+					-- Read ALWAYS and verify based on properties
 					local value, err = char.read()
 
-					-- MUST verify every read operation
-					if char.properties.read then
-						assert(err == nil, "read MUST succeed for readable characteristic " .. char_uuid)
-						assert(value ~= nil, "value MUST not be nil for readable characteristic " .. char_uuid)
+					-- MUST verify every read operation - unconditional assertions
+					local is_readable = (char.properties.read ~= nil)
+					local read_succeeded = (err == nil)
+					local has_value = (value ~= nil)
+
+					-- Assertions ALWAYS execute - test relationship between property and result
+					assert(is_readable == read_succeeded,
+						"read result MUST match readable property for " .. char_uuid ..
+						" (readable=" .. tostring(is_readable) .. ", succeeded=" .. tostring(read_succeeded) .. ")")
+					assert(is_readable == has_value,
+						"value presence MUST match readable property for " .. char_uuid ..
+						" (readable=" .. tostring(is_readable) .. ", has_value=" .. tostring(has_value) .. ")")
+
+					if is_readable then
 						read_count = read_count + 1
-					else
-						assert(err ~= nil, "read MUST fail for non-readable characteristic " .. char_uuid)
-						assert(value == nil, "value MUST be nil when read fails on " .. char_uuid)
 					end
 				end
 			end

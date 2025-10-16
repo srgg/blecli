@@ -75,6 +75,9 @@ func (suite *LuaEngineTestSuite) ExecuteScript(script string) error {
 }
 
 func (suite *LuaEngineTestSuite) TestCapturePrintVariants() {
+	// GOAL: Verify print() function captures all argument types with correct formatting
+	//
+	// TEST SCENARIO: Call print() with various types → verify output format → check tab separators and newline behavior
 	cases := []struct {
 		name     string
 		script   string
@@ -138,6 +141,9 @@ func (suite *LuaEngineTestSuite) TestCapturePrintVariants() {
 
 // TestCaptureIOWriteVariants tests io.write() capture with various argument types
 func (suite *LuaEngineTestSuite) TestCaptureIOWriteVariants() {
+	// GOAL: Verify io.write() captures all argument types without automatic newlines
+	//
+	// TEST SCENARIO: Call io.write() with various types → verify concatenated output → check no automatic newlines added
 	cases := []struct {
 		name     string
 		script   string
@@ -257,6 +263,9 @@ func (suite *LuaEngineTestSuite) TestCaptureIOStderrWriteVariants() {
 
 // TestCaptureMixedPrintAndIOWrite tests that print() and io.write() can be mixed
 func (suite *LuaEngineTestSuite) TestCaptureMixedPrintAndIOWrite() {
+	// GOAL: Verify print() and io.write() can be interleaved and preserve order
+	//
+	// TEST SCENARIO: Mix io.write() and print() calls → verify correct output order → check newline behavior preserved
 	script := `
 		io.write("line1")
 		print("line2")
@@ -277,6 +286,9 @@ func (suite *LuaEngineTestSuite) TestCaptureMixedPrintAndIOWrite() {
 
 // TestJSONLibraryAvailability tests if the JSON library is properly loaded
 func (suite *LuaEngineTestSuite) TestJSONLibraryAvailability() {
+	// GOAL: Verify embedded JSON library is available and functional in Lua environment
+	//
+	// TEST SCENARIO: Require json module → encode table to JSON → verify valid JSON output
 	suite.NotEmpty(jsonLua, "Embedded JSON library should not be empty")
 
 	// Test JSON library availability

@@ -2,6 +2,11 @@ package blecli
 
 import _ "embed"
 
+// FfiBufferLibLuaScript contains the embedded inspect.lua script
+//
+//go:embed examples/lib/ffi_buffer.lua
+var FfiBufferLibLuaScript string
+
 // DefaultInspectLuaScript contains the embedded inspect.lua script
 //
 //go:embed examples/inspect.lua
