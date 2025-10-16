@@ -21,6 +21,7 @@ typedef struct {
 
 local rxbuf = FfiBuffer.new(1024)
 local cal = ffi.new("ImuCal")
+local cal_buf = ffi.new("char[512]")  -- Pre-allocated buffer for printCalibration()
 local HEADER1, HEADER2 = 117, 84
 local PACKET_SIZE = 68
 
@@ -62,23 +63,31 @@ local function extract_floats(buf, offset)
     return floats
 end
 
---- Print IMU calibration parameters.
+--- Print IMU calibration parameters (optimized FFI version).
 -- Displays: accel zero-g (m/s²), gyro zero-rate (rad/s),
 -- mag hard-iron (µT), mag field (µT), mag soft-iron matrix (3×3).
+-- Performance: Single snprintf() + single print() call, zero GC pressure, maximum throughput.
 local function printCalibration()
-    print("IMU calibration:")
-    print(string.format("  Accel zero-g:    %.4f %.4f %.4f",
-        cal.accel_zerog[0], cal.accel_zerog[1], cal.accel_zerog[2]))
-    print(string.format("  Gyro zero-rate:  %.4f %.4f %.4f",
-        cal.gyro_zerorate[0], cal.gyro_zerorate[1], cal.gyro_zerorate[2]))
-    print(string.format("  Mag hard-iron:   %.4f %.4f %.4f",
-        cal.mag_hardiron[0], cal.mag_hardiron[1], cal.mag_hardiron[2]))
-    print(string.format("  Mag field:       %.4f", cal.mag_field))
-    print("  Mag soft-iron matrix:")
-    for i = 0, 6, 3 do
-        print(string.format("    %.4f %.4f %.4f",
-            cal.mag_softiron[i], cal.mag_softiron[i+1], cal.mag_softiron[i+2]))
-    end
+    -- Single FFI snprintf call - absolute maximum performance
+    local len = ffi.C.snprintf(cal_buf, 512,
+        "IMU calibration:\n" ..
+        "  Accel zero-g:    %.4f %.4f %.4f\n" ..
+        "  Gyro zero-rate:  %.4f %.4f %.4f\n" ..
+        "  Mag hard-iron:   %.4f %.4f %.4f\n" ..
+        "  Mag field:       %.4f\n" ..
+        "  Mag soft-iron matrix:\n" ..
+        "    %.4f %.4f %.4f\n" ..
+        "    %.4f %.4f %.4f\n" ..
+        "    %.4f %.4f %.4f\n",
+        cal.accel_zerog[0], cal.accel_zerog[1], cal.accel_zerog[2],
+        cal.gyro_zerorate[0], cal.gyro_zerorate[1], cal.gyro_zerorate[2],
+        cal.mag_hardiron[0], cal.mag_hardiron[1], cal.mag_hardiron[2],
+        cal.mag_field,
+        cal.mag_softiron[0], cal.mag_softiron[1], cal.mag_softiron[2],
+        cal.mag_softiron[3], cal.mag_softiron[4], cal.mag_softiron[5],
+        cal.mag_softiron[6], cal.mag_softiron[7], cal.mag_softiron[8])
+
+    print(ffi.string(cal_buf, len))
 end
 
 --- Process calibration data from MotionCal via PTY.
