@@ -197,10 +197,22 @@ ffi.cdef[[
       float gyro_x,  gyro_y,  gyro_z;
       float mag_x,   mag_y,   mag_z;
   } imu_data_t;
+
+  int snprintf(char *str, size_t size, const char *format, ...);
 ]]
 
 -- Allocate once, then reuse
 local imu_ptr = ffi.new("imu_data_t[1]")
+
+-- Pre-calculate conversion constants (performance: avoid recomputing at 50Hz)
+-- Values match Adafruit_SensorLab Arduino reference implementation
+local ACCEL_SCALE = 8192/9.8  -- ≈836.735 LSB per m/s²
+local GYRO_SCALE = 57.2957795130823 * 16  -- ≈916.732 (rad/s → deg/s * 16, full precision)
+local MAG_SCALE = 10  -- µT → MotionCal format
+
+-- Pre-allocate output buffer (zero-allocation formatting at 50Hz)
+local output_buf = ffi.new("char[128]")
+local format_str = "Raw:%d,%d,%d,%d,%d,%d,%d,%d,%d\r\n"
 
 -- Pre-allocate result table (IMPORTANT: reused on every call)
 local result = {
@@ -211,8 +223,8 @@ local result = {
 
 --- Parse IMU binary data (zero-allocation).
 -- Format: 9×float (36 bytes, little-endian IEEE 754).
--- WARNING: Returns SAME table every call (reused for performance).
--- Copy values if storage needed.
+-- WARNING: Returns the same table every call (reused for performance).
+-- Copy values if storage is needed.
 -- @param data Binary data (exactly 36 bytes)
 -- @return table with accel/gyro/mag fields (reused, ~0.1-0.5µs)
 function parse_imu_data(data)
@@ -256,29 +268,47 @@ blim.subscribe {
     --MaxRate = 0,
     Callback = function(record)
         local data = record.Values["ff11"]
-        local imu = parse_imu_data(data)
 
-        -- Print for debug: Accel (m/s²), Gyro (dps), Mag (µT)
-        --print(string.format( "Accel: %.2f,%.2f,%.2f | Gyro: %.2f,%.2f,%.2f | Mag: %.2f,%.2f,%.2f",
-        -- imu.accel.x, imu.accel.y, imu.accel.z,
-        --          imu.gyro.x, imu.gyro.y, imu.gyro.z,
-        --          imu.mag.x, imu.mag.y, imu. mag.z))
+        -- Fast path: skip parse_imu_data() overhead, use FFI struct directly
+        if #data ~= 36 then
+            error(string.format("Invalid IMU data length: expected 36 bytes, got %d", #data))
+            return
+        end
+
+        ffi.copy(imu_ptr, data, 36)
+        local imu = imu_ptr[0]
+
+        -- Print for debug: Accel (m/s²), Gyro (rad/s), Mag (µT)
+        --print(string.format("Accel: %.2f,%.2f,%.2f | Gyro: %.2f,%.2f,%.2f | Mag: %.2f,%.2f,%.2f",
+        --    imu.accel_x, imu.accel_y, imu.accel_z,
+        --    imu.gyro_x, imu.gyro_y, imu.gyro_z,
+        --    imu.mag_x, imu.mag_y, imu.mag_z))
 
         -- MotionCal expects:
         --   Accel: ±2g range as 16-bit signed integers (±8192 = ±2g)
-        --   Gyro: degrees/s * 16 (fixed-point with 4 fractional bits)
+        --   Gyro: degrees/s * 16 (fixed-point with four fractional bits)
         --   Mag: microtesla * 10 (single decimal precision)
         --  See https://github.com/PaulStoffregen/MotionCal/issues/12
-        blim.bridge.pty_write(string.format("Raw:%d,%d,%d,%d,%d,%d,%d,%d,%d\r\n",
+
+        -- Zero-allocation formatting: write directly to pre-allocated C buffer
+        -- CRITICAL: Cast to int for C snprintf (Lua numbers are doubles, %d expects int)
+        local len = ffi.C.snprintf(output_buf, 128, format_str,
           -- Convert m/s² to ±2g raw format (8192 LSB/g, 9.8 m/s² = 1g)
-          imu.accel.x * 8192/9.8, imu.accel.y * 8192/9.8, imu.accel.z * 8192/9.8,
+          ffi.cast("int", imu.accel_x * ACCEL_SCALE),
+          ffi.cast("int", imu.accel_y * ACCEL_SCALE),
+          ffi.cast("int", imu.accel_z * ACCEL_SCALE),
 
           -- Convert rad/s to deg/s (* 180/π ≈ 57.29577793) then to raw (* 16 LSB/deg/s)
-          imu.gyro.x * 57.29577793 * 16, imu.gyro.y * 57.29577793 * 16, imu.gyro.z * 57.29577793 * 16,
+          ffi.cast("int", imu.gyro_x * GYRO_SCALE),
+          ffi.cast("int", imu.gyro_y * GYRO_SCALE),
+          ffi.cast("int", imu.gyro_z * GYRO_SCALE),
 
           -- Convert µT to MotionCal format (µT * 10)
-          imu.mag.x * 10, imu.mag.y * 10, imu.mag.z * 10)
-        )
+          ffi.cast("int", imu.mag_x * MAG_SCALE),
+          ffi.cast("int", imu.mag_y * MAG_SCALE),
+          ffi.cast("int", imu.mag_z * MAG_SCALE))
+
+        blim.bridge.pty_write(ffi.string(output_buf, len))
     end
 }
 
