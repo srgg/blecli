@@ -9,6 +9,40 @@
 - **Globals:** `g_` prefix (`g_state`)
 - **Static:** `s_` prefix (`s_buffer`)
 
+## Section Comments
+
+**CRITICAL:** Do not confuse or replace section comments with class, function, or method definitions.
+**Format:** `// Section Name` (plain text, no decorative characters)
+
+**DO NOT use:** `====`, `----`, `****`, or any other decorative symbols.
+
+**Use ONLY when:**
+- Grouping code sections that are **not clearly separated by structure or naming**, or
+- The section spans **more than 10 lines** and has a **distinct functional purpose**.
+
+**Default:** Prefer a **blank line** over a section comment when the grouping is already clear.
+
+## **Critical:** C++ Embedded Code Compliance
+All C/C++ code must strictly adhere to:
+1. **C++ Core Guidelines** (https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines)
+2. **Clang-Tidy checks** as configured in the project (including modernize, bugprone, performance, readability, and misc modules)
+3. **Embedded best practices** including
+     - Deterministic memory usage (avoid dynamic allocations on runtime-critical paths unless justified)
+     - Minimal stack usage
+     - Efficient CPU and power usage
+     - Safe peripheral and register access patterns
+     - Board/device-specific coding rules (must comply with provided hardware abstraction layer [HAL] and manufacturer guidelines)
+     - General software engineering best practices:
+     - Consistent naming conventions
+     - Proper error handling
+     - Avoidance of undefined behavior
+     - Clear and maintainable structure
+
+**Mandatory reinforcement:**
+  - Code failing Clang-Tidy checks or violating C++ Core Guidelines will not be merged.
+  - Code must pass all board-specific static analysis and code review checks.
+  - Automated CI checks must be configured to enforce compliance.
+
 ## Memory Management
 
 **CRITICAL:** Static allocation only, no heap.

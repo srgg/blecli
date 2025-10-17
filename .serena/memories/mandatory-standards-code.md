@@ -1,8 +1,9 @@
 # MANDATORY: Claude Code Editing Rules
 
-## Documentation Validation
+## Documentation anc Comments Validation
 
-**CRITICAL:** ALWAYS verify documentation matches implementation before modifications.
+**CRITICAL:** ALWAYS validate documentation matches implementation before modifications.
+**CRITICAL:** Writing comments is an essential part of code development. Comments must be written as a seasoned senior engineer would — concise, clear, and informative, providing meaningful context without stating the obvious or including trivial details.
 
 ### Validation Process
 
