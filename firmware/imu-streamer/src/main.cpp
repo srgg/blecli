@@ -18,8 +18,9 @@
 #include <Adafruit_LSM6DSOX.h>
 #include <Adafruit_LIS3MDL.h>
 #include <Adafruit_Sensor.h>
-#include <NimBLEDevice.h> // NimBLE + NimBLE2902 class included here
-#include "version.h"       // Device configuration and versioning
+#include <NimBLEDevice.h>   // NimBLE + NimBLE2902 class included here
+#include "version.h"        // Device configuration and versioning
+#include "ble_device_settings_service.h"  // Device settings management
 
 
 // Sensor objects
@@ -203,8 +204,14 @@ void setupBLE() {
   aggregateFormat->setValue((uint8_t*)handles, 6);
   imuChar->addDescriptor(aggregateFormat);
 
-  // Start the service
+  // Start the IMU service
   imuService->start();
+
+  // Create and start Device Settings Service (separate from IMU service)
+  NimBLEService* settingsService = create_device_settings_service(pServer);
+  if (settingsService) {
+    settingsService->start();
+  }
 
   // Configure advertising for passive and active scanning
   NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();

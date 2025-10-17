@@ -108,6 +108,17 @@ To support standardized interpretation by BLE clients, the characteristic includ
 
 > Together, these descriptors ensure that BLE clients and visualization tools can automatically interpret IMU data with correct scaling, units, and structure — without requiring manual parsing or proprietary metadata.
 
+### BLE Device Settings Service (UUID: 0xFF20)
+
+The **BLE Device Settings Service** provides persistent configuration management for device settings and IMU calibration data via JSON-based characteristics with automatic NVS persistence.
+
+**Characteristics:**
+- **0xFF21:** Configuration Data (READ/WRITE, JSON format, deep merge support)
+- **0xFF22:** Settings State (READ/WRITE/NOTIFY, bit field)
+- **0xFF23:** Control Point (WRITE, commands: factory reset, reboot)
+
+For complete documentation, see **[BLE Device Settings Service](docs/ble-device-settings-service.md)**.
+
 ## Versioning and Device Configuration
 
 The **firmware** uses `version.py`, a PlatformIO pre-build hook, to automatically manage both firmware versioning and device-specific configuration before compilation. This ensures that each build is fully traceable, consistent, and tailored to the target board.
