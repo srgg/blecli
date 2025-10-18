@@ -1,12 +1,17 @@
+//go:build test
+
 package device_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/srg/blim/internal/device"
 	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/suite"
 )
 
 func TestNewDevice(t *testing.T) {
@@ -124,59 +129,6 @@ func TestDevice_Update(t *testing.T) {
 	updateAdv.AssertExpectations(t)
 }
 
-//	func BenchmarkNewDevice(b *testing.B) {
-//		adv := &MockAdvertisement{}
-//		addr := &MockAddr{"AA:BB:CC:DD:EE:FF"}
-//		uuid, _ := ble.Parse("180F")
-//
-//		adv.On("Addr").Return(addr)
-//		adv.On("LocalName").Return("Benchmark Device")
-//		adv.On("RSSI").Return(-50)
-//		adv.On("ManufacturerData").Return([]byte{0x01, 0x02, 0x03, 0x04})
-//		adv.On("ServiceData").Return([]ble.ServiceData{
-//			{UUID: uuid, Data: []byte{0x64}},
-//		})
-//		adv.On("Services").Return([]ble.UUID{uuid})
-//		adv.On("TxPowerLevel").Return(4)
-//		adv.On("Connectable").Return(true)
-//
-//		b.ResetTimer()
-//		for i := 0; i < b.N; i++ {
-//			logger := logrus.New()
-//			_ = NewDevice(adv, logger)
-//		}
-//	}
-//
-//	func BenchmarkDevice_Update(b *testing.B) {
-//		// Create initial device
-//		initialAdv := &MockAdvertisement{}
-//		addr := &MockAddr{"AA:BB:CC:DD:EE:FF"}
-//		initialAdv.On("Addr").Return(addr)
-//		initialAdv.On("LocalName").Return("Device")
-//		initialAdv.On("RSSI").Return(-50)
-//		initialAdv.On("ManufacturerData").Return([]byte{})
-//		initialAdv.On("ServiceData").Return([]ble.ServiceData{})
-//		initialAdv.On("Services").Return([]ble.UUID{})
-//		initialAdv.On("TxPowerLevel").Return(127)
-//		initialAdv.On("Connectable").Return(true)
-//
-//		logger := logrus.New()
-//		device := NewDevice(initialAdv, logger)
-//
-//		// Create update advertisement
-//		updateAdv := &MockAdvertisement{}
-//		updateAdv.On("LocalName").Return("Updated Device")
-//		updateAdv.On("RSSI").Return(-45)
-//		updateAdv.On("ManufacturerData").Return([]byte{0x01, 0x02})
-//		updateAdv.On("ServiceData").Return([]ble.ServiceData{})
-//		updateAdv.On("Services").Return([]ble.UUID{})
-//		updateAdv.On("TxPowerLevel").Return(4)
-//
-//		b.ResetTimer()
-//		for i := 0; i < b.N; i++ {
-//			device.Update(updateAdv)
-//		}
-//	}
 func TestDevice_ExtractNameFromManufacturerData(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -369,55 +321,54 @@ func TestDevice_NameUpdateBehavior(t *testing.T) {
 	}`)
 }
 
-//func TestIsValidDeviceName(t *testing.T) {
-//	tests := []struct {
-//		name     string
-//		input    string
-//		expected bool
-//	}{
-//		{"valid device name", "MyDevice", true},
-//		{"valid with spaces", "My Device", true},
-//		{"valid with numbers", "Device123", true},
-//		{"too short", "AB", false},
-//		{"too long", strings.Repeat("A", 35), false},
-//		{"no letters", "123456", false},
-//		{"empty string", "", false},
-//		{"only spaces", "   ", false},
-//		{"valid minimal", "ABC", true},
-//		{"valid with special chars", "Device-X_1", true},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//			result := device.isValidDeviceName(tt.input)
-//			assert.Equal(t, tt.expected, result)
-//		})
-//	}
-//}
+// DeviceErrorTestSuite tests device-level error scenarios using MockBLEPeripheralSuite
+type DeviceErrorTestSuite struct {
+	DeviceTestSuite
+}
 
-//func TestIsReadableASCII(t *testing.T) {
-//	tests := []struct {
-//		name     string
-//		input    byte
-//		expected bool
-//	}{
-//		{"space", ' ', true},
-//		{"letter A", 'A', true},
-//		{"letter z", 'z', true},
-//		{"number 0", '0', true},
-//		{"number 9", '9', true},
-//		{"special char", '!', true},
-//		{"tilde", '~', true},
-//		{"null", 0, false},
-//		{"control char", 31, false},
-//		{"delete", 127, false},
-//		{"high byte", 200, false},
-//	}
-//
-//	for _, tt := range tests {
-//		t.Run(tt.name, func(t *testing.T) {
-//			result := isReadableASCII(tt.input)
-//			assert.Equal(t, tt.expected, result)
-//		})
-//	}
-//}
+func (suite *DeviceErrorTestSuite) TestDeviceWriteToCharacteristicErrors() {
+	// GOAL: Verify characteristic write returns appropriate errors for invalid operations
+	//
+	// TEST SCENARIO: Various error conditions → proper device errors returned → error types match expectations
+
+	suite.Run("write while not connected returns ErrNotConnected", func() {
+		// GOAL: Verify ErrNotConnected is returned when writing to a disconnected device
+		//
+		// TEST SCENARIO: Disconnect device → attempt characteristic write → ErrNotConnected returned
+
+		// Get writable characteristic while connected
+		char, err := suite.connection.GetCharacteristic("180d", "2a39")
+		suite.Require().NoError(err, "MUST find characteristic")
+
+		// Disconnect the device
+		err = suite.device.Disconnect()
+		suite.Require().NoError(err, "disconnect MUST succeed")
+
+		// Attempt to write while disconnected
+		err = char.Write([]byte{0x01}, true, 5*time.Second)
+
+		suite.Assert().Error(err, "write MUST fail when not connected")
+		suite.Assert().ErrorIs(err, device.ErrNotConnected, "error MUST be ErrNotConnected")
+		suite.Assert().Contains(err.Error(), "2a39", "error message MUST contain characteristic UUID")
+	})
+
+	suite.Run("get non-existent characteristic returns NotFoundError", func() {
+		// GOAL: Verify NotFoundError is returned for non-existent characteristic
+		//
+		// TEST SCENARIO: Get invalid characteristic UUID → NotFoundError returned → error identifies missing resource
+
+		_, err := suite.connection.GetCharacteristic("180d", "ffff")
+
+		suite.Assert().Error(err, "GetCharacteristic MUST fail for non-existent characteristic")
+
+		var notFoundErr *device.NotFoundError
+		suite.Assert().ErrorAs(err, &notFoundErr, "error MUST be NotFoundError")
+		suite.Assert().Equal("characteristic", notFoundErr.Resource, "resource type MUST be 'characteristic'")
+		suite.Assert().Contains(notFoundErr.UUIDs, "ffff", "UUIDs MUST contain characteristic UUID")
+	})
+}
+
+// TestDeviceErrorTestSuite runs the test suite
+func TestDeviceErrorTestSuite(t *testing.T) {
+	suite.Run(t, new(DeviceErrorTestSuite))
+}

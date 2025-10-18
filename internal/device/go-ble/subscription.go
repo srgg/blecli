@@ -131,7 +131,7 @@ func (c *BLEConnection) Subscribe(opts []*device.SubscribeOptions, mode device.S
 	// Check if connected (we already hold the lock, so use a safe version)
 	if !c.isConnectedInternal() {
 		c.connMutex.Unlock()
-		return fmt.Errorf("device disconnected - reconnect before subscribing to Lua notifications")
+		return device.ErrNotConnected
 	}
 
 	// Validate subscription options and get characteristics from all services

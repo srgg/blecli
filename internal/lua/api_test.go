@@ -110,7 +110,7 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 	suite.Run("Lua: Missing callback", func() {
 		// GOAL: Verify blim.subscribe() returns a clear error when the Callback field is missing
 		//
-		// TEST SCENARIO: Call subscribing without Callback field → Lua error raised → verify error message
+		// TEST SCENARIO: Call subscribing without Callback field → Lua error raised → verify an error message
 
 		err := suite.ExecuteScript(`
 			blim.subscribe{
@@ -140,7 +140,7 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 	suite.Run("Lua: Callback causes panic", func() {
 		// GOAL: Verify that panics in subscription callbacks are recovered and don't crash the system
 		//
-		// TEST SCENARIO: Create a subscription with callback that causes Lua panic → send notification → panic recovered → verify error logged
+		// TEST SCENARIO: Create a subscription with a callback that causes a Lua panic → send notification → panic recovered → verify error logged
 
 		// Create a subscription with a callback that will cause a panic when it tries to access nil values
 		script := `
@@ -154,7 +154,7 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 				Mode = "EveryUpdate",
 				MaxRate = 0,
 				Callback = function(record)
-					-- This will cause a panic by accessing nil table index deeply
+					-- This will cause a panic by accessing a nil table index deeply
 					local x = nil
 					local y = x.foo.bar.baz  -- This should cause a Lua error/panic
 				end
@@ -172,14 +172,14 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 		// Give time for the async callback to execute and panic
 		time.Sleep(50 * time.Millisecond)
 
-		// The panic should be recovered and logged, but execution should continue
+		// The panic should be recovered and logged, but execution should continue.
 		// We verify this by checking that we can still execute Lua code
 		err = suite.ExecuteScript(`print("Still working after panic")`)
 		suite.NoError(err, "System should continue working after callback panic")
 	})
 
 	suite.Run("Lua: Callback handles missing UUID in record.Values", func() {
-		// GOAL: Verify that accessing a non-existent UUID in the record.Values returns nil and can be gracefully handled
+		// GOAL: Verify that accessing a non-existent UUID in the record. 'Values' returns nil and can be gracefully handled
 		//
 		// TEST SCENARIO: Create subscription → send notification → callback accesses non-existent UUID → nil returned → no crash
 
@@ -212,7 +212,7 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 						nil_access_count = nil_access_count + 1
 					end
 
-					-- Verify we can handle nil gracefully without crash
+					-- Verify we can handle nil gracefully without a crash
 					assert(missing_data == nil, "non-existent UUID should return nil")
 					assert(valid_data ~= nil, "valid UUID should have data")
 				end
@@ -221,7 +221,7 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 		err := suite.ExecuteScript(script)
 		suite.NoError(err, "Should successfully create subscription with nil-safe callback")
 
-		// Send notification with the subscribed characteristic
+		// Send a notification with the subscribed characteristic
 		suite.NewPeripheralDataSimulator().
 			WithService("1234").
 			WithCharacteristic("5678", []byte{0x01, 0x02}).
@@ -247,7 +247,7 @@ func (suite *LuaApiTestSuite) TestErrorHandling() {
 }
 
 // TestSubscriptionScenarios validates BLE subscription behavior across multiple streaming modes
-// by executing YAML-defined test test-scenarios.
+// by executing YAML-defined test scenarios.
 //
 // Test test-scenarios are externalized in lua-api-test-test-scenarios.yaml for maintainability
 // and clarity. Each scenario defines subscription configuration, simulation steps, and
@@ -296,7 +296,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	suite.Run("Error: Invalid service UUID", func() {
 		// GOAL: Verify blim.characteristic() raises error when service UUID not found
 		//
-		// TEST SCENARIO: Lookup with non-existent service UUID → Lua error raised → verify error message
+		// TEST SCENARIO: Lookup with non-existent service UUID → Lua error raised → verify an error message
 
 		script := `
 			local char = blim.characteristic("9999", "5678")
@@ -306,9 +306,9 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 	})
 
 	suite.Run("Error: Invalid characteristic UUID", func() {
-		// GOAL: Verify blim.characteristic() raises error when characteristic UUID not found in service
+		// GOAL: Verify blim.characteristic() raises error when characteristically UUID not found in service
 		//
-		// TEST SCENARIO: Lookup with valid service but invalid char UUID → Lua error raised → verify error message
+		// TEST SCENARIO: Lookup with valid service but invalid char UUID → Lua error raised → verify an error message
 
 		script := `
 			local char = blim.characteristic("1234", "9999")
@@ -347,7 +347,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 			local char = blim.characteristic(123, "5678")
 		`
 		err := suite.ExecuteScript(script)
-		// The number 123 gets converted to string "123", then lookup fails
+		// The number 123 gets converted to the string "123", then lookup fails
 		suite.AssertLuaError(err, "characteristic not found")
 	})
 
@@ -413,7 +413,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicFunction() {
 			assert(char1.service == char2.service, "service should be consistent")
 
 			-- Compare properties: check both presence (truthy/falsy) matches
-			-- Properties are now tables with value/name, so compare their presence not reference
+			-- Properties are now tables with value/name, so compare their presence, not reference
 			assert((char1.properties.read ~= nil) == (char2.properties.read ~= nil), "read property presence should be consistent")
 			assert((char1.properties.write ~= nil) == (char2.properties.write ~= nil), "write property presence should be consistent")
 			assert((char1.properties.notify ~= nil) == (char2.properties.notify ~= nil), "notify property presence should be consistent")
@@ -496,19 +496,17 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 	})
 
 	suite.Run("Read returns nil and error on failure", func() {
-		// GOAL: Verify read() returns nil value and error string when reading write-only characteristic
+		// GOAL: Verify read() returns nil value and error when reading write-only characteristic
 		//
-		// TEST SCENARIO: Read the write-only characteristic → error returned with nil value → verify error message format
+		// TEST SCENARIO: Read the write-only characteristic (BBBB) → returns (nil, error)
 
 		script := `
 			local char = blim.characteristic("AAAA", "BBBB")
 			local value, err = char.read()
 
 			-- MUST fail because the characteristic doesn't support read
-			assert(err ~= nil, "read MUST fail on write-only characteristic")
 			assert(value == nil, "value MUST be nil when error occurs")
-			assert(type(err) == "string", "error MUST be string")
-			assert(#err > 0, "error message must not be empty")
+			assert(err == "read() failed: characteristic bbbb does not support read operations", "error message MUST be exact, got: " .. tostring(err))
 		`
 		err := suite.ExecuteScript(script)
 		suite.NoError(err, "Should properly error on non-readable characteristic")
@@ -538,7 +536,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 					local read_succeeded = (err == nil)
 					local has_value = (value ~= nil)
 
-					-- Assertions ALWAYS execute - test relationship between property and result
+					-- Assertions ALWAYS execute - test the relationship between the property and the result
 					assert(is_readable == read_succeeded,
 						"read result MUST match readable property for " .. char_uuid ..
 						" (readable=" .. tostring(is_readable) .. ", succeeded=" .. tostring(read_succeeded) .. ")")
@@ -612,7 +610,7 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 	suite.Run("Error: read() on non-connected device", func() {
 		// GOAL: Verify read() returns error when called on disconnected device
 		//
-		// TEST SCENARIO: Disconnect device → attempt read → error returned with nil value
+		// TEST SCENARIO: Disconnect device → attempt read → returns (nil, error)
 
 		// Disconnect the device first
 		disconnectErr := suite.LuaApi.GetDevice().Disconnect()
@@ -623,9 +621,8 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 			local value, err = char.read()
 
 			-- MUST fail because device is not connected
-			assert(err ~= nil, "read MUST fail on non-connected device, got err=" .. tostring(err) .. " value=" .. tostring(value))
 			assert(value == nil, "value MUST be nil when error occurs")
-			assert(type(err) == "string", "error MUST be string")
+			assert(err == "read() failed: read characteristic 5678", "error message MUST be exact, got: " .. tostring(err))
 		`
 		err := suite.ExecuteScript(script)
 		suite.NoError(err, "Should properly error on disconnected device")
@@ -697,6 +694,268 @@ func (suite *LuaApiTestSuite) TestCharacteristicRead() {
 		`
 		err := suite.ExecuteScript(script)
 		suite.NoError(err, "Should handle empty values")
+	})
+}
+
+// TestCharacteristicWrite tests the characteristic.write() method
+// Uses the default peripheral's writable characteristic (1234:ABCD), which supports both writing modes
+func (suite *LuaApiTestSuite) TestCharacteristicWrite() {
+	suite.Run("Successful write with response returns true and nil error", func() {
+		// GOAL: Verify write() returns true and nil error on successful write with response (default)
+		//
+		// TEST SCENARIO: Write to writable characteristic with default with_response → success → verify (true, nil) returned
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+
+			if not char.properties.write then
+				error("Test setup error: characteristic should be writable")
+			end
+
+			local result, err = char.write("test data")
+			assert(result == true, "write should return true on success")
+			assert(err == nil, "write should not return error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should successfully write to writable characteristic")
+	})
+
+	suite.Run("Successful write without response returns true and nil error", func() {
+		// GOAL: Verify write() returns true and nil error when writing without response
+		//
+		// TEST SCENARIO: Write to characteristic with with_response=false → success → verify (true, nil) returned
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+			local result, err = char.write("test data", false)
+			assert(result == true, "write without response should return true on success")
+			assert(err == nil, "write should not return error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should successfully write without response")
+	})
+
+	suite.Run("Write with explicit with_response=true parameter", func() {
+		// GOAL: Verify write() accepts explicit with_response=true parameter
+		//
+		// TEST SCENARIO: Write with with_response=true explicitly → success → verify (true, nil) returned
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+			local result, err = char.write("test", true)
+			assert(result == true, "write with explicit with_response=true should succeed")
+			assert(err == nil, "write should not return error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should successfully write with explicit with_response=true")
+	})
+
+	suite.Run("Write returns nil and error on failure", func() {
+		// GOAL: Verify write() returns nil and error when writing to a read-only characteristic
+		//
+		// TEST SCENARIO: Write to read-only characteristic (5678) → returns (nil, error)
+
+		script := `
+			local char = blim.characteristic("1234", "5678")
+			local result, err = char.write("data")
+
+			-- MUST fail because the characteristic doesn't support write
+			assert(result == nil, "result MUST be nil when error occurs")
+			assert(err == "write() failed: characteristic 5678 does not support write operations", "error message MUST be exact, got: " .. tostring(err))
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should properly error on non-writable characteristic")
+	})
+
+	suite.Run("Write binary data", func() {
+		// GOAL: Verify write() correctly sends binary data including null bytes
+		//
+		// TEST SCENARIO: Write binary string with \x00 bytes → success → verify (true, nil) returned
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+			local binary_data = "\x01\x02\x00\xFF\x03"
+			local result, err = char.write(binary_data)
+			assert(result == true, "write should succeed with binary data")
+			assert(err == nil, "write should not return error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle binary data correctly")
+	})
+
+	suite.Run("Write empty string", func() {
+		// GOAL: Verify write() accepts empty string as valid data
+		//
+		// TEST SCENARIO: Write empty string "" → success → verify (true, nil) returned
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+			local result, err = char.write("")
+			assert(result == true, "write should succeed with empty string")
+			assert(err == nil, "write should not return error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle empty string write")
+	})
+
+	suite.Run("Write multiple times to same characteristic", func() {
+		// GOAL: Verify write() is idempotent and can be called multiple times
+		//
+		// TEST SCENARIO: Write to same characteristic 3 times → all return success → verify consistent behavior
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+
+			local result1, err1 = char.write("first")
+			local result2, err2 = char.write("second")
+			local result3, err3 = char.write("third")
+
+			assert(result1 == true, "first write should succeed")
+			assert(result2 == true, "second write should succeed")
+			assert(result3 == true, "third write should succeed")
+
+			assert(err1 == nil, "first write should not error")
+			assert(err2 == nil, "second write should not error")
+			assert(err3 == nil, "third write should not error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should allow multiple writes")
+	})
+
+	suite.Run("Write with implicit number-to-string conversion", func() {
+		// GOAL: Verify write() handles Lua's implicit number-to-string conversion (consistent with characteristic())
+		//       (Note: Lua IsString() returns true for numbers due to implicit conversion, so 123 becomes "123")
+		//
+		// TEST SCENARIO: Call write(123) with number → number converted to string "123" → write succeeds with converted data
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+			local result, err = char.write(123)
+			-- Number 123 gets converted to string "123" by Lua
+			assert(result == true, "write should succeed with implicitly converted number")
+			assert(err == nil, "write should not return error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle implicit number-to-string conversion")
+	})
+
+	suite.Run("Error: write() with invalid with_response parameter", func() {
+		// GOAL: Verify write() raises error when with_response parameter is not boolean
+		//
+		// TEST SCENARIO: Call write("data", "not a boolean") → Lua error raised → verify error message
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+			local result, err = char.write("data", "not boolean")
+		`
+		err := suite.ExecuteScript(script)
+		suite.AssertLuaError(err, "expects boolean as second argument")
+	})
+
+	suite.Run("Error: write() on non-connected device", func() {
+		// GOAL: Verify write() returns error when called on disconnected device
+		//
+		// TEST SCENARIO: Disconnect device → attempt write → returns (nil, error)
+
+		// Disconnect the device first
+		disconnectErr := suite.LuaApi.GetDevice().Disconnect()
+		suite.NoError(disconnectErr, "Should disconnect successfully")
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+			local result, err = char.write("data")
+
+			-- MUST fail because device is not connected
+			assert(result == nil, "result MUST be nil when error occurs")
+			assert(err == "write() failed: write characteristic abcd", "error message MUST be exact, got: " .. tostring(err))
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should properly error on disconnected device")
+	})
+
+	suite.Run("Write to characteristic supporting both write modes", func() {
+		// GOAL: Verify write() can use both with_response and without_response modes on the same characteristic
+		//
+		// TEST SCENARIO: Write twice to ABCD characteristic with both modes → both succeed → verify returns
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+
+			-- Verify characteristic supports both modes
+			if not char.properties.write then
+				error("Test setup error: characteristic should support write with response")
+			end
+			if not char.properties.write_without_response then
+				error("Test setup error: characteristic should support write without response")
+			end
+
+			-- Write with response (default)
+			local result1, err1 = char.write("with response")
+			assert(result1 == true, "write with response should succeed")
+			assert(err1 == nil, "write with response should not error")
+
+			-- Write without response
+			local result2, err2 = char.write("without response", false)
+			assert(result2 == true, "write without response should succeed")
+			assert(err2 == nil, "write without response should not error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should support both write modes on same characteristic")
+	})
+
+	suite.Run("Write large data payload", func() {
+		// GOAL: Verify write() handles large data payloads (MTU chunking is transparent to Lua API)
+		//
+		// TEST SCENARIO: Write 512 bytes of data → success → verify (true, nil) returned
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+
+			-- Generate 512 bytes of data
+			local large_data = string.rep("A", 512)
+
+			local result, err = char.write(large_data)
+			assert(result == true, "write should succeed with large payload")
+			assert(err == nil, "write should not return error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should handle large data payloads")
+	})
+
+	suite.Run("Verify write() is a method not a field", func() {
+		// GOAL: Verify write() is exposed as a callable method (userdata type in aarzilli/golua, not a field)
+		//
+		// TEST SCENARIO: Get a characteristic handle → check write type is userdata/function → verify callable
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+
+			-- write should be a callable (in aarzilli/golua, Go functions are userdata type, not "function")
+			assert(char.write ~= nil, "write should not be nil")
+			assert(type(char.write) == "function" or type(char.write) == "userdata",
+			       "write should be callable (function or userdata), got: " .. type(char.write))
+
+			-- Calling it should work
+			local result, err = char.write("test")
+			assert(result ~= nil or err ~= nil, "should return either result or error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "write should be a callable method")
+	})
+
+	suite.Run("Write with nil with_response parameter defaults to true", func() {
+		// GOAL: Verify write() treats nil with_response parameter as default (true)
+		//
+		// TEST SCENARIO: Call write("data", nil) → defaults to with_response=true → success
+
+		script := `
+			local char = blim.characteristic("1234", "ABCD")
+			local result, err = char.write("data", nil)
+			assert(result == true, "write with nil with_response should succeed (default to true)")
+			assert(err == nil, "write should not return error")
+		`
+		err := suite.ExecuteScript(script)
+		suite.NoError(err, "Should treat nil with_response as default true")
 	})
 }
 
@@ -1259,7 +1518,7 @@ func (suite *LuaApiTestSuite) TestPTYOnData() {
 		//
 		// TEST SCENARIO: Call pty_on_data() without SetBridge() → error returned
 
-		// Don't set bridge
+		// Don't set the bridge
 		script := `
 			blim.bridge.pty_on_data(function(data) end)
 		`
@@ -1371,9 +1630,9 @@ func (suite *LuaApiTestSuite) TestPTYOnData() {
 	})
 
 	suite.Run("Callback replacement updates handler correctly", func() {
-		// GOAL: Verify registering new callback replaces old one and old callback is not invoked
+		// GOAL: Verify registering a new callback replaces the old one, and the old callback is not invoked
 		//
-		// TEST SCENARIO: Register callback A → trigger data → register callback B → trigger data → only B receives second
+		// TEST SCENARIO: Register callback A → trigger data → register callback B → trigger data → only B receives a second
 
 		mockStrategy := &MockStrategy{}
 		testBridge := &testBridgeInfo{
@@ -1423,9 +1682,9 @@ func (suite *LuaApiTestSuite) TestPTYOnData() {
 	})
 
 	suite.Run("Callback error recovery prevents crash", func() {
-		// GOAL: Verify panic in the callback is recovered and Lua API continues working
+		// GOAL: Verify panic in the callback is recovered and the Lua API continues working
 		//
-		// TEST SCENARIO: Register callback that panics → trigger data → panic recovered → system still works
+		// TEST SCENARIO: Register callback that panics → trigger data → panic recovered → the system still works
 
 		mockStrategy := &MockStrategy{}
 		testBridge := &testBridgeInfo{

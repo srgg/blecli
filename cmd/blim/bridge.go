@@ -19,7 +19,7 @@ import (
 var bridgeCmd = &cobra.Command{
 	Use:   "bridge <device-address>",
 	Short: "Create a PTY bridge to a BLE device",
-	Long: `Creates a bidirectional PTY (pseudoterminal) bridge to a BLE device,
+	Long: fmt.Sprintf(`Creates a bidirectional PTY (pseudoterminal) bridge to a BLE device,
 allowing applications that expect a serial port to communicate with BLE devices.
 
 The bridge creates a virtual serial device (e.g., /dev/ttys001) that applications
@@ -33,8 +33,10 @@ This is useful for:
 - Integrating BLE devices with legacy serial software
 
 Example:
-  blim bridge AA:BB:CC:DD:EE:FF
-  blim bridge --service=custom-uuid AA:BB:CC:DD:EE:FF`,
+  blim bridge %s
+  blim bridge --service=custom-uuid %s
+
+%s`, exampleDeviceAddress, exampleDeviceAddress, deviceAddressNote),
 	Args: cobra.ExactArgs(1),
 	RunE: runBridge,
 }

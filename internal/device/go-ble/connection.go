@@ -74,7 +74,7 @@ type BLEConnection struct {
 
 // GetCharacteristic retrieves a characteristic by service and characteristic UUID.
 // Both UUIDs are normalized for consistent lookup (lowercase, no dashes).
-// Returns an error if the service or characteristic is not found.
+// Returns a NotFoundError if the service or characteristic is not found.
 func (c *BLEConnection) GetCharacteristic(service, uuid string) (device.Characteristic, error) {
 	// Normalize UUIDs for a consistent lookup
 	normalizedServiceUUID := device.NormalizeUUID(service)
@@ -82,12 +82,12 @@ func (c *BLEConnection) GetCharacteristic(service, uuid string) (device.Characte
 
 	svc, ok := c.services[normalizedServiceUUID]
 	if !ok {
-		return nil, fmt.Errorf("service \"%s\" not found", service)
+		return nil, &device.NotFoundError{Resource: "service", UUIDs: []string{service}}
 	}
 
 	char, ok := svc.Characteristics[normalizedCharUUID]
 	if !ok {
-		return nil, fmt.Errorf("characteristic \"%s\" not found in service \"%s\"", uuid, service)
+		return nil, &device.NotFoundError{Resource: "characteristic", UUIDs: []string{service, uuid}}
 	}
 
 	return char, nil
@@ -112,7 +112,7 @@ func (c *BLEConnection) Services() []device.Service {
 
 // GetService retrieves a specific service by its UUID.
 // The UUID is normalized for consistent lookup (lowercase, no dashes).
-// Returns an error if the service is not found.
+// Returns a NotFoundError if the service is not found.
 func (c *BLEConnection) GetService(uuid string) (device.Service, error) {
 	c.connMutex.RLock()
 	defer c.connMutex.RUnlock()
@@ -121,7 +121,7 @@ func (c *BLEConnection) GetService(uuid string) (device.Service, error) {
 	normalizedUUID := device.NormalizeUUID(uuid)
 	svc, ok := c.services[normalizedUUID]
 	if !ok {
-		return nil, fmt.Errorf("service %s not found", uuid)
+		return nil, &device.NotFoundError{Resource: "service", UUIDs: []string{uuid}}
 	}
 	return svc, nil
 }
@@ -171,7 +171,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *devic
 
 	if c.isConnectedInternal() {
 		c.logger.WithField("address", address).Warn("Connection attempt while already connected")
-		return fmt.Errorf("device already connected")
+		return device.ErrAlreadyConnected
 	}
 
 	// Set descriptor read timeout with default if not explicitly set
@@ -529,6 +529,10 @@ func (c *BLEConnection) validateSubscribeOptions(opts *device.SubscribeOptions, 
 			errorParts = append(errorParts, fmt.Sprintf("characteristics without notification support: %s", strings.Join(unsupportedChars, ", ")))
 		}
 
+		// Wrap with device.ErrUnsupported when there are characteristics without notification support
+		if len(unsupportedChars) > 0 {
+			return nil, fmt.Errorf("validation failed - %s: %w", strings.Join(errorParts, "; "), device.ErrUnsupported)
+		}
 		return nil, fmt.Errorf("validation failed - %s", strings.Join(errorParts, "; "))
 	}
 
@@ -542,7 +546,7 @@ func (c *BLEConnection) BLESubscribe(opts *device.SubscribeOptions) error {
 	// Check if connected
 	if !c.isConnectedInternal() {
 		c.connMutex.RUnlock()
-		return fmt.Errorf("device not connected")
+		return device.ErrNotConnected
 	}
 
 	// Validate subscription options and get characteristics

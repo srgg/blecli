@@ -189,7 +189,7 @@ func (d *BLEDevice) Connect(ctx context.Context, opts *device.ConnectOptions) er
 
 	// Defensive check: connection should never be nil with the preconnection pattern
 	if d.connection == nil {
-		return fmt.Errorf("internal error: connection is not initialized")
+		return fmt.Errorf("connect: %w", device.ErrNotInitialized)
 	}
 
 	// Set default options if not provided
@@ -246,7 +246,7 @@ func (d *BLEDevice) Disconnect() error {
 
 	// Defensive check: connection should never be nil with the preconnection pattern
 	if d.connection == nil {
-		return fmt.Errorf("internal error: connection is not initialized")
+		return fmt.Errorf("disconnect: %w", device.ErrNotInitialized)
 	}
 
 	// Use the BLEConnection to disconnect
@@ -325,7 +325,7 @@ func (d *BLEDevice) WriteToCharacteristic(uuid string, data []byte) error {
 	d.mu.RLock()
 	if d.connection == nil {
 		d.mu.RUnlock()
-		return fmt.Errorf("device not connected")
+		return fmt.Errorf("write to characteristic %s: %w", uuid, device.ErrNotConnected)
 	}
 	conn := d.connection
 	d.mu.RUnlock()
@@ -334,7 +334,7 @@ func (d *BLEDevice) WriteToCharacteristic(uuid string, data []byte) error {
 	conn.connMutex.RLock()
 	if !conn.isConnectedInternal() {
 		conn.connMutex.RUnlock()
-		return fmt.Errorf("device not connected")
+		return device.ErrNotConnected
 	}
 
 	// Find characteristic across all services
@@ -350,12 +350,12 @@ func (d *BLEDevice) WriteToCharacteristic(uuid string, data []byte) error {
 
 	if char == nil {
 		conn.connMutex.RUnlock()
-		return fmt.Errorf("characteristic %s not found", uuid)
+		return &device.NotFoundError{Resource: "characteristic", UUIDs: []string{uuid}}
 	}
 
 	if char.BLEChar == nil {
 		conn.connMutex.RUnlock()
-		return fmt.Errorf("characteristic %s not connected", uuid)
+		return fmt.Errorf("characteristic %s: %w", uuid, device.ErrNotConnected)
 	}
 
 	// Snapshot client reference before releasing read lock
@@ -396,7 +396,7 @@ func (d *BLEDevice) GetBLEServices() ([]*BLEService, error) {
 	}
 
 	// Return error if not connected
-	return nil, fmt.Errorf("device not connected")
+	return nil, device.ErrNotConnected
 }
 
 // GetCharacteristics returns all characteristics as device.Characteristic
@@ -416,7 +416,7 @@ func (d *BLEDevice) GetCharacteristics() ([]device.Characteristic, error) {
 	}
 
 	// Return error if is not connected
-	return nil, fmt.Errorf("device not connected")
+	return nil, device.ErrNotConnected
 }
 
 // SetDataHandler sets callback for received notifications

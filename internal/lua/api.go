@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -219,12 +220,12 @@ func (api *LuaAPI) registerBridgeInfo(L *lua.State) {
 			return 0
 		}
 
-		// Store reference to the callback function in Lua registry
+		// Store reference to the callback function in the Lua registry
 		callbackRef := L.Ref(lua.LUA_REGISTRYINDEX)
 
 		api.logger.WithField("callback_ref", callbackRef).Debug("[pty_on_data] Registering PTY callback")
 
-		// Create Go callback that dispatches to Lua
+		// Create a Go callback that dispatches to Lua
 		api.bridge.SetPTYReadCallback(func(data []byte) {
 			api.callPTYDataCallback(callbackRef, data)
 		})
@@ -250,6 +251,19 @@ func (api *LuaAPI) registerBridgeInfo(L *lua.State) {
 func (api *LuaAPI) SafePushGoFunction(L *lua.State, name string, fn func(*lua.State) int) {
 	L.PushString(name)
 	L.PushGoFunction(api.LuaEngine.SafeWrapGoFunction(name+"()", fn))
+}
+
+// stripWrappedGoErrorSuffix removes Go error wrapping suffixes from error messages for cleaner Lua API messages.
+// Strips known suffixes like ": unsupported", ": not connected", ": not_connected", ": timeout" while keeping
+// the Go code properly structured with error wrapping for errors.Is() checks.
+func stripWrappedGoErrorSuffix(errMsg string) string {
+	if idx := strings.LastIndex(errMsg, ": "); idx != -1 {
+		suffix := errMsg[idx+2:]
+		if suffix == "unsupported" || suffix == "not connected" || suffix == "not_connected" || suffix == "timeout" {
+			return errMsg[:idx]
+		}
+	}
+	return errMsg
 }
 
 // parseStreamPattern converts a string pattern to a device.StreamPattern
@@ -636,7 +650,7 @@ func (api *LuaAPI) executeSubscription(config *LuaSubscriptionTable) error {
 		"mode":     config.Mode,
 	}).Debug("executeSubscription called")
 
-	// Convert SubscriptionConfig to device.SubscribeOptions
+	// Convert SubscriptionConfig to a device.SubscribeOptions
 	var opts []*device.SubscribeOptions
 	for _, serviceConfig := range config.Services {
 		opt := &device.SubscribeOptions{
@@ -1001,31 +1015,65 @@ func (api *LuaAPI) registerCharacteristicFunction(L *lua.State) {
 		// Method: read() - reads the characteristic value from the device
 		// Returns (value, nil) on success or (nil, error_message) on failure
 		api.SafePushGoFunction(L, "read", func(L *lua.State) int {
-			// Type-assert to access Read() method (not part of interface)
-			type ReadableCharacteristic interface {
-				Read() ([]byte, error)
-			}
-			if readable, ok := char.(ReadableCharacteristic); ok {
-				value, err := readable.Read()
-				if err != nil {
-					// Return (nil, error_message) for expected errors
-					L.PushNil()
-					L.PushString(fmt.Sprintf("read() failed: %v", err))
-					return 2
-				}
-				// Return (value, nil) on success
-				L.PushString(string(value))
+			// Use the abstracted CharacteristicReader interface with timeout
+			value, err := char.Read(5 * time.Second) // Use 5s default timeout for Lua
+			if err != nil {
+				// Return (nil, error_message) for expected errors
+				// Strip wrapped Go error suffix for cleaner Lua messages
 				L.PushNil()
+				L.PushString(fmt.Sprintf("read() failed: %s", stripWrappedGoErrorSuffix(err.Error())))
 				return 2
 			}
-			// Characteristic doesn't support Read()
+			// Return (value, nil) on success
+			L.PushString(string(value))
 			L.PushNil()
-			L.PushString("read() not supported for this characteristic")
 			return 2
 		})
 		L.SetTable(-3)
 
-		// TODO: Add methods (write, subscribe, unsubscribe) if needed
+		// Method: write(data, [with_response]) - writes data to the characteristic
+		// Parameters:
+		//   - data: string - data to write (will be converted to bytes)
+		//   - with_response: boolean (optional) - whether to wait for write response (default: true)
+		// Returns (true, nil) on success or (nil, error_message) on failure
+		api.SafePushGoFunction(L, "write", func(L *lua.State) int {
+			// Validate first argument (data)
+			if !L.IsString(1) {
+				L.RaiseError("write(data, [with_response]) expects string as first argument")
+				return 0
+			}
+
+			data := []byte(L.ToString(1))
+
+			// Parse optional with_response parameter (default: true)
+			withResponse := true
+			if L.GetTop() >= 2 {
+				if !L.IsBoolean(2) && !L.IsNil(2) {
+					L.RaiseError("write(data, [with_response]) expects boolean as second argument")
+					return 0
+				}
+				if L.IsBoolean(2) {
+					withResponse = L.ToBoolean(2)
+				}
+			}
+
+			// Use the abstracted CharacteristicWriter interface with timeout
+			err := char.Write(data, withResponse, 5*time.Second) // Use 5s default timeout for Lua
+			if err != nil {
+				// Return (nil, error_message) for expected errors
+				// Strip wrapped Go error suffix for cleaner Lua messages
+				L.PushNil()
+				L.PushString(fmt.Sprintf("write() failed: %s", stripWrappedGoErrorSuffix(err.Error())))
+				return 2
+			}
+			// Return (true, nil) on success
+			L.PushBoolean(true)
+			L.PushNil()
+			return 2
+		})
+		L.SetTable(-3)
+
+		// TODO: Add methods (subscribe, unsubscribe) if needed
 
 		return 1
 	})

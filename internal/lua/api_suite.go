@@ -368,6 +368,11 @@ func (suite *LuaApiSuite) SetupTest() {
 								"uuid": "5678",
 								"properties": "read,notify",
 								"value": []
+							},
+							{
+								"uuid": "ABCD",
+								"properties": "write,write-without-response",
+								"value": []
 							}
 						]
 					},

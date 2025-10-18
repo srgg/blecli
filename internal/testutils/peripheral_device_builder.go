@@ -5,6 +5,7 @@ package testutils
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	blelib "github.com/go-ble/ble"
@@ -66,6 +67,8 @@ type CharacteristicConfig struct {
 	Properties  string             `json:"properties,omitempty" yaml:"properties,omitempty"` // e.g., "read,write,notify"
 	Value       []byte             `json:"value,omitempty" yaml:"value,omitempty"`
 	Descriptors []DescriptorConfig `json:"descriptors,omitempty" yaml:"descriptors,omitempty"`
+	ReadDelay   time.Duration      `json:"-" yaml:"-"` // Delay before returning read response (for timeout testing)
+	WriteDelay  time.Duration      `json:"-" yaml:"-"` // Delay before returning write response (for timeout testing)
 }
 
 // ServiceConfig represents a BLE service configuration for mocking
@@ -138,8 +141,25 @@ func (b *PeripheralDeviceBuilder) WithService(uuid string) *PeripheralDeviceBuil
 	return b
 }
 
+// CharacteristicOption is a functional option for configuring characteristics
+type CharacteristicOption func(*CharacteristicConfig)
+
+// WithReadDelay sets the read delay for timeout testing
+func WithReadDelay(delay time.Duration) CharacteristicOption {
+	return func(c *CharacteristicConfig) {
+		c.ReadDelay = delay
+	}
+}
+
+// WithWriteDelay sets the write delay for timeout testing
+func WithWriteDelay(delay time.Duration) CharacteristicOption {
+	return func(c *CharacteristicConfig) {
+		c.WriteDelay = delay
+	}
+}
+
 // WithCharacteristic adds a characteristic to the last added service
-func (b *PeripheralDeviceBuilder) WithCharacteristic(uuid, properties string, value []byte) *PeripheralDeviceBuilder {
+func (b *PeripheralDeviceBuilder) WithCharacteristic(uuid, properties string, value []byte, opts ...CharacteristicOption) *PeripheralDeviceBuilder {
 	if len(b.profile.Services) == 0 {
 		panic("WithCharacteristic: no service added yet, call WithService first")
 	}
@@ -151,12 +171,18 @@ func (b *PeripheralDeviceBuilder) WithCharacteristic(uuid, properties string, va
 		Value:       value,
 		Descriptors: []DescriptorConfig{},
 	}
+
+	// Apply functional options
+	for _, opt := range opts {
+		opt(&char)
+	}
+
 	b.profile.Services[lastServiceIdx].Characteristics = append(
 		b.profile.Services[lastServiceIdx].Characteristics, char)
 	return b
 }
 
-// addDescriptor is a helper to add a descriptor with validation
+// addDescriptor adds a descriptor to the last added characteristic (internal helper)
 func (b *PeripheralDeviceBuilder) addDescriptor(desc DescriptorConfig) *PeripheralDeviceBuilder {
 	if len(b.profile.Services) == 0 {
 		panic("addDescriptor: no service added yet, call WithService first")
@@ -220,25 +246,33 @@ func parseCharacteristicProperties(props string) blelib.Property {
 	}
 
 	var property blelib.Property
-	// Simple parsing - can be enhanced as needed
-	switch props {
-	case "read":
-		property = blelib.CharRead
-	case "write":
-		property = blelib.CharWrite
-	case "notify":
-		property = blelib.CharNotify
-	case "read,write":
-		property = blelib.CharRead | blelib.CharWrite
-	case "read,notify":
-		property = blelib.CharRead | blelib.CharNotify
-	case "write,notify":
-		property = blelib.CharWrite | blelib.CharNotify
-	case "read,write,notify":
-		property = blelib.CharRead | blelib.CharWrite | blelib.CharNotify
-	default:
-		property = blelib.CharRead | blelib.CharWrite | blelib.CharNotify // default
+
+	// Split by comma, trim whitespace, and parse each property individually
+	parts := strings.Split(props, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		switch part {
+		case "read":
+			property |= blelib.CharRead
+		case "write":
+			property |= blelib.CharWrite
+		case "write-without-response":
+			property |= blelib.CharWriteNR
+		case "notify":
+			property |= blelib.CharNotify
+		case "indicate":
+			property |= blelib.CharIndicate
+		default:
+			// FAIL FAST on unknown properties to catch configuration errors
+			panic(fmt.Sprintf("parseCharacteristicProperties: unknown property '%s' in '%s'", part, props))
+		}
 	}
+
+	// If no valid properties were parsed, return default
+	if property == 0 {
+		return blelib.CharRead | blelib.CharWrite | blelib.CharNotify
+	}
+
 	return property
 }
 
@@ -301,9 +335,30 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 
 			// Add read expectations - return value only if characteristic supports reading
 			if char.Property&blelib.CharRead != 0 {
-				mockClient.On("ReadCharacteristic", char).Return(char.Value, nil)
+				if charConfig.ReadDelay > 0 {
+					// Add delay for timeout testing
+					mockClient.On("ReadCharacteristic", char).Run(func(args mock.Arguments) {
+						time.Sleep(charConfig.ReadDelay)
+					}).Return(char.Value, nil)
+				} else {
+					mockClient.On("ReadCharacteristic", char).Return(char.Value, nil)
+				}
 			} else {
 				mockClient.On("ReadCharacteristic", char).Return(nil, fmt.Errorf("characteristic does not support read"))
+			}
+
+			// Add write expectations - accept writes if characteristic supports writing
+			if char.Property&blelib.CharWrite != 0 || char.Property&blelib.CharWriteNR != 0 {
+				if charConfig.WriteDelay > 0 {
+					// Add delay for timeout testing
+					mockClient.On("WriteCharacteristic", char, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+						time.Sleep(charConfig.WriteDelay)
+					}).Return(nil)
+				} else {
+					mockClient.On("WriteCharacteristic", char, mock.Anything, mock.Anything).Return(nil)
+				}
+			} else {
+				mockClient.On("WriteCharacteristic", char, mock.Anything, mock.Anything).Return(fmt.Errorf("characteristic does not support write"))
 			}
 
 			// Add descriptor read expectations based on ReadErrorBehavior

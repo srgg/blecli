@@ -63,24 +63,20 @@ local function extract_floats(buf, offset)
     return floats
 end
 
---- Print IMU calibration parameters (optimized FFI version).
--- Displays: accel zero-g (m/s²), gyro zero-rate (rad/s),
--- mag hard-iron (µT), mag field (µT), mag soft-iron matrix (3×3).
+--- Print magnetometer calibration parameters (optimized FFI version).
+-- Displays: mag hard-iron (µT), mag field (µT), mag soft-iron matrix (3×3).
+-- Note: Accel/gyro calibration from MotionCal is always zero and not saved to the device.
 -- Performance: Single snprintf() + single print() call, zero GC pressure, maximum throughput.
 local function printCalibration()
     -- Single FFI snprintf call - absolute maximum performance
     local len = ffi.C.snprintf(cal_buf, 512,
-        "IMU calibration:\n" ..
-        "  Accel zero-g:    %.4f %.4f %.4f\n" ..
-        "  Gyro zero-rate:  %.4f %.4f %.4f\n" ..
-        "  Mag hard-iron:   %.4f %.4f %.4f\n" ..
-        "  Mag field:       %.4f\n" ..
-        "  Mag soft-iron matrix:\n" ..
+        "\n✓ New magnetometer calibration from MotionCal:\n" ..
+        "  Hard-iron offset: %.4f %.4f %.4f µT\n" ..
+        "  Field strength:   %.4f µT\n" ..
+        "  Soft-iron matrix:\n" ..
         "    %.4f %.4f %.4f\n" ..
         "    %.4f %.4f %.4f\n" ..
         "    %.4f %.4f %.4f\n",
-        cal.accel_zerog[0], cal.accel_zerog[1], cal.accel_zerog[2],
-        cal.gyro_zerorate[0], cal.gyro_zerorate[1], cal.gyro_zerorate[2],
         cal.mag_hardiron[0], cal.mag_hardiron[1], cal.mag_hardiron[2],
         cal.mag_field,
         cal.mag_softiron[0], cal.mag_softiron[1], cal.mag_softiron[2],
@@ -88,6 +84,62 @@ local function printCalibration()
         cal.mag_softiron[6], cal.mag_softiron[7], cal.mag_softiron[8])
 
     print(ffi.string(cal_buf, len))
+end
+
+--- Save magnetometer calibration to the BLE device.
+-- Writes calibration data to service 0xff20, characteristic 0xff21 in JSON format.
+-- Format matches device settings schema with hard-iron offsets, field strength, and soft-iron matrix.
+-- After writing, reads back the settings to verify they were saved correctly.
+local function saveCalibration()
+    -- Build JSON string with current magnetometer calibration
+    local json = string.format([[{
+  "imu": {
+    "mag": {
+      "hardiron": [%.6f, %.6f, %.6f],
+      "field": %.6f,
+      "softiron": [
+        [%.6f, %.6f, %.6f],
+        [%.6f, %.6f, %.6f],
+        [%.6f, %.6f, %.6f]
+      ]
+    }
+  },
+  "metadata": {
+    "version": 1
+  }
+}]],
+        cal.mag_hardiron[0], cal.mag_hardiron[1], cal.mag_hardiron[2],
+        cal.mag_field,
+        cal.mag_softiron[0], cal.mag_softiron[1], cal.mag_softiron[2],
+        cal.mag_softiron[3], cal.mag_softiron[4], cal.mag_softiron[5],
+        cal.mag_softiron[6], cal.mag_softiron[7], cal.mag_softiron[8])
+
+    -- Get characteristic handle for device settings ()
+    local settings_char = blim.characteristic("ff20", "ff21")
+
+    -- Write JSON to device settings characteristic with response
+    local _result, err = settings_char.write(json, true)
+    if err then
+        print("ERROR: Failed to save calibration: " .. err)
+        return false
+    end
+
+    -- Read back the settings to see what the device actually saved (device merges with existing settings)
+    local settings_data, read_err = settings_char.read()
+    if read_err then
+        print("WARNING: Failed to read back settings: " .. read_err)
+        return false
+    end
+
+    -- Print the actual merged settings from the device
+    print("\n✓ Calibration saved. Device settings:")
+    print(settings_data)
+    return true
+end
+
+local function onNewCalibration()
+    printCalibration()
+    saveCalibration()
 end
 
 --- Process calibration data from MotionCal via PTY.
@@ -113,14 +165,13 @@ function receiveCalibrationChunk(ptr)
 
             if not found then
                 -- No header found, keep last byte in case it's 117
-                if rxbuf.length > 1 then
-                    rxbuf:discard(rxbuf.length - 1)
-                end
+                rxbuf:discard(rxbuf.length - 1)
                 return
             end
 
             rxbuf:discard(found)
 
+            ---@diagnostic disable-next-line: unnecessary-if
             if rxbuf.length < PACKET_SIZE then
                 return
             end
@@ -137,6 +188,7 @@ function receiveCalibrationChunk(ptr)
                 end
             end
 
+            ---@diagnostic disable-next-line: unnecessary-if
             if found then
                 rxbuf:discard(found)
             else
@@ -148,7 +200,7 @@ function receiveCalibrationChunk(ptr)
                 end
             end
 
-            goto continue
+            goto next
         end
 
         -- Extract floats
@@ -186,10 +238,10 @@ function receiveCalibrationChunk(ptr)
         cal.mag_softiron[7] = f[15] -- Mirror of [5]
         cal.mag_softiron[8] = f[12]
 
-        printCalibration()
+        onNewCalibration()
         rxbuf:discard(PACKET_SIZE)
 
-        ::continue::
+        ::next::
     end
 end
 

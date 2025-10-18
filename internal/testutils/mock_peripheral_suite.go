@@ -134,9 +134,9 @@ func (s *MockBLEPeripheralSuite) SetupTest() {
 }
 
 // TearDownTest resets the peripheral builder after each test.
-// Called after each individual test method.
+// Called after each test method.
 func (s *MockBLEPeripheralSuite) TearDownTest() {
-	// Restore device factory to prevent nil pointer panics in subsequent tests
+	// Restore the device factory to prevent nil pointer panics in subsequent tests
 	if s.OriginalDeviceFactory != nil {
 		goble.DeviceFactory = s.OriginalDeviceFactory
 	}
@@ -153,7 +153,7 @@ func (s *MockBLEPeripheralSuite) TearDownSuite() {
 }
 
 // WithPeripheral returns the peripheral builder for fluent configuration.
-// Use this method to configure custom device profiles in test setup.
+// Use this method to configure custom device profiles in the test setup.
 func (s *MockBLEPeripheralSuite) WithPeripheral() *PeripheralDeviceBuilder {
 	if s.PeripheralBuilder == nil {
 		s.PeripheralBuilder = NewPeripheralDeviceBuilder()
@@ -167,7 +167,7 @@ func (s *MockBLEPeripheralSuite) WithPeripheral() *PeripheralDeviceBuilder {
 }
 
 // WithAdvertisements returns the peripheral builder configured for advertisements.
-// Use this method to set up scan advertisements in test setup.
+// Use this method to set up scan advertisements in the test setup.
 func (s *MockBLEPeripheralSuite) WithAdvertisements() *AdvertisementArrayBuilder[[]device.Advertisement] {
 
 	if s.AdvertisementsBuilder == nil {

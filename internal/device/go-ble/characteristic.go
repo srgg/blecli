@@ -220,9 +220,10 @@ func (c *BLECharacteristic) SetValue(value []byte) {
 	c.value = value
 }
 
-// Read reads the current value of the characteristic from the device with the default timeout
-func (c *BLECharacteristic) Read() ([]byte, error) {
-	return c.ReadWithTimeout(DefaultReadTimeout)
+// Read reads the current value of the characteristic from the device with the specified timeout.
+// This implements the device.CharacteristicReader interface.
+func (c *BLECharacteristic) Read(timeout time.Duration) ([]byte, error) {
+	return c.ReadWithTimeout(timeout)
 }
 
 // ReadWithTimeout reads the current value of the characteristic from the device with the specified timeout.
@@ -236,11 +237,19 @@ func (c *BLECharacteristic) ReadWithTimeout(timeout time.Duration) ([]byte, erro
 		return nil, fmt.Errorf("characteristic %s not initialized", c.uuid)
 	}
 
+	// Check read property before attempting read
+	readProps := c.properties.Read()
+	canRead := readProps != nil && readProps.Value() != 0
+
+	if !canRead {
+		return nil, fmt.Errorf("characteristic %s does not support read operations: %w", c.uuid, device.ErrUnsupported)
+	}
+
 	// Add connection mutex locking to prevent race condition
 	c.connection.connMutex.RLock()
 	if c.connection.client == nil {
 		c.connection.connMutex.RUnlock()
-		return nil, fmt.Errorf("not connected to device (characteristic %s)", c.uuid)
+		return nil, fmt.Errorf("read characteristic %s: %w", c.uuid, device.ErrNotConnected)
 	}
 	client := c.connection.client
 	c.connection.connMutex.RUnlock()
@@ -264,7 +273,65 @@ func (c *BLECharacteristic) ReadWithTimeout(timeout time.Duration) ([]byte, erro
 		}
 		return result.data, nil
 	case <-time.After(timeout):
-		return nil, fmt.Errorf("timeout reading characteristic %s after %v", c.uuid, timeout)
+		return nil, fmt.Errorf("read characteristic %s after %v: %w", c.uuid, timeout, device.ErrTimeout)
+	}
+}
+
+// Write writes data to the characteristic with the specified parameters.
+// This implements the device.CharacteristicWriter interface.
+// The withResponse parameter determines if write-with-response (true) or write-without-response (false) is used.
+func (c *BLECharacteristic) Write(data []byte, withResponse bool, timeout time.Duration) error {
+	if c.connection == nil {
+		return fmt.Errorf("no connection available for writing characteristic %s", c.uuid)
+	}
+
+	if c.BLEChar == nil {
+		return fmt.Errorf("characteristic %s not initialized", c.uuid)
+	}
+
+	// Check write properties before attempting write
+	writeProps := c.properties.Write()
+	writeNoRespProps := c.properties.WriteWithoutResponse()
+	canWrite := writeProps != nil && writeProps.Value() != 0
+	canWriteNoResponse := writeNoRespProps != nil && writeNoRespProps.Value() != 0
+
+	if !canWrite && !canWriteNoResponse {
+		return fmt.Errorf("characteristic %s does not support write operations: %w", c.uuid, device.ErrUnsupported)
+	}
+
+	// Add connection mutex locking to prevent race conditions
+	c.connection.connMutex.RLock()
+	if c.connection.client == nil {
+		c.connection.connMutex.RUnlock()
+		return fmt.Errorf("write characteristic %s: %w", c.uuid, device.ErrNotConnected)
+	}
+	client := c.connection.client
+	c.connection.connMutex.RUnlock()
+
+	// Acquire write mutex to serialize writes
+	c.connection.writeMutex.Lock()
+	defer c.connection.writeMutex.Unlock()
+
+	// Perform write with timeout to prevent indefinite blocking
+	type writeResult struct {
+		err error
+	}
+	resultCh := make(chan writeResult, 1)
+
+	groutine.Go(context.Background(), fmt.Sprintf("ble-characteristic-write-%s", c.uuid), func(ctx context.Context) {
+		// BLE client WriteCharacteristic: noResponse parameter is opposite of withResponse
+		err := client.WriteCharacteristic(c.BLEChar, data, !withResponse)
+		resultCh <- writeResult{err: err}
+	})
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			return fmt.Errorf("failed to write characteristic %s: %w", c.uuid, result.err)
+		}
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("write characteristic %s after %v: %w", c.uuid, timeout, device.ErrTimeout)
 	}
 }
 

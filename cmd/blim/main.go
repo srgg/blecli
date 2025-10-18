@@ -25,16 +25,17 @@ func formatVersion(ver string) string {
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "blim",
-	Short: "BLE CLI Tool for device scanning and communication",
-	Long: `A Bluetooth Low Energy (BLE) command-line tool for macOS that provides:
+	Short: "Bluetooth Low Energy CLI tool",
+	Long: `Bluetooth Low Energy (BLE) command-line tool that provides:
 
-- BLE device scanning
-- Connection management
-- Characteristic read/write operations
-- Notification subscriptions
-- PTY bridge for serial device emulation
+- Scan and discover nearby BLE devices
+- Inspect GATT services, characteristics, and descriptors
+- Read from and write to characteristics
+- Monitor characteristic changes via notifications
+- Bridge BLE devices to PTY for serial-like access
+- Lua scripting API for advanced automation and protocol handling; see bridge and inspect commands.
 
-Perfect for IoT development, device testing, and BLE protocol exploration.`,
+Ideal for firmware development, automated testing, and BLE protocols exploration.`,
 	Version: formatVersion(version),
 }
 
@@ -54,6 +55,8 @@ func init() {
 	rootCmd.AddCommand(scanCmd)
 	rootCmd.AddCommand(bridgeCmd)
 	rootCmd.AddCommand(inspectCmd)
+	rootCmd.AddCommand(readCmd)
+	rootCmd.AddCommand(writeCmd)
 
 	// Global flags
 	rootCmd.PersistentFlags().String("log-level", "", "Log level (debug, info, warn, error)")
