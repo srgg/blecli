@@ -181,7 +181,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *devic
 	dev, err := DeviceFactory()
 	if err != nil {
 		c.logger.WithField("error", err).Error("Failed to create BLE device")
-		return fmt.Errorf("failed to create BLE device: %w", err)
+		return fmt.Errorf("failed to create BLE device: %w", NormalizeError(err))
 	}
 	ble.SetDefaultDevice(dev)
 

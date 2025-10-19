@@ -1,6 +1,5 @@
 package main
 
-import "errors"
 
 // Command-level errors
 var (

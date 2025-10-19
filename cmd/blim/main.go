@@ -41,8 +41,8 @@ Ideal for firmware development, automated testing, and BLE protocols exploration
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		// Print error message with ERROR: prefix
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		// Print user-friendly error message
+		fmt.Fprintf(os.Stderr, "ERROR: %s\n", FormatUserError(err))
 		os.Exit(1)
 	}
 }
