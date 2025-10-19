@@ -219,7 +219,7 @@ func (d *BLEDevice) Connect(ctx context.Context, opts *device.ConnectOptions) er
 			// Type-assert to *BLECharacteristic to access BLEChar field
 			if bleChar, ok := char.(*BLECharacteristic); ok && bleChar.BLEChar != nil {
 				// Read the characteristic value
-				if data, err := d.connection.client.ReadCharacteristic(bleChar.BLEChar); err == nil && len(data) > 0 {
+				if data, err := d.connection.client.ReadCharacteristic(bleChar.BLEChar); NormalizeError(err) == nil && len(data) > 0 {
 					name := string(data)
 					name = strings.TrimRight(name, "\x00")
 					name = strings.TrimSpace(name)
@@ -373,7 +373,7 @@ func (d *BLEDevice) WriteToCharacteristic(uuid string, data []byte) error {
 			n = DefaultBLEWriteChunkSize
 		}
 		if err := client.WriteCharacteristic(char.BLEChar, data[:n], false); err != nil {
-			return fmt.Errorf("failed to write to characteristic %s in service %s: %w", uuid, serviceUUID, err)
+			return fmt.Errorf("failed to write to characteristic %s in service %s: %w", uuid, serviceUUID, NormalizeError(err))
 		}
 		data = data[n:]
 		time.Sleep(DefaultBLEWriteDelay)

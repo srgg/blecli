@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"testing"
 	"time"
 
 	blelib "github.com/go-ble/ble"
@@ -31,7 +32,7 @@ const (
 	DescriptorReadError
 )
 
-// UnmarshalYAML implements custom YAML unmarshaling for DescriptorReadBehavior.
+// UnmarshalYAML implements custom YAML unmarshalling for DescriptorReadBehavior.
 // Converts YAML string values to enum constants:
 //   - "timeout" → DescriptorReadTimeout
 //   - any other non-empty string → DescriptorReadError
@@ -82,14 +83,14 @@ type DeviceProfileConfig struct {
 	Services []ServiceConfig `json:"services"`
 }
 
-// PeripheralDeviceBuilder builds mocked BLE Device with full service/characteristic support.
+// PeripheralDeviceBuilder builds a mocked BLE Device with full service/characteristic support.
 //
 // Supports building complex BLE device profiles with services, characteristics, and descriptors.
 // Includes error simulation for descriptor reads (timeout, permission errors).
 //
 // # Basic Usage
 //
-//	builder := NewPeripheralDeviceBuilder()
+//	builder := NewPeripheralDeviceBuilder(t)
 //	builder.WithService("180d").
 //	    WithCharacteristic("2a37", "read,notify", []byte{60}).
 //	    WithDescriptor("2902", []byte{0x01, 0x00})
@@ -121,14 +122,18 @@ type DeviceProfileConfig struct {
 type PeripheralDeviceBuilder struct {
 	profile            DeviceProfileConfig
 	scanAdvertisements []device.Advertisement
+	t                  *testing.T    // Testing instance for automatic cleanup registration
+	disconnectChan     chan struct{} // Disconnect channel for graceful disconnect testing
 }
 
-// NewPeripheralDeviceBuilder creates a new peripheral device builder
-func NewPeripheralDeviceBuilder() *PeripheralDeviceBuilder {
+// NewPeripheralDeviceBuilder creates a new peripheral device builder.
+// The testing instance t is required for automatic cleanup of disconnect channels via t.Cleanup().
+func NewPeripheralDeviceBuilder(t *testing.T) *PeripheralDeviceBuilder {
 	return &PeripheralDeviceBuilder{
 		profile: DeviceProfileConfig{
 			Services: []ServiceConfig{},
 		},
+		t: t,
 	}
 }
 
@@ -151,7 +156,7 @@ func WithReadDelay(delay time.Duration) CharacteristicOption {
 	}
 }
 
-// WithWriteDelay sets the write delay for timeout testing
+// WithWriteDelay sets the writing delay for timeout testing
 func WithWriteDelay(delay time.Duration) CharacteristicOption {
 	return func(c *CharacteristicConfig) {
 		c.WriteDelay = delay
@@ -232,14 +237,14 @@ func (b *PeripheralDeviceBuilder) WithScanAdvertisements() *AdvertisementArrayBu
 	arrayBuilder := NewAdvertisementArrayBuilder[*PeripheralDeviceBuilder]()
 	arrayBuilder.parent = b
 	arrayBuilder.buildFunc = func(parent *PeripheralDeviceBuilder, ads []device.Advertisement) *PeripheralDeviceBuilder {
-		// Add ble.Advertisements directly to scan advertisements
+		// Add ble.Advertisements are directly to scan advertisements
 		parent.scanAdvertisements = append(parent.scanAdvertisements, ads...)
 		return parent
 	}
 	return arrayBuilder
 }
 
-// parseCharacteristicProperties converts property string to ble.Property flags
+// parseCharacteristicProperties converts the property string to BLE.Property flags
 func parseCharacteristicProperties(props string) blelib.Property {
 	if props == "" {
 		return blelib.CharRead | blelib.CharWrite | blelib.CharNotify // default
@@ -276,7 +281,8 @@ func parseCharacteristicProperties(props string) blelib.Property {
 	return property
 }
 
-// Build creates a mocked ble.Device with the configured profile
+// Build creates a mocked ble.Device with the configured profile.
+// Automatically registers cleanup via b.t.Cleanup() for the disconnect channel created by this call.
 func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 	mockDevice := &blemocks.MockDevice{}
 	mockClient := &blemocks.MockClient{}
@@ -322,6 +328,23 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 	mockDevice.On("Dial", mock.Anything, mock.Anything).Return(mockClient, nil)
 	mockClient.On("DiscoverProfile", true).Return(mockProfile, nil)
 	mockClient.On("CancelConnection").Return(nil)
+
+	// Set up disconnect channel expectation for graceful disconnect handling.
+	// Each Build() creates a new disconnect channel to support the monitoring goroutine
+	// in connection.go (lines 300-316), which detects CoreBluetooth disconnections.
+	// Store the channel in the builder for test access via GetDisconnectChannel().
+	// Register cleanup to close the channel and prevent goroutine leak.
+	b.disconnectChan = make(chan struct{})
+	b.t.Cleanup(func() {
+		// Close channel if not already closed (idempotent cleanup)
+		select {
+		case <-b.disconnectChan:
+			// Channel already closed
+		default:
+			close(b.disconnectChan)
+		}
+	})
+	mockClient.On("Disconnected").Return((<-chan struct{})(b.disconnectChan))
 
 	// Set up subscription expectations for all characteristics
 	for svcIdx, svc := range bleServices {
@@ -382,7 +405,7 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 		}
 	}
 
-	// Set up scan expectations - simulate discovering the configured advertisements
+	// Set up scan expectations using configured advertisements
 	mockDevice.On("Scan", mock.Anything, mock.Anything, mock.MatchedBy(func(handler blelib.AdvHandler) bool {
 		// Simulate discovering all configured advertisements
 		for _, devAdv := range b.scanAdvertisements {
@@ -444,4 +467,11 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 // GetServices returns the configured services for use in creating connection options
 func (b *PeripheralDeviceBuilder) GetServices() []ServiceConfig {
 	return b.profile.Services
+}
+
+// GetDisconnectChannel returns the disconnect channel created by Build().
+// This channel can be closed by tests to simulate a graceful disconnect from CoreBluetooth.
+// Returns nil if Build() has not been called yet.
+func (b *PeripheralDeviceBuilder) GetDisconnectChannel() chan struct{} {
+	return b.disconnectChan
 }

@@ -13,7 +13,7 @@ import (
 )
 
 // AdvertisementBuilder builds mocked BLE advertisements for testing.
-// It provides a fluent API for configuring a mock device.Advertisement instances
+// It provides a fluent API for configuring MockAdvertisement instances
 // with explicit field tracking to ensure only set fields have mock expectations.
 type AdvertisementBuilder struct {
 	name        string
@@ -255,25 +255,25 @@ func (b *AdvertisementBuilder) Build() *devicemocks.MockAdvertisement {
 	return adv
 }
 
-// BuildDevice creates a device.Device from the built advertisement.
-// Convenience method for creating Device instances in tests.
+// BuildDevice creates a device.Device by building a fresh MockAdvertisement internally.
+// Convenience method for creating Device instances in tests without needing to call Build() separately.
 func (b *AdvertisementBuilder) BuildDevice(logger *logrus.Logger) device.Device {
 	adv := b.Build()
 	return goble.NewBLEDeviceFromAdvertisement(adv, logger)
 }
 
-// AdvertisementArrayBuilder builds arrays of ble.Advertisement with generic parent support.
+// AdvertisementArrayBuilder builds arrays of device.Advertisement with generic parent support.
 // It provides a fluent API for creating multiple advertisements with different configurations
 // and supports returning to parent builders through the generic type parameter T.
 //
 // The builder supports two main patterns:
-//   - WithAdvertisements(ads...) adds pre-existing ble.Advertisement(s) to the array
+//   - WithAdvertisements(ads...) adds pre-existing device.Advertisement(s) to the array
 //   - WithNewAdvertisement() returns an AdvertisementBuilder for fluent configuration
 //
 // Type Parameter:
 //
 //	T: The type to return from Build(). Common values:
-//	  - []ble.Advertisement for standalone usage
+//	  - []device.Advertisement for standalone usage
 //	  - *PeripheralDeviceBuilder for integration with device builders
 //
 // Example usage with pre-existing advertisements:
@@ -282,22 +282,22 @@ func (b *AdvertisementBuilder) BuildDevice(logger *logrus.Logger) device.Device 
 //	ad1 := NewAdvertisementBuilder().WithName("Device1").Build()
 //	ad2 := NewAdvertisementBuilder().WithName("Device2").Build()
 //
-//	// Build array with mix of pre-existing and new advertisements
-//	advertisements := NewAdvertisementArrayBuilder[[]ble.Advertisement]().
+//	// Build an array with mix of pre-existing and new advertisements
+//	advertisements := NewAdvertisementArrayBuilder[[]device.Advertisement]().
 //	    WithAdvertisements(ad1, ad2). // Add multiple at once
 //	    WithNewAdvertisement().
 //	        WithName("HeartRate3").
 //	        WithAddress("11:22:33:44:55:66").
 //	        WithRSSI(-55).
 //	        Build().
-//	    Build() // Returns []ble.Advertisement
+//	    Build() // Returns []device.Advertisement
 //
 // Integration with PeripheralDeviceBuilder:
 //
 //	// Create advertisements separately
-//	existingAds := []ble.Advertisement{ad1, ad2}
+//	existingAds := []device.Advertisement{ad1, ad2}
 //
-//	peripheral := NewPeripheralDeviceBuilder().
+//	peripheral := NewPeripheralDeviceBuilder(t).
 //	    WithScanAdvertisements().
 //	        WithAdvertisements(existingAds...). // Spread slice
 //	        WithNewAdvertisement().WithName("Device3").Build().

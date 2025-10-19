@@ -20,7 +20,7 @@ import (
 // ScanTestSuite provides testify/suite for proper test isolation
 type ScanTestSuite struct {
 	suite.Suite
-	originalDeviceFactory func() (device.ScanningDevice, error)
+	originalDeviceFactory func() (device.Scanner, error)
 	originalFlags         struct {
 		scanDuration    time.Duration
 		scanFormat      string
@@ -46,11 +46,11 @@ func (suite *ScanTestSuite) SetupSuite() {
 
 	// Save the original BLE device factory and inject mock
 	suite.originalDeviceFactory = devicefactory.DeviceFactory
-	devicefactory.DeviceFactory = func() (device.ScanningDevice, error) {
+	devicefactory.DeviceFactory = func() (device.Scanner, error) {
 		mockDevice := &blemocks.MockDevice{}
 		// Set up expectations for the Scan method
 		mockDevice.On("Scan", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		// Wrap mock device to implement device.ScanningDevice interface
+		// Wrap mock device to implement device.Scanner interface
 		return &bleScanningDeviceMock{Device: mockDevice}, nil
 	}
 }
@@ -88,36 +88,42 @@ func (suite *ScanTestSuite) SetupTest() {
 }
 
 func (suite *ScanTestSuite) TestScanCmd_Help() {
+	// GOAL: Verify scan command displays help text with all flags
+	//
+	// TEST SCENARIO: Execute scan --help → returns success → output contains description and flag documentation
+
 	cmd := &cobra.Command{}
 	cmd.AddCommand(scanCmd)
 
-	// Test help output
 	output, err := executeCommand(cmd, "scan", "--help")
-	suite.Require().NoError(err)
+	suite.Require().NoError(err, "help command MUST succeed")
 
-	suite.Assert().Contains(output, "Scan for and display Bluetooth Low Energy devices")
-	suite.Assert().Contains(output, "--duration")
-	suite.Assert().Contains(output, "--format")
+	suite.Assert().Contains(output, "Scan for and display Bluetooth Low Energy devices", "help MUST contain command description")
+	suite.Assert().Contains(output, "--duration", "help MUST document --duration flag")
+	suite.Assert().Contains(output, "--format", "help MUST document --format flag")
 }
 
 func (suite *ScanTestSuite) TestScanCmd_InvalidFormat() {
-	// Reset flags to ensure a clean state
+	// GOAL: Verify scan command rejects invalid format values
+	//
+	// TEST SCENARIO: Execute scan with invalid format → returns error → error message lists valid formats
+
 	resetScanFlags()
 
 	cmd := &cobra.Command{}
 	cmd.AddCommand(scanCmd)
 
-	// Test invalid format - should fail during flag parsing or validation
-	output, err := executeCommand(cmd, "scan", "--format=invalid")
-	if err == nil {
-		suite.T().Logf("No error returned. Output was: %s", output)
-		suite.T().Logf("scanFormat value is: %s", scanFormat)
-	}
-	suite.Require().Error(err)
-	suite.Assert().Contains(err.Error(), "invalid format 'invalid': must be one of [table json]")
+	_, err := executeCommand(cmd, "scan", "--format=invalid")
+
+	suite.Require().Error(err, "invalid format MUST return error")
+	suite.Assert().Contains(err.Error(), "invalid format 'invalid': must be one of [table json]", "error MUST list valid formats")
 }
 
 func (suite *ScanTestSuite) TestScanCmd_Flags() {
+	// GOAL: Verify scan command parses all flags correctly
+	//
+	// TEST SCENARIO: Execute scan with various flags → parsing succeeds → flag values set correctly
+
 	tests := []struct {
 		name     string
 		args     []string
@@ -166,47 +172,41 @@ func (suite *ScanTestSuite) TestScanCmd_Flags() {
 
 	for _, tt := range tests {
 		suite.Run(tt.name, func() {
-			// Reset flags to defaults
 			resetScanFlags()
 
 			cmd := &cobra.Command{}
 			cmd.AddCommand(scanCmd)
 
-			// Parse flags without executing
 			cmd.SetArgs(tt.args)
-			err := cmd.Execute()
+			_ = cmd.Execute() // Error expected in test environment, but flags are still parsed
 
-			// We expect an error because BLE scanning will fail in the test environment
-			// but we can still check that flags were parsed correctly
-			if err != nil {
-				// This is expected in the test environment
-			}
-
-			// Check flag values
 			for key, expected := range tt.expected {
 				switch key {
 				case "duration":
-					suite.Assert().Equal(expected, scanDuration)
+					suite.Assert().Equal(expected, scanDuration, "duration flag MUST be parsed correctly")
 				case "format":
-					suite.Assert().Equal(expected, scanFormat)
+					suite.Assert().Equal(expected, scanFormat, "format flag MUST be parsed correctly")
 				case "no-duplicates":
-					suite.Assert().Equal(expected, scanNoDuplicate)
+					suite.Assert().Equal(expected, scanNoDuplicate, "no-duplicates flag MUST be parsed correctly")
 				case "watch":
-					suite.Assert().Equal(expected, scanWatch)
+					suite.Assert().Equal(expected, scanWatch, "watch flag MUST be parsed correctly")
 				case "services":
-					suite.Assert().Equal(expected, scanServices)
+					suite.Assert().Equal(expected, scanServices, "services flag MUST be parsed correctly")
 				}
 			}
 		})
 	}
 }
 
-// TestScanCmd_WatchMode tests watch mode with timeout
+// TestScanCmd_WatchMode tests watch mode starts and runs indefinitely
 func (suite *ScanTestSuite) TestScanCmd_WatchMode() {
+	// GOAL: Verify watch mode starts and runs indefinitely (doesn't exit on its own)
+	//
+	// TEST SCENARIO: Execute scan --watch → still running after 3s → watch flag set correctly
+
 	cmd := &cobra.Command{}
 	cmd.AddCommand(scanCmd)
 
-	// Run watch mode in a goroutine with a timeout
 	done := make(chan error)
 
 	go func() {
@@ -214,24 +214,23 @@ func (suite *ScanTestSuite) TestScanCmd_WatchMode() {
 		done <- err
 	}()
 
-	// Wait for either completion or timeout
 	select {
-	case err := <-done:
-		// Command completed (shouldn't happen in normal watch mode)
-		suite.Assert().NoError(err)
+	case <-done:
+		suite.Fail("watch mode MUST NOT exit without interrupt")
 	case <-time.After(3 * time.Second):
-		// Timeout - this is expected for watch mode, test passes
-		suite.Assert().True(scanWatch, "Watch flag should be set")
-		// Watch mode is running as expected - test passes
+		// Expected - watch mode still running after 3 seconds
+		suite.Assert().True(scanWatch, "watch flag MUST be set")
 	}
 }
 
 func TestDisplayDevicesTable(t *testing.T) {
-	// Create devices using mock advertisements
+	// GOAL: Verify displayDevicesTable outputs without errors
+	//
+	// TEST SCENARIO: Display table with multiple devices → completes without error
+
 	logger := logrus.New()
 	logger.SetLevel(logrus.PanicLevel)
 
-	// Device 1
 	device1 := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": "Test Device 1",
 			"address": "AA:BB:CC:DD:EE:FF",
@@ -243,7 +242,6 @@ func TestDisplayDevicesTable(t *testing.T) {
 			"connectable": true
 		}`).BuildDevice(logger)
 
-	// Device 2
 	device2 := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": "",
 			"address": "11:22:33:44:55:66",
@@ -260,22 +258,19 @@ func TestDisplayDevicesTable(t *testing.T) {
 		{Device: device2, LastSeen: time.Now()},
 	}
 
-	// In a real implementation, we would redirect stdout
-	_ = bytes.Buffer{} // Placeholder for output capture
-
 	err := displayDevicesTable(devices)
-	assert.NoError(t, err)
-
-	// In a real test, we would check the buffer output
-	// For now, just verify the function doesn't panic
+	assert.NoError(t, err, "displayDevicesTable MUST NOT return error")
 }
 
 func TestDisplayDevicesJSON(t *testing.T) {
-	// Create device using mock advertisement
+	// GOAL: Verify device properties are accessible for JSON serialization
+	//
+	// TEST SCENARIO: Create device from JSON → access properties → values match input
+
 	logger := logrus.New()
 	logger.SetLevel(logrus.PanicLevel)
 
-	device1 := testutils.CreateMockAdvertisementFromJSON(`{
+	dev := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": "Test Device",
 			"address": "AA:BB:CC:DD:EE:FF",
 			"rssi": -45,
@@ -285,15 +280,17 @@ func TestDisplayDevicesJSON(t *testing.T) {
 			"serviceData": null,
 			"txPower": 0
 		}`).BuildDevice(logger)
-	devices := []device.Device{device1}
 
-	// Test that we can access device properties
-	assert.Equal(t, "AA:BB:CC:DD:EE:FF", devices[0].ID())
-	assert.Equal(t, "Test Device", devices[0].Name())
-	assert.Equal(t, -45, devices[0].RSSI())
+	assert.Equal(t, "AA:BB:CC:DD:EE:FF", dev.ID(), "device ID MUST match")
+	assert.Equal(t, "Test Device", dev.Name(), "device name MUST match")
+	assert.Equal(t, -45, dev.RSSI(), "device RSSI MUST match")
 }
 
 func TestDevice_DisplayName_Integration(t *testing.T) {
+	// GOAL: Verify device Name() returns correct display name
+	//
+	// TEST SCENARIO: Create devices with various names → Name() returns name or address fallback
+
 	logger := logrus.New()
 	logger.SetLevel(logrus.PanicLevel)
 
@@ -325,7 +322,7 @@ func TestDevice_DisplayName_Integration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			device := testutils.CreateMockAdvertisementFromJSON(`{
+			dev := testutils.CreateMockAdvertisementFromJSON(`{
 				"name": "%s",
 				"address": "%s",
 				"rssi": -50,
@@ -336,24 +333,23 @@ func TestDevice_DisplayName_Integration(t *testing.T) {
 				"txPower": 0
 			}`, tt.localName, tt.address).BuildDevice(logger)
 
-			result := device.Name()
-			assert.Equal(t, tt.expected, result)
+			result := dev.Name()
+			assert.Equal(t, tt.expected, result, "Name() MUST return expected value")
 		})
 	}
 }
 
 func TestClearScreen(t *testing.T) {
-	// Test that clearScreen doesn't panic
+	// GOAL: Verify clearScreen executes without panicking
+	//
+	// TEST SCENARIO: Call clearScreen() → completes without panic
+
 	assert.NotPanics(t, func() {
 		clearScreen()
-	})
+	}, "clearScreen MUST NOT panic")
 }
 
 // Helper functions for testing
-
-func setupTest(t *testing.T) {
-	resetScanFlags()
-}
 
 func resetScanFlags() {
 	scanDuration = 10 * time.Second

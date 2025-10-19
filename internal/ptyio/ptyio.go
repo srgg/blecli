@@ -606,7 +606,7 @@ func (p *ringPTY) Close() error {
 	case <-done:
 		// All goroutines exited cleanly
 	case <-time.After(timeout):
-		// Goroutine leak scenario: 1-3 goroutines didn't exit within timeout
+		// Goroutine leak scenario: 1-3 goroutines didn't exit within the timeout
 		//
 		// Root cause: Goroutines may be blocked in poll() or processing callbacks
 		// They WILL eventually exit (max pollTimeoutMs after context cancel + FD close)
@@ -636,7 +636,7 @@ func (p *ringPTY) Close() error {
 	return nil
 }
 
-// Stats returns instantaneous stats for monitoring.
+// Stats return instantaneous stats for monitoring.
 func (p *ringPTY) Stats() Stats {
 	return Stats{
 		WriteQueueLen:     int32(p.writeBuf.Length()),

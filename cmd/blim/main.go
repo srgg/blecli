@@ -61,6 +61,6 @@ func init() {
 	// Global flags
 	rootCmd.PersistentFlags().String("log-level", "", "Log level (debug, info, warn, error)")
 
-	// Add -v as short flag for --version
+	// Add -v as a short flag for --version
 	rootCmd.Flags().BoolP("version", "v", false, "Show version information")
 }

@@ -2,6 +2,7 @@ package goble
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -269,7 +270,19 @@ func (c *BLECharacteristic) ReadWithTimeout(timeout time.Duration) ([]byte, erro
 	select {
 	case result := <-resultCh:
 		if result.err != nil {
-			return nil, fmt.Errorf("failed to read characteristic %s: %w", c.uuid, result.err)
+			normalizedErr := NormalizeError(result.err)
+			// If disconnected, cancel connection context with cause to notify all subscribers
+			if errors.Is(normalizedErr, device.ErrNotConnected) {
+				if c.connection.cancel != nil {
+					if c.connection.logger != nil {
+						c.connection.logger.WithError(normalizedErr).Warn("Read detected disconnection, cancelling connection context")
+					}
+					c.connection.cancel(device.ErrNotConnected)
+				} else if c.connection.logger != nil {
+					c.connection.logger.Warn("Read detected disconnection but cancel func is nil")
+				}
+			}
+			return nil, fmt.Errorf("failed to read characteristic %s: %w", c.uuid, normalizedErr)
 		}
 		return result.data, nil
 	case <-time.After(timeout):
@@ -327,7 +340,12 @@ func (c *BLECharacteristic) Write(data []byte, withResponse bool, timeout time.D
 	select {
 	case result := <-resultCh:
 		if result.err != nil {
-			return fmt.Errorf("failed to write characteristic %s: %w", c.uuid, result.err)
+			normalizedErr := NormalizeError(result.err)
+			// If disconnected, cancel connection context with cause to notify all subscribers
+			if errors.Is(normalizedErr, device.ErrNotConnected) && c.connection.cancel != nil {
+				c.connection.cancel(device.ErrNotConnected)
+			}
+			return fmt.Errorf("failed to write characteristic %s: %w", c.uuid, normalizedErr)
 		}
 		return nil
 	case <-time.After(timeout):

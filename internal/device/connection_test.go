@@ -341,11 +341,10 @@ func (suite *ConnectionTestSuite) TestConnectionErrors() {
 	})
 
 	suite.Run("disconnect with nil connection returns ErrNotInitialized", func() {
-		// GOAL: Verify ErrNotInitialized is returned when connection is nil in Disconnect
+		// GOAL: Verify ErrNotInitialized is returned when the connection is nil in Disconnect
 		//
 		// TEST SCENARIO: Set connection to nil → attempt disconnect → ErrNotInitialized returned
 
-		// Use reflection to set connection to nil (should never happen in production)
 		suite.setDeviceConnectionToNil()
 
 		err := suite.device.Disconnect()
@@ -353,6 +352,56 @@ func (suite *ConnectionTestSuite) TestConnectionErrors() {
 		suite.Assert().Error(err, "disconnect MUST fail when connection is nil")
 		suite.Assert().ErrorIs(err, device.ErrNotInitialized, "error MUST be ErrNotInitialized")
 		suite.Assert().Contains(err.Error(), "disconnect", "error message MUST mention disconnect")
+	})
+}
+
+func (suite *ConnectionTestSuite) TestGracefulDisconnect() {
+	// GOAL: Verify graceful disconnect handling via CoreBluetooth Disconnected() channel
+	//
+	// TEST SCENARIO: Close disconnect channel → connection context cancelled → error cause is ErrNotConnected
+
+	suite.Run("CoreBluetooth disconnect cancels connection context", func() {
+		// GOAL: Verify that closing the Disconnected() channel cancels the connection context with ErrNotConnected
+		//
+		// TEST SCENARIO: Close disconnect channel → connection context Done() fires → context.Cause() is ErrNotConnected
+
+		suite.Require().True(suite.device.IsConnected(), "device MUST be connected before test")
+
+		// Get the connection context before disconnect
+		conn := suite.device.GetConnection()
+		suite.Require().NotNil(conn, "connection MUST exist")
+		ctx := conn.ConnectionContext()
+		suite.Require().NotNil(ctx, "connection context MUST exist")
+
+		// Verify context is not canceled yet
+		select {
+		case <-ctx.Done():
+			suite.Fail("context MUST NOT be cancelled before disconnect")
+		default:
+			// Expected: context still active
+		}
+
+		// Get the disconnect channel from the peripheral builder
+		disconnectChan := suite.PeripheralBuilder.GetDisconnectChannel()
+		suite.Require().NotNil(disconnectChan, "disconnect channel MUST exist after Build()")
+
+		// Simulate CoreBluetooth disconnect by closing the channel
+		close(disconnectChan)
+
+		// Give the monitoring goroutine a moment to process the disconnect
+		time.Sleep(10 * time.Millisecond)
+
+		// Verify connection context was canceled
+		select {
+		case <-ctx.Done():
+			// Expected: context canceled
+		case <-time.After(100 * time.Millisecond):
+			suite.Fail("connection context MUST be cancelled after disconnect channel closes")
+		}
+
+		// Verify the context was canceled with ErrNotConnected cause
+		cause := context.Cause(ctx)
+		suite.Assert().ErrorIs(cause, device.ErrNotConnected, "context MUST be cancelled with ErrNotConnected")
 	})
 }
 

@@ -43,7 +43,7 @@ type Scanner struct {
 	logger  *logrus.Logger
 
 	scanOptions *ScanOptions
-	scanDevice  device.ScanningDevice
+	scanDevice  device.Scanner
 }
 
 // ScanOptions configures scanning behavior

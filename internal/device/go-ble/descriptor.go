@@ -65,7 +65,7 @@ func newDescriptor(d *ble.Descriptor, client ble.Client, timeout time.Duration, 
 		// On Darwin/macOS, this works via CoreBluetooth's object-based API
 		// (doesn't require handles like Linux/Windows implementations).
 		data, err := client.ReadDescriptor(d)
-		resultCh <- readResult{data: data, err: err}
+		resultCh <- readResult{data: data, err: NormalizeError(err)}
 	})
 
 	select {

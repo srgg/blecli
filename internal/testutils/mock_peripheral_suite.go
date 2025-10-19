@@ -3,6 +3,7 @@
 package testutils
 
 import (
+	"testing"
 	"time"
 
 	blelib "github.com/go-ble/ble"
@@ -73,7 +74,7 @@ type MockBLEPeripheralSuite struct {
 	Logger *logrus.Logger // Structured logger for test output
 
 	// BLE device factory management
-	OriginalDeviceFactory func() (blelib.Device, error) // Backup of original factory
+	OriginalDeviceFactory func() (blelib.Device, error) // Backup of the original factory
 	TestTimeout           time.Duration                 // Default timeout for BLE operations
 
 	// Mock peripheral configuration
@@ -107,13 +108,8 @@ func (s *MockBLEPeripheralSuite) SetupSuite() {
 // SetupTest configures the mock device factory before each test.
 // Called before each test method.
 func (s *MockBLEPeripheralSuite) SetupTest() {
-	//// Initialize a fresh peripheral builder for each test
-	//s.PeripheralBuilder = NewPeripheralDeviceBuilder()
-
-	//s.resetDeviceFactory()
-
 	if s.PeripheralBuilder == nil {
-		s.PeripheralBuilder = createDefaultPeripheralBuilder()
+		s.PeripheralBuilder = createDefaultPeripheralBuilder(s.T())
 	}
 
 	if s.AdvertisementsBuilder != nil {
@@ -135,6 +131,7 @@ func (s *MockBLEPeripheralSuite) SetupTest() {
 
 // TearDownTest resets the peripheral builder after each test.
 // Called after each test method.
+// Note: Disconnect channel cleanup is handled automatically via t.Cleanup() registered in Build().
 func (s *MockBLEPeripheralSuite) TearDownTest() {
 	// Restore the device factory to prevent nil pointer panics in subsequent tests
 	if s.OriginalDeviceFactory != nil {
@@ -156,17 +153,14 @@ func (s *MockBLEPeripheralSuite) TearDownSuite() {
 // Use this method to configure custom device profiles in the test setup.
 func (s *MockBLEPeripheralSuite) WithPeripheral() *PeripheralDeviceBuilder {
 	if s.PeripheralBuilder == nil {
-		s.PeripheralBuilder = NewPeripheralDeviceBuilder()
+		s.PeripheralBuilder = NewPeripheralDeviceBuilder(s.T())
 	}
-
-	//// Set up auto-update of the device factory when the builder is modified
-	//s.updateDeviceFactory()
 
 	s.Logger.Debug("Peripheral configuration started")
 	return s.PeripheralBuilder
 }
 
-// WithAdvertisements returns the peripheral builder configured for advertisements.
+// WithAdvertisements returns the advertisement array builder for configuring scan advertisements.
 // Use this method to set up scan advertisements in the test setup.
 func (s *MockBLEPeripheralSuite) WithAdvertisements() *AdvertisementArrayBuilder[[]device.Advertisement] {
 
@@ -181,8 +175,8 @@ func (s *MockBLEPeripheralSuite) WithAdvertisements() *AdvertisementArrayBuilder
 // createDefaultPeripheralBuilder creates a default PeripheralDeviceBuilder for testing.
 // Returns a PeripheralDeviceBuilder that creates a mock peripheral with Battery Service (180F)
 // and Battery Level characteristic (2A19) set to 50%.
-func createDefaultPeripheralBuilder() *PeripheralDeviceBuilder {
-	return NewPeripheralDeviceBuilder().
+func createDefaultPeripheralBuilder(t *testing.T) *PeripheralDeviceBuilder {
+	return NewPeripheralDeviceBuilder(t).
 		FromJSON(`
 		{
 			"services": [

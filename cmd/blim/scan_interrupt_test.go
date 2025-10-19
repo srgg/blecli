@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-// bleScanningDeviceMock wraps ble.Device to implement device.ScanningDevice for tests
+// bleScanningDeviceMock wraps ble.Device to implement device.Scanner for tests
 type bleScanningDeviceMock struct {
 	blelib.Device
 }
@@ -33,6 +33,24 @@ func (s *bleScanningDeviceMock) Scan(ctx context.Context, allowDup bool, handler
 // ScanInterruptSuite tests scan interrupt behavior with proper mock setup
 type ScanInterruptSuite struct {
 	testutils.MockBLEPeripheralSuite
+}
+
+// createTestLogger creates a configured logger for tests
+func (s *ScanInterruptSuite) createTestLogger() *logrus.Logger {
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+	logger.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp:   true,
+		TimestampFormat: time.RFC3339,
+	})
+	return logger
+}
+
+// createTestScanner creates a scanner with test logger
+func (s *ScanInterruptSuite) createTestScanner() *scanner.Scanner {
+	scan, err := scanner.NewScanner(s.createTestLogger())
+	s.Require().NoError(err, "scanner creation MUST succeed")
+	return scan
 }
 
 // SetupTest configures mock advertisements for scan tests
@@ -71,7 +89,7 @@ func (s *ScanInterruptSuite) SetupTest() {
 	// to add blocking Scan behavior for interrupt testing
 	bleDevice := s.PeripheralBuilder.Build()
 
-	// Wrap in a custom mock that blocks until context is cancelled
+	// Wrap in a custom mock that blocks until context is canceled
 	blockingDevice := &blockingScanDevice{
 		Device: bleDevice,
 		adv1:   adv1,
@@ -79,52 +97,60 @@ func (s *ScanInterruptSuite) SetupTest() {
 	}
 
 	// Update the device factory with the blocking device
-	devicefactory.DeviceFactory = func() (device.ScanningDevice, error) {
+	devicefactory.DeviceFactory = func() (device.Scanner, error) {
 		return blockingDevice, nil
 	}
 }
 
-// blockingScanDevice wraps a BLE device to make Scan block until context is cancelled
+// blockingScanDevice wraps a BLE device to make a Scan block until the context is canceled
 // This is needed for interrupt testing
 type blockingScanDevice struct {
 	blelib.Device
 	adv1, adv2 device.Advertisement
 }
 
-// Scan sends advertisements then blocks until context is cancelled
+// Scan sends advertisements, then blocks until context is canceled
 func (b *blockingScanDevice) Scan(ctx context.Context, allowDup bool, handler func(device.Advertisement)) error {
 	// Send the advertisements first
 	handler(b.adv1)
 	handler(b.adv2)
 
-	// Then block until context is cancelled (simulating ongoing scan)
+	// Then block until context is canceled (simulating ongoing scan)
 	<-ctx.Done()
 	return ctx.Err()
 }
 
+// hangingScanDevice simulates Bluetooth being disabled mid-scan by emitting one ad then hanging
+type hangingScanDevice struct {
+	adv device.Advertisement
+}
+
+// Scan emits one advertisement then returns Bluetooth error (simulating Bluetooth disabled)
+func (h *hangingScanDevice) Scan(ctx context.Context, allowDup bool, handler func(device.Advertisement)) error {
+	// Emit one advertisement (scan starts working)
+	handler(h.adv)
+
+	// Then return Bluetooth error (simulating Bluetooth disabled mid-scan)
+	time.Sleep(10 * time.Millisecond) // Small delay to simulate the scan working briefly
+	return device.ErrBluetoothOff
+}
+
 // TestSingleScanInterrupt tests that a single scan with duration responds to SIGINT
 func (s *ScanInterruptSuite) TestSingleScanInterrupt() {
-	// Create logger
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
-	logger.SetFormatter(&logrus.TextFormatter{
-		FullTimestamp:   true,
-		TimestampFormat: time.RFC3339,
-	})
+	// GOAL: Verify single scan with duration exits cleanly on SIGINT
+	//
+	// TEST SCENARIO: Start timed scan → send SIGINT after 100ms → scan completes within 5s
 
-	// Create configuration
+	logger := s.createTestLogger()
+	scan := s.createTestScanner()
+
 	cfg := &scanConfig{
 		scanTimeout:  20 * time.Second,
 		outputFormat: "table",
 	}
 
-	// Create scanner
-	scan, err := scanner.NewScanner(logger)
-	s.Require().NoError(err, "Failed to create BLE scanner")
-
-	// Create scan options for a longer duration to reproduce the hanging issue
 	scanOpts := &scanner.ScanOptions{
-		Duration:        20 * time.Second, // Use default CLI duration
+		Duration:        20 * time.Second,
 		DuplicateFilter: true,
 	}
 
@@ -133,49 +159,35 @@ func (s *ScanInterruptSuite) TestSingleScanInterrupt() {
 		done <- runSingleScan(scan, scanOpts, cfg, logger)
 	}()
 
-	// Wait longer to allow more BLE devices to be discovered (more mutex activity)
 	time.Sleep(100 * time.Millisecond)
 
-	// Send interrupt signal to ourselves
 	process, _ := os.FindProcess(os.Getpid())
 	process.Signal(syscall.SIGINT)
 
-	// Wait for completion with timeout
 	select {
-	case err := <-done:
-		if err != nil {
-			s.T().Logf("Single scan returned error (expected for interrupt): %v", err)
-		} else {
-			s.T().Logf("Single scan completed successfully")
-		}
+	case <-done:
+		// Test passes - scan completed (either with or without error is acceptable for interrupt)
 	case <-time.After(5 * time.Second):
-		s.Fail("Single scan did not complete within timeout")
+		s.Fail("single scan MUST complete within 5s after SIGINT")
 	}
 }
 
 // TestWatchModeInterrupt tests that watch mode responds to SIGINT
 func (s *ScanInterruptSuite) TestWatchModeInterrupt() {
-	// Create logger
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
-	logger.SetFormatter(&logrus.TextFormatter{
-		FullTimestamp:   true,
-		TimestampFormat: time.RFC3339,
-	})
+	// GOAL: Verify watch mode exits cleanly on SIGINT without hanging
+	//
+	// TEST SCENARIO: Start watch mode → send SIGINT after 100ms → watch mode completes within 5s
 
-	// Create configuration
+	logger := s.createTestLogger()
+	scan := s.createTestScanner()
+
 	cfg := &scanConfig{
 		scanTimeout:  0,
 		outputFormat: "table",
 	}
 
-	// Create scanner
-	scan, err := scanner.NewScanner(logger)
-	s.Require().NoError(err, "Failed to create BLE scanner")
-
-	// Create scan options for indefinite scan
 	watchOpts := &scanner.ScanOptions{
-		Duration:        0, // Indefinite
+		Duration:        0,
 		DuplicateFilter: true,
 	}
 
@@ -184,47 +196,33 @@ func (s *ScanInterruptSuite) TestWatchModeInterrupt() {
 		done <- runWatchMode(scan, watchOpts, cfg, logger)
 	}()
 
-	// Wait a bit, then send an interrupt
 	time.Sleep(100 * time.Millisecond)
 
-	// Send interrupt signal to ourselves
 	process, _ := os.FindProcess(os.Getpid())
 	process.Signal(syscall.SIGINT)
 
-	// Wait for completion with timeout
 	select {
-	case err := <-done:
-		if err != nil {
-			s.T().Logf("Watch mode returned error (expected for interrupt): %v", err)
-		} else {
-			s.T().Logf("Watch mode completed successfully")
-		}
+	case <-done:
+		// Test passes - watch mode completed (either with or without error is acceptable for interrupt)
 	case <-time.After(5 * time.Second):
-		s.Fail("Watch mode did not complete within timeout - this indicates a hang!")
+		s.Fail("watch mode MUST complete within 5s after SIGINT")
 	}
 }
 
 // TestWatchModeHangAfterScanFinishes tests that watch mode runs indefinitely and responds to an interrupt
 func (s *ScanInterruptSuite) TestWatchModeHangAfterScanFinishes() {
-	// Create logger
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
-	logger.SetFormatter(&logrus.TextFormatter{
-		FullTimestamp:   true,
-		TimestampFormat: time.RFC3339,
-	})
+	// GOAL: Verify watch mode runs indefinitely until interrupted
+	//
+	// TEST SCENARIO: Start watch mode → verify still running after 100ms → send SIGINT → completes within 5s
 
-	// Create configuration
+	logger := s.createTestLogger()
+	scan := s.createTestScanner()
+
 	cfg := &scanConfig{
 		scanTimeout:  0,
 		outputFormat: "table",
 	}
 
-	// Create scanner
-	scan, err := scanner.NewScanner(logger)
-	s.Require().NoError(err, "Failed to create BLE scanner")
-
-	// Create scan options - watch mode runs indefinitely regardless of duration
 	shortOpts := &scanner.ScanOptions{
 		DuplicateFilter: true,
 	}
@@ -234,32 +232,75 @@ func (s *ScanInterruptSuite) TestWatchModeHangAfterScanFinishes() {
 		done <- runWatchMode(scan, shortOpts, cfg, logger)
 	}()
 
-	// Watch mode should run indefinitely until interrupted
-	// Wait at least 100ms to ensure it's running properly
 	time.Sleep(100 * time.Millisecond)
 
 	select {
 	case err := <-done:
-		s.Fail("Watch mode unexpectedly exited without interrupt: %v", err)
+		s.Fail("watch mode MUST NOT exit without interrupt: %v", err)
 	default:
-		// Good - still running as expected
-		s.T().Logf("Watch mode correctly running indefinitely")
+		// Expected - still running
 	}
 
-	// Now interrupt it to ensure it responds properly
 	process, _ := os.FindProcess(os.Getpid())
 	process.Signal(syscall.SIGINT)
 
-	// Watch mode should respond to the interrupt
+	select {
+	case <-done:
+		// Test passes - watch mode completed after interrupt
+	case <-time.After(5 * time.Second):
+		s.Fail("watch mode MUST complete within 5s after SIGINT")
+	}
+}
+
+// TestWatchModeBluetoothDisabled verifies watch mode detects stalled scans when Bluetooth is disabled
+func (s *ScanInterruptSuite) TestWatchModeBluetoothDisabled() {
+	// GOAL: Verify watch mode exits with error when Bluetooth disabled mid-scan
+	//
+	// TEST SCENARIO: Bluetooth disabled during scan → returns ErrBluetoothOff → watch mode exits with error
+
+	adv := testutils.NewAdvertisementBuilder().
+		WithAddress("AA:BB:CC:DD:EE:FF").
+		WithName("TestDevice").
+		WithRSSI(-50).
+		WithConnectable(true).
+		WithManufacturerData([]byte{}).
+		WithNoServiceData().
+		WithServices().
+		WithTxPower(0).
+		Build()
+
+	hangingDev := &hangingScanDevice{adv: adv}
+
+	devicefactory.DeviceFactory = func() (device.Scanner, error) {
+		return hangingDev, nil
+	}
+
+	logger := s.createTestLogger()
+	scan := s.createTestScanner()
+
+	cfg := &scanConfig{
+		scanTimeout:  0,
+		outputFormat: "table",
+	}
+
+	watchOpts := &scanner.ScanOptions{
+		Duration:        0,
+		DuplicateFilter: true,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runWatchMode(scan, watchOpts, cfg, logger)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
 	select {
 	case err := <-done:
-		if err != nil {
-			s.T().Logf("Watch mode completed with error (expected for interrupt): %v", err)
-		} else {
-			s.T().Logf("Watch mode completed successfully after interrupt")
-		}
-	case <-time.After(5 * time.Second):
-		s.Fail("Watch mode did not respond to interrupt within timeout!")
+		s.Assert().Error(err, "watch mode MUST return error when Bluetooth disabled")
+		s.Assert().ErrorIs(err, device.ErrBluetoothOff, "error MUST be device.ErrBluetoothOff")
+	case <-time.After(500 * time.Millisecond):
+		s.Fail("watch mode MUST exit within 500ms when Bluetooth disabled")
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -77,35 +76,10 @@ var (
 
 // Operation errors
 var (
-	ErrTimeout     = errors.New("timeout")
-	ErrUnsupported = errors.New("unsupported")
+	ErrTimeout      = errors.New("timeout")
+	ErrUnsupported  = errors.New("unsupported")
+	ErrBluetoothOff = errors.New("bluetooth is turned off")
 )
-
-// NormalizeError maps known go-ble error strings to structured ConnectionError types.
-// It ensures consistent handling even if the upstream library changes messages slightly.
-// Returns wrapped errors to preserve original context.
-func NormalizeError(err error) error {
-	if err == nil {
-		return nil
-	}
-
-	msg := err.Error()
-	switch {
-	case containsIgnoreCase(msg, "device not connected"):
-		return fmt.Errorf("%w: %v", ErrNotConnected, err)
-	case containsIgnoreCase(msg, "device already connected"):
-		return fmt.Errorf("%w: %v", ErrAlreadyConnected, err)
-	case containsIgnoreCase(msg, "connection is not initialized"):
-		return fmt.Errorf("%w: %v", ErrNotInitialized, err)
-	default:
-		return err
-	}
-}
-
-// containsIgnoreCase checks substring case-insensitively
-func containsIgnoreCase(s, substr string) bool {
-	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
-}
 
 // IsConnectionState reports whether err is a ConnectionError with the given state
 func IsConnectionState(err error, state ConnectionState) bool {
@@ -116,8 +90,8 @@ func IsConnectionState(err error, state ConnectionState) bool {
 	return false
 }
 
-// ScanningDevice represents a BLE device capable of scanning for advertisements
-type ScanningDevice interface {
+// Scanner represents a BLE device capable of scanning for advertisements
+type Scanner interface {
 	Scan(ctx context.Context, allowDup bool, handler func(Advertisement)) error
 }
 
@@ -163,17 +137,13 @@ type Device interface {
 	GetConnection() Connection
 }
 
-type PeripheralDevice interface {
-	Device
-	ScanningDevice
-}
-
 // Connection represents a BLE connection interface
 type Connection interface {
 	Services() []Service
 	GetService(uuid string) (Service, error)
 	GetCharacteristic(service, uuid string) (Characteristic, error)
 	Subscribe(opts []*SubscribeOptions, pattern StreamMode, maxRate time.Duration, callback func(*Record)) error
+	ConnectionContext() context.Context // Returns context that's cancelled when connection errors occur
 }
 
 // Service represents a GATT service interface

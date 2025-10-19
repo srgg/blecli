@@ -10,7 +10,7 @@ import (
 
 // configureLogger creates a logger with the appropriate log level based on flags.
 // It respects both --log-level and --verbose flags, with --log-level taking precedence.
-// Returns configured logger or error if log-level is invalid.
+// Returns a configured logger or error if the log-level is invalid.
 func configureLogger(cmd *cobra.Command, verboseFlagName string) (*logrus.Logger, error) {
 	// Default to panic level (essentially silent for normal operations)
 	logLevel := logrus.PanicLevel

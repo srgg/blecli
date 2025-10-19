@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -77,7 +78,7 @@ func runRead(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("UUID required: provide as second argument or via --char/--desc flag")
 	}
 
-	// Parse watch interval if watch flag is set
+	// Parse watch interval if a watch flag is set
 	var watchInterval time.Duration
 	if readWatch != "" {
 		var err error
@@ -284,7 +285,17 @@ func watchChar(ctx context.Context, dev device.Device, char device.Characteristi
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			performSingleRead(char, desc, logger)
+			if err := performSingleRead(char, desc, logger); err != nil {
+				// Check if the connection was lost by checking for ErrNotConnected in the error chain
+				if errors.Is(err, device.ErrNotConnected) {
+					return ErrConnectionLost
+				}
+
+				// Log other errors but continue watching
+				logger.WithError(err).Warn("Failed to read characteristic, continuing...")
+			} else {
+				logger.Debug("Read operation successful")
+			}
 		}
 	}
 }

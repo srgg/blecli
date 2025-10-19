@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -143,11 +144,40 @@ func runBridge(cmd *cobra.Command, args []string) error {
 		}
 
 		// Script executed successfully, and subscriptions are active
-		// Wait for context cancellation (Ctrl+C) to keep the bridge running
-		<-ctx.Done()
-		logger.Info("Bridge shutting down...")
+		// Monitor connection context for errors (e.g., disconnection)
+		dev := b.GetLuaAPI().GetDevice()
+		conn := dev.GetConnection()
+		if conn == nil {
+			return nil, fmt.Errorf("no connection available")
+		}
 
-		return nil, nil
+		connCtx := conn.ConnectionContext()
+		if connCtx == nil {
+			return nil, fmt.Errorf("connection context not available")
+		}
+
+		logger.WithField("context_ptr", fmt.Sprintf("%p", connCtx)).Info("Bridge monitoring started, waiting for connection errors or shutdown...")
+
+		select {
+		case <-connCtx.Done():
+			// Connection context canceled - check the cause
+			cause := context.Cause(connCtx)
+
+			if cause != nil {
+				if errors.Is(cause, device.ErrNotConnected) {
+					// Connection lost
+					return nil, ErrConnectionLost
+				}
+
+				// Connection context canceled with unknown cause")
+				return nil, fmt.Errorf("connection error: %w", cause)
+			}
+			// Context canceled without cause (normal shutdown)
+			return nil, nil
+		case <-ctx.Done():
+			logger.Info("Bridge shutting down...")
+			return nil, nil
+		}
 	}
 
 	// Run the bridge with callback

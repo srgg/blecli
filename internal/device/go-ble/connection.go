@@ -13,6 +13,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/bledb"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/groutine"
 )
 
 // ----------------------------
@@ -38,18 +39,7 @@ const (
 //
 //nolint:revive // DeviceFactory name is intentional for test mocking as device.DeviceFactory
 var DeviceFactory = func() (ble.Device, error) {
-	dev, err := darwin.NewDevice()
-	if err != nil {
-		// Wrap Bluetooth state errors with clearer messages
-		if strings.Contains(err.Error(), "central manager has invalid state") {
-			if strings.Contains(err.Error(), "have=4") { // StatePoweredOff
-				return nil, fmt.Errorf("bluetooth is turned off - please enable Bluetooth and retry")
-			}
-			return nil, fmt.Errorf("bluetooth is not ready - %w", err)
-		}
-		return nil, err
-	}
-	return dev, nil
+	return darwin.NewDevice()
 }
 
 // ----------------------------
@@ -69,7 +59,7 @@ type BLEConnection struct {
 
 	subMgr *SubscriptionManager
 	ctx    context.Context
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 }
 
 // GetCharacteristic retrieves a characteristic by service and characteristic UUID.
@@ -291,7 +281,28 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *devic
 	c.isConnected = true
 
 	// Set up context for subscriptions - derive from caller's context to tie lifecycle
-	c.ctx, c.cancel = context.WithCancel(ctx)
+	// Use WithCancelCause to propagate connection errors to all subscribers
+	c.ctx, c.cancel = context.WithCancelCause(ctx)
+
+	// Monitor go-ble client Disconnected() channel (Darwin-specific)
+	// This detects when CoreBluetooth reports disconnection
+	if darwinClient, ok := client.(interface{ Disconnected() <-chan struct{} }); ok {
+		groutine.Go(context.Background(), "ble-connection-monitor", func(monitorCtx context.Context) {
+			select {
+			case <-darwinClient.Disconnected():
+				if c.logger != nil {
+					c.logger.Warn("CoreBluetooth reported disconnection, cancelling connection context")
+				}
+				if c.cancel != nil {
+					c.cancel(device.ErrNotConnected)
+				}
+			case <-c.ctx.Done():
+				// Connection context already cancelled, exit monitor
+			}
+		})
+	} else if c.logger != nil {
+		c.logger.Debug("Client does not support Disconnected() channel (non-Darwin platform?)")
+	}
 
 	// Count total characteristics across all services
 	totalChars := 0
@@ -356,7 +367,7 @@ func (c *BLEConnection) Disconnect() error {
 		if c.logger != nil {
 			c.logger.Debug("Cancelling connection context...")
 		}
-		cancel()
+		cancel(nil) // Normal disconnection, no error cause
 	}
 
 	// Wait for all subscription goroutines to exit via manager
@@ -416,8 +427,8 @@ func (c *BLEConnection) tryUnsubscribe(client ble.Client, char *BLECharacteristi
 		return nil
 	}
 
-	err1 := client.Unsubscribe(char.BLEChar, false) // notify
-	err2 := client.Unsubscribe(char.BLEChar, true)  // indicate
+	err1 := NormalizeError(client.Unsubscribe(char.BLEChar, false)) // notify
+	err2 := NormalizeError(client.Unsubscribe(char.BLEChar, true))  // indicate
 
 	// Only return error if both notify and indicate failed
 	if err1 != nil && err2 != nil {
@@ -465,7 +476,22 @@ func (c *BLEConnection) unsubscribeAllCharacteristics(client ble.Client, service
 func (c *BLEConnection) IsConnected() bool {
 	c.connMutex.RLock()
 	defer c.connMutex.RUnlock()
-	return c.isConnectedInternal()
+	connected := c.isConnectedInternal()
+	if c.logger != nil {
+		c.logger.WithFields(logrus.Fields{
+			"connected": connected,
+			"client":    c.client != nil,
+			"flag":      c.isConnected,
+		}).Debug("IsConnected() called")
+	}
+	return connected
+}
+
+// ConnectionContext returns the connection context that is cancelled when the connection
+// experiences errors or is disconnected. All subscribers should monitor this context.
+// Returns nil if not connected.
+func (c *BLEConnection) ConnectionContext() context.Context {
+	return c.ctx
 }
 
 // validateSubscribeOptions validates service and characteristics existence and notification support
@@ -575,9 +601,9 @@ func (c *BLEConnection) BLESubscribe(opts *device.SubscribeOptions) error {
 	for charUUID, char := range characteristicsCopy {
 		// create a local variable to capture the current char
 		charCapture := char
-		err := client.Subscribe(char.BLEChar, false, func(data []byte) {
+		err := NormalizeError(client.Subscribe(char.BLEChar, false, func(data []byte) {
 			c.ProcessCharacteristicNotification(charCapture, data)
-		})
+		}))
 
 		if err != nil {
 			subscriptionErrors = append(subscriptionErrors, fmt.Sprintf("%s: %v", charUUID, err))

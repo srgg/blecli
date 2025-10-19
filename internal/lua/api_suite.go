@@ -793,7 +793,7 @@ func (suite *LuaApiSuite) RunTestCases(testCases ...TestCase) {
 		// Configure peripheral BEFORE SetupSubTest runs (which calls createLuaApi)
 		if len(testCase.Peripheral) > 0 {
 			// Reset peripheral builder to clean state for this test case
-			suite.PeripheralBuilder = testutils.NewPeripheralDeviceBuilder()
+			suite.PeripheralBuilder = testutils.NewPeripheralDeviceBuilder(suite.T())
 
 			// Explicit peripheral configuration provided - use it with full builder support
 			for _, svcCfg := range testCase.Peripheral {

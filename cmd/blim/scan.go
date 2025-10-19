@@ -17,6 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/srg/blim/internal/device"
+	"github.com/srg/blim/internal/groutine"
 	"github.com/srg/blim/scanner"
 )
 
@@ -195,13 +196,17 @@ func runWatchMode(s *scanner.Scanner, opts *scanner.ScanOptions, cfg *scanConfig
 	devicesMap := make(map[string]scanner.DeviceEntry)
 
 	// Run the blocking scan in a goroutine
-	scanErrCh := make(chan error, 1)
-	go func() {
-		var err error
-		devicesMap, err = s.Scan(ctx, opts, nil) // No progress callback for watch mode
-		scanErrCh <- err
-		close(scanErrCh)
-	}()
+	// Use a result channel to avoid reassigning devicesMap to nil on error
+	type scanResult struct {
+		devices map[string]scanner.DeviceEntry
+		err     error
+	}
+	scanResultCh := make(chan scanResult, 1)
+	groutine.Go(ctx, "scan-watch", func(gctx context.Context) {
+		devices, err := s.Scan(ctx, opts, nil) // No progress callback for watch mode
+		scanResultCh <- scanResult{devices: devices, err: err}
+		close(scanResultCh)
+	})
 
 	printDeviceTable := func(err error) error {
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -222,13 +227,19 @@ func runWatchMode(s *scanner.Scanner, opts *scanner.ScanOptions, cfg *scanConfig
 		case <-ctx.Done():
 			return printDeviceTable(ctx.Err())
 
-		case err := <-scanErrCh:
+		case result := <-scanResultCh:
 			// Scan completed
-			// If there's a real error (not just cancellation), exit
-			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				return printDeviceTable(err)
+
+			// Only update devicesMap if the scan succeeded (no error or just cancellation)
+			if result.err == nil || errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded) {
+				if result.devices != nil {
+					devicesMap = result.devices
+				}
+				// Continue watching events indefinitely
+			} else {
+				// Real error occurred (e.g., Bluetooth disabled) - exit watch mode
+				return printDeviceTable(result.err)
 			}
-			// Otherwise, scan completed normally - continue watching events indefinitely
 		case <-ticker.C:
 			// Periodic check to ensure ctx.Done() gets a chance to be processed
 			// This prevents channel starvation from the busy events channel
