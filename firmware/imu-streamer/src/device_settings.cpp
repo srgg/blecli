@@ -2,7 +2,7 @@
 #include "log.h"
 #include <Preferences.h>
 #include <ArduinoJson.h>
-#include <math.h>
+#include <cmath>
 #include <mutex>    // for std::call_once
 
 // ============================================================================
@@ -30,7 +30,7 @@ DeviceSettings::ImplLock::ImplLock() noexcept : owns_lock_(false) {
   if (g_settings_mutex.try_lock_for(MUTEX_TIMEOUT)) {
     owns_lock_ = true;
   } else {
-    LOG_WARN("Settings mutex timeout (%dms) - blocking until acquired...\n",
+    BLIM_LOG_WARN("Settings mutex timeout (%dms) - blocking until acquired...\n",
              static_cast<int>(MUTEX_TIMEOUT.count()));
 
     auto block_start = std::chrono::steady_clock::now();
@@ -39,7 +39,7 @@ DeviceSettings::ImplLock::ImplLock() noexcept : owns_lock_(false) {
 
     auto block_duration = std::chrono::steady_clock::now() - block_start;
     auto block_ms = std::chrono::duration_cast<std::chrono::milliseconds>(block_duration).count();
-    LOG_WARN("Settings mutex acquired after blocking for %lld ms\n",
+    BLIM_LOG_WARN("Settings mutex acquired after blocking for %lld ms\n",
              static_cast<long long>(block_ms));
   }
 }
@@ -131,7 +131,7 @@ namespace nvs {
     prefs.end();
 
     if (bytes_read != sizeof(NvsBlob)) {
-      LOG_WARN("NVS data size mismatch (%u bytes, expected %u)\n",
+      BLIM_LOG_WARN("NVS data size mismatch (%u bytes, expected %u)\n",
                static_cast<unsigned int>(bytes_read),
                static_cast<unsigned int>(sizeof(NvsBlob)));
       return false;
@@ -139,7 +139,7 @@ namespace nvs {
 
     uint32_t computed_crc = compute_crc32(&blob.data, sizeof(blob.data));
     if (computed_crc != blob.checksum) {
-      LOG_ERROR("NVS checksum mismatch (computed 0x%08X, stored 0x%08X) - flash corruption detected\n",
+      BLIM_LOG_ERROR("NVS checksum mismatch (computed 0x%08X, stored 0x%08X) - flash corruption detected\n",
                 static_cast<unsigned int>(computed_crc),
                 static_cast<unsigned int>(blob.checksum));
       return false;
@@ -162,11 +162,11 @@ namespace nvs {
     prefs.end();
 
     if (bytes_written == sizeof(NvsBlob)) {
-      LOG_INFO("Configuration saved to NVS (CRC32: 0x%08X)\n",
+      BLIM_LOG_INFO("Configuration saved to NVS (CRC32: 0x%08X)\n",
                static_cast<unsigned int>(blob.checksum));
       return true;
     } else {
-      LOG_ERROR("Failed to save configuration to NVS (wrote %u of %u bytes)\n",
+      BLIM_LOG_ERROR("Failed to save configuration to NVS (wrote %u of %u bytes)\n",
                 static_cast<unsigned int>(bytes_written),
                 static_cast<unsigned int>(sizeof(NvsBlob)));
       return false;
@@ -184,10 +184,10 @@ const DeviceSettings& DeviceSettings::get() {
 
   std::call_once(init_flag, []() {
     if (nvs::load_from_nvs(&g_settings_impl)) {
-      LOG_INFO("Configuration loaded from NVS (stream: %s)\n",
+      BLIM_LOG_INFO("Configuration loaded from NVS (stream: %s)\n",
                g_settings_impl.apply_calibration ? "calibrated" : "raw");
     } else {
-      LOG_WARN("No saved configuration found, using factory defaults\n");
+      BLIM_LOG_WARN("No saved configuration found, using factory defaults\n");
       nvs::apply_factory_defaults(&g_settings_impl);
     }
   });
@@ -325,7 +325,7 @@ DeviceSettingsBuilder& DeviceSettingsBuilder::set_mag_soft_iron(const float matr
 DeviceSettingsBuilder& DeviceSettingsBuilder::set_apply_calibration(bool apply) {
   working_copy_->apply_calibration = apply;
   dirty_flags_ |= DIRTY_APPLY_CALIBRATION;
-  LOG_INFO("IMU stream: %s\n", apply ? "CALIBRATED" : "RAW");
+  BLIM_LOG_INFO("IMU stream: %s\n", apply ? "CALIBRATED" : "RAW");
   return *this;
 }
 
@@ -334,14 +334,14 @@ DeviceSettingsBuilder& DeviceSettingsBuilder::set_apply_calibration(bool apply) 
 DeviceSettingsBuilder& DeviceSettingsBuilder::merge_json(const char* json) {
   if (!json) {
     set_error("JSON input is null");
-    LOG_ERROR("JSON input is null\n");
+    BLIM_LOG_ERROR("JSON input is null\n");
     return *this;
   }
 
   size_t json_len = strlen(json);
   if (json_len > MAX_JSON_SIZE) {
     set_error("JSON too large");
-    LOG_ERROR("JSON size (%u bytes) exceeds BLE limit (%u bytes)\n",
+    BLIM_LOG_ERROR("JSON size (%u bytes) exceeds BLE limit (%u bytes)\n",
               static_cast<unsigned int>(json_len),
               static_cast<unsigned int>(MAX_JSON_SIZE));
     return *this;
@@ -356,14 +356,14 @@ DeviceSettingsBuilder& DeviceSettingsBuilder::merge_json(const char* json) {
 
   if (error) {
     set_error("JSON parse error");
-    LOG_ERROR("JSON parse error: %s\n", error.c_str());
+    BLIM_LOG_ERROR("JSON parse error: %s\n", error.c_str());
     return *this;
   }
 
   if (doc["settings"]["apply_calibration"].is<bool>()) {
     working_copy_->apply_calibration = doc["settings"]["apply_calibration"];
     dirty_flags_ |= DIRTY_APPLY_CALIBRATION;
-    LOG_DEBUG("  ✓ Updated settings.apply_calibration: %s\n",
+    BLIM_LOG_DEBUG("  ✓ Updated settings.apply_calibration: %s\n",
               working_copy_->apply_calibration ? "true" : "false");
   }
 
@@ -377,7 +377,7 @@ DeviceSettingsBuilder& DeviceSettingsBuilder::merge_json(const char* json) {
           working_copy_->imu_cal.accel_zerog[i] = zerog[i];
         }
         dirty_flags_ |= DIRTY_ACCEL_ZEROG;
-        LOG_DEBUG("  ✓ Updated imu.accel.zerog\n");
+        BLIM_LOG_DEBUG("  ✓ Updated imu.accel.zerog\n");
       }
     }
 
@@ -388,7 +388,7 @@ DeviceSettingsBuilder& DeviceSettingsBuilder::merge_json(const char* json) {
           working_copy_->imu_cal.gyro_zerorate[i] = zerorate[i];
         }
         dirty_flags_ |= DIRTY_GYRO_ZERORATE;
-        LOG_DEBUG("  ✓ Updated imu.gyro.zerorate\n");
+        BLIM_LOG_DEBUG("  ✓ Updated imu.gyro.zerorate\n");
       }
     }
 
@@ -402,14 +402,14 @@ DeviceSettingsBuilder& DeviceSettingsBuilder::merge_json(const char* json) {
             working_copy_->imu_cal.mag_hardiron[i] = hardiron[i];
           }
           dirty_flags_ |= DIRTY_MAG_HARDIRON;
-          LOG_DEBUG("  ✓ Updated imu.mag.hardiron\n");
+          BLIM_LOG_DEBUG("  ✓ Updated imu.mag.hardiron\n");
         }
       }
 
       if (mag["field"].is<float>()) {
         working_copy_->imu_cal.mag_field = mag["field"];
         dirty_flags_ |= DIRTY_MAG_FIELD;
-        LOG_DEBUG("  ✓ Updated imu.mag.field\n");
+        BLIM_LOG_DEBUG("  ✓ Updated imu.mag.field\n");
       }
 
       if (mag["softiron"].is<JsonArray>()) {
@@ -424,7 +424,7 @@ DeviceSettingsBuilder& DeviceSettingsBuilder::merge_json(const char* json) {
         }
         if (idx == 9) {
           dirty_flags_ |= DIRTY_MAG_SOFTIRON;
-          LOG_DEBUG("  ✓ Updated imu.mag.softiron\n");
+          BLIM_LOG_DEBUG("  ✓ Updated imu.mag.softiron\n");
         }
       }
     }
@@ -437,15 +437,15 @@ DeviceSettingsBuilder& DeviceSettingsBuilder::reset(bool factoryReset) {
   if (factoryReset) {
     nvs::apply_factory_defaults(working_copy_);
     dirty_flags_ = 0xFF;
-    LOG_INFO("Factory defaults applied (not saved)\n");
+    BLIM_LOG_INFO("Factory defaults applied (not saved)\n");
   } else {
     if (nvs::load_from_nvs(working_copy_)) {
       dirty_flags_ = 0xFF;
-      LOG_INFO("Settings reloaded from NVS\n");
+      BLIM_LOG_INFO("Settings reloaded from NVS\n");
     } else {
       nvs::apply_factory_defaults(working_copy_);
       dirty_flags_ = 0xFF;
-      LOG_WARN("No saved settings, applying factory defaults\n");
+      BLIM_LOG_INFO("No saved settings, applying factory defaults\n");
     }
   }
   return *this;
@@ -492,7 +492,7 @@ bool DeviceSettingsBuilder::validate() {
 
 bool DeviceSettingsBuilder::commit(bool save) {
   if (error_ != nullptr) {
-    LOG_ERROR("Commit failed: %s\n", error_);
+    BLIM_LOG_ERROR("Commit failed: %s\n", error_);
     return false;
   }
 
@@ -532,7 +532,7 @@ const char* DeviceSettingsBuilder::get_last_error() const noexcept {
 
 size_t DeviceSettings::to_json(char* buffer, size_t buffer_size) const {
   if (!buffer || buffer_size == 0) {
-    LOG_ERROR("to_json: invalid buffer (nullptr or zero size)\n");
+    BLIM_LOG_ERROR("to_json: invalid buffer (nullptr or zero size)\n");
     return 0;
   }
 
@@ -582,7 +582,7 @@ size_t DeviceSettings::to_json(char* buffer, size_t buffer_size) const {
 
   size_t required = measureJson(doc);
   if (required >= buffer_size) {
-    LOG_ERROR("toJson: buffer too small (need %u bytes, have %u)\n",
+    BLIM_LOG_ERROR("toJson: buffer too small (need %u bytes, have %u)\n",
               static_cast<unsigned int>(required + 1),
               static_cast<unsigned int>(buffer_size));
     return 0;
@@ -591,7 +591,7 @@ size_t DeviceSettings::to_json(char* buffer, size_t buffer_size) const {
   size_t written = serializeJson(doc, buffer, buffer_size);
 
   if (written != required) {
-    LOG_ERROR("toJson: serialization size mismatch (expected %u, got %u)\n",
+    BLIM_LOG_ERROR("toJson: serialization size mismatch (expected %u, got %u)\n",
               static_cast<unsigned int>(required),
               static_cast<unsigned int>(written));
     buffer[0] = '\0';

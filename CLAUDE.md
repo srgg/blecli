@@ -5,6 +5,8 @@
 **MANDATORY**: At EVERY new Claude Code session start:
 
 1. Initialize Serena MCP
+2. Critical: Read and ALWAYS follow critical-engineering-practices.md
+3. Read language/context-specific standards based on work type (see below)
 2. Read `mandatory-standards-code.md` (ALWAYS required)
 3. Read language/context-specific standards based on work type (see below)
 

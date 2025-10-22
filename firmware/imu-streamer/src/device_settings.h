@@ -22,7 +22,6 @@
      float mag_field;           // µT
      float mag_softiron[9];     // 3×3 row-major
  };
-
 // Forward declarations
 struct DeviceSettingsImpl;
 class DeviceSettingsBuilder;
