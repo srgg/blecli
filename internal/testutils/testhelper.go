@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/sirupsen/logrus"
+	devicemocks "github.com/srg/blim/internal/testutils/mocks/device"
 )
 
 type TestHelper struct {
@@ -26,7 +27,7 @@ func NewTestHelper(t *testing.T) *TestHelper {
 	}
 }
 
-func CreateMockAdvertisementFromJSON(jsonStrFmt string, args ...interface{}) *AdvertisementBuilder {
+func CreateMockAdvertisementFromJSON(jsonStrFmt string, args ...interface{}) *AdvertisementBuilder[*devicemocks.MockAdvertisement] {
 	return NewAdvertisementBuilder().FromJSON(jsonStrFmt, args...)
 }
 

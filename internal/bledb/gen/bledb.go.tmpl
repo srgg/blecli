@@ -45,6 +45,51 @@ var (
 		{{printf "%q" .UUID}}: {{printf "%q" .Name}},
 {{- end}}
 	}
+
+	// Characteristic Presentation Format field lookups (static data from Bluetooth Core Spec)
+	formatMap = map[uint8]string{
+		0x01: "boolean",
+		0x02: "uint2",
+		0x03: "uint4",
+		0x04: "uint8",
+		0x05: "uint12",
+		0x06: "uint16",
+		0x07: "uint24",
+		0x08: "uint32",
+		0x09: "uint48",
+		0x0A: "uint64",
+		0x0B: "uint128",
+		0x0C: "sint8",
+		0x0D: "sint12",
+		0x0E: "sint16",
+		0x0F: "sint24",
+		0x10: "sint32",
+		0x11: "sint48",
+		0x12: "sint64",
+		0x13: "sint128",
+		0x14: "float32",
+		0x15: "float64",
+		0x16: "sfloat16",
+		0x17: "float16",
+		0x18: "duint16",
+		0x19: "utf8",
+		0x1A: "utf16",
+		0x1B: "struct",
+	}
+
+	namespaceMap = map[uint8]string{
+		0x00: "Unknown",
+		0x01: "Bluetooth SIG Assigned Numbers",
+	}
+
+	// Bluetooth SIG appearance values (GAP characteristic 0x2A01)
+	// Encodes device category and subcategory for external appearance classification
+	// Maps uint16 appearance code (e.g., 0x0040) to human-readable name
+	appearanceCodeMap = map[uint16]string{
+{{- range .AppearanceEntries}}
+		0x{{.UUID}}: {{printf "%q" .Name}},
+{{- end}}
+	}
 )
 
 // LookupService returns the name for a given service UUID.
@@ -95,6 +140,38 @@ func LookupUnit(uuid string) string {
 		return name
 	}
 	return lookupInBleakUUIDs(normalized)
+}
+
+// LookupFormat returns the human-readable name for a Characteristic Presentation Format type code.
+// Used with the Format field in PresentationFormat descriptor (0x2904).
+// If the format code is not recognized, returns an empty string.
+func LookupFormat(formatCode uint8) string {
+	if name, ok := formatMap[formatCode]; ok {
+		return name
+	}
+	return ""
+}
+
+// LookupNamespace returns the name of a descriptor namespace.
+// Used with the Namespace field in PresentationFormat descriptor (0x2904).
+// If the namespace code is not recognized, returns an empty string.
+func LookupNamespace(namespaceCode uint8) string {
+	if name, ok := namespaceMap[namespaceCode]; ok {
+		return name
+	}
+	return ""
+}
+
+// LookupAppearanceCode returns the human-readable name for a GAP Appearance code.
+// The Appearance characteristic (0x2A01) encodes device type as a 16-bit value:
+// upper 10 bits = category, lower 6 bits = subcategory.
+// Accepts appearance code as uint16 (e.g., 0x0040 for Generic Phone).
+// If the appearance code is not recognized, returns an empty string.
+func LookupAppearanceCode(code uint16) string {
+	if name, ok := appearanceCodeMap[code]; ok {
+		return name
+	}
+	return ""
 }
 
 // lookupInBleakUUIDs returns the name for a given UUID

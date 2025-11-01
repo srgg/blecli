@@ -568,7 +568,7 @@ func TestParseDescriptorValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ParseDescriptorValue(tt.uuid, tt.data)
+			result, err := ParseDescriptorValue(tt.uuid, tt.data, nil)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -600,7 +600,7 @@ func TestParseDescriptorValue_NormalizedUUID(t *testing.T) {
 
 	for _, uuid := range uuidVariants {
 		t.Run("uuid_variant_"+uuid, func(t *testing.T) {
-			result, err := ParseDescriptorValue(uuid, testData)
+			result, err := ParseDescriptorValue(uuid, testData, nil)
 			require.NoError(t, err)
 			assert.IsType(t, &ClientConfig{}, result)
 

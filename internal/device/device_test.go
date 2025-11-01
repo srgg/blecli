@@ -6,20 +6,35 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/srg/blim/internal/device"
 	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
 
-func TestNewDevice(t *testing.T) {
-	helper := testutils.NewTestHelper(t)
-	ja := testutils.NewJSONAsserter(t)
+// DeviceBasicTestSuite tests device functionality that doesn't require device connection
+type DeviceBasicTestSuite struct {
+	DeviceTestSuite
 
-	t.Run("creates device with all advertisement data", func(t *testing.T) {
-		device := testutils.CreateMockAdvertisementFromJSON(`{
+	//suite.Suite
+	helper *testutils.TestHelper
+	ja     *testutils.JSONAsserter
+}
+
+func (suite *DeviceBasicTestSuite) SetupTest() {
+	suite.helper = testutils.NewTestHelper(suite.T())
+	suite.ja = testutils.NewJSONAsserter(suite.T())
+
+	suite.DeviceTestSuite.SetupTest()
+}
+
+func (suite *DeviceBasicTestSuite) TestNewDevice() {
+	// GOAL: Verify device creation from advertisement data with all fields populated correctly
+	//
+	// TEST SCENARIO: Advertisement with complete data → device created → all fields match expected values
+
+	suite.Run("creates device with all advertisement data", func() {
+		dev := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": "Test Device",
 			"address": "AA:BB:CC:DD:EE:FF",
 			"rssi": -45,
@@ -28,9 +43,9 @@ func TestNewDevice(t *testing.T) {
 			"serviceData": {"180F":[100]},
 			"txPower": 4,
 			"connectable": true
-		}`).BuildDevice(helper.Logger)
+		}`).BuildDevice(suite.helper.Logger)
 
-		actualJSON := testutils.DeviceToJSON(device)
+		actualJSON := testutils.DeviceToJSON(dev)
 
 		const expectedJSON = `{
 			"id": "AA:BB:CC:DD:EE:FF",
@@ -44,14 +59,11 @@ func TestNewDevice(t *testing.T) {
 			"services": [{"uuid": "180a", "characteristics": []}, {"uuid": "180f", "characteristics": []}]
 		}`
 
-		ja.Assert(actualJSON, expectedJSON)
+		suite.ja.Assert(actualJSON, expectedJSON)
 	})
 
-	t.Run("handles missing optional data", func(t *testing.T) {
-		//device := helper.createDevice("", "11:22:33:44:55:66", -70).
-		//	withConnectable(false).
-		//	build()
-		device := testutils.CreateMockAdvertisementFromJSON(`{
+	suite.Run("handles missing optional data", func() {
+		dev := testutils.CreateMockAdvertisementFromJSON(`{
 			"name": null,
 			"address": "11:22:33:44:55:66",
 			"rssi": -70,
@@ -60,10 +72,10 @@ func TestNewDevice(t *testing.T) {
 			"services": null,
 			"txPower": null,
 			"connectable": false
-		}`).BuildDevice(helper.Logger)
+		}`).BuildDevice(suite.helper.Logger)
 
-		actualJSON := testutils.DeviceToJSON(device)
-		ja.Assert(actualJSON, `{
+		actualJSON := testutils.DeviceToJSON(dev)
+		suite.ja.Assert(actualJSON, `{
 			"id": "11:22:33:44:55:66",
 			"name": "11:22:33:44:55:66",
 			"rssi": -70,
@@ -77,8 +89,10 @@ func TestNewDevice(t *testing.T) {
 	})
 }
 
-func TestDevice_Update(t *testing.T) {
-	ja := testutils.NewJSONAsserter(t)
+func (suite *DeviceBasicTestSuite) TestDeviceUpdate() {
+	// GOAL: Verify device updates correctly from new advertisement data
+	//
+	// TEST SCENARIO: Device created → advertisement update applied → all fields reflect new values
 
 	// Create initial device
 	// Note: All BLE advertisement fields must be present because device creation
@@ -95,9 +109,8 @@ func TestDevice_Update(t *testing.T) {
 			"connectable": true
 		}`).Build()
 
-	logger := logrus.New()
-	device := devicefactory.NewDeviceFromAdvertisement(initialAdv, logger)
-	initialAdv.AssertExpectations(t)
+	dev := devicefactory.NewDeviceFromAdvertisement(initialAdv, suite.helper.Logger)
+	initialAdv.AssertExpectations(suite.T())
 
 	// Create update advertisement
 	updateAdv := testutils.CreateMockAdvertisementFromJSON(`{
@@ -110,11 +123,10 @@ func TestDevice_Update(t *testing.T) {
 	}`).Build()
 
 	// Update device
-	device.Update(updateAdv)
+	dev.Update(updateAdv)
 
 	// Verify updates
-	//actualJSON := testutils.DeviceToJSON(device)
-	ja.AssertDevice(device, `{
+	suite.ja.AssertDevice(dev, `{
 			"id": "AA:BB:CC:DD:EE:FF",
 			"name": "Updated Name",
 			"address": "AA:BB:CC:DD:EE:FF",
@@ -126,10 +138,14 @@ func TestDevice_Update(t *testing.T) {
 			"connectable": true
 	}`)
 
-	updateAdv.AssertExpectations(t)
+	updateAdv.AssertExpectations(suite.T())
 }
 
-func TestDevice_ExtractNameFromManufacturerData(t *testing.T) {
+func (suite *DeviceBasicTestSuite) TestExtractNameFromManufacturerData() {
+	// GOAL: Verify device name extraction from manufacturer data with various data patterns
+	//
+	// TEST SCENARIO: Advertisement with manufacturer data → device created → name extracted correctly based on data content
+
 	tests := []struct {
 		name         string
 		manufData    []byte
@@ -188,7 +204,7 @@ func TestDevice_ExtractNameFromManufacturerData(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		suite.Run(tt.name, func() {
 			adv := testutils.CreateMockAdvertisementFromJSON(`{
 				"name": null,
 				"address": "AA:BB:CC:DD:EE:FF",
@@ -200,17 +216,18 @@ func TestDevice_ExtractNameFromManufacturerData(t *testing.T) {
 				"connectable": true
 			}`, testutils.MustJSON(tt.manufData)).Build()
 
-			logger := logrus.New()
-			dev := devicefactory.NewDeviceFromAdvertisement(adv, logger)
+			dev := devicefactory.NewDeviceFromAdvertisement(adv, suite.helper.Logger)
 
-			//bleDevice := dev.(*BLEDevice)
-			//result := bleDevice.extractNameFromManufacturerData(tt.manufData)
-			assert.Equal(t, tt.expectedName, dev.Name())
+			suite.Assert().Equal(tt.expectedName, dev.Name())
 		})
 	}
 }
 
-func TestDevice_NameResolutionPrecedence(t *testing.T) {
+func (suite *DeviceBasicTestSuite) TestNameResolutionPrecedence() {
+	// GOAL: Verify device name resolution follows the correct precedence order
+	//
+	// TEST SCENARIO: Advertisements with different name sources → device name resolved → precedence rules applied correctly
+
 	tests := []struct {
 		name         string
 		localName    string
@@ -235,15 +252,14 @@ func TestDevice_NameResolutionPrecedence(t *testing.T) {
 		{
 			name:         "Uses address when no name available",
 			localName:    "",
-			manufData:    []byte{0x00, 0x01, 0x02, 0x03}, // No readable name
+			manufData:    []byte{0x00, 0x01, 0x02, 0x03},
 			expectedName: "AA:BB:CC:DD:EE:FF",
 			description:  "Should fall back to address when no name available",
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create mock advertisement
+		suite.Run(tt.name, func() {
 			adv := testutils.CreateMockAdvertisementFromJSON(`{
 				"name": %s,
 				"address": "AA:BB:CC:DD:EE:FF",
@@ -258,15 +274,16 @@ func TestDevice_NameResolutionPrecedence(t *testing.T) {
 				testutils.MustJSON(tt.manufData),
 			).Build()
 
-			logger := logrus.New()
-			dev := devicefactory.NewDeviceFromAdvertisement(adv, logger)
-			assert.Equal(t, tt.expectedName, dev.Name(), tt.description)
+			dev := devicefactory.NewDeviceFromAdvertisement(adv, suite.helper.Logger)
+			suite.Assert().Equal(tt.expectedName, dev.Name(), tt.description)
 		})
 	}
 }
 
-func TestDevice_NameUpdateBehavior(t *testing.T) {
-	ja := testutils.NewJSONAsserter(t)
+func (suite *DeviceBasicTestSuite) TestNameUpdateBehavior() {
+	// GOAL: Verify device name update behavior across multiple advertisements
+	//
+	// TEST SCENARIO: Device created with extracted name → LocalName advertised → name updated → subsequent updates preserve LocalName
 
 	// Create an initial device with no name
 	adv1 := testutils.CreateMockAdvertisementFromJSON(`{
@@ -280,10 +297,8 @@ func TestDevice_NameUpdateBehavior(t *testing.T) {
 				"connectable": true
 			}`, testutils.MustJSON([]byte{0x00, 0x01, 'E', 'x', 't', 'r', 'a', 'c', 't', 'e', 'd'})).Build()
 
-	logger := logrus.New()
-	dev := devicefactory.NewDeviceFromAdvertisement(adv1, logger)
-	device := dev
-	assert.Equal(t, "Extracted", device.Name(), "Should extract name from manufacturer data initially")
+	dev := devicefactory.NewDeviceFromAdvertisement(adv1, suite.helper.Logger)
+	suite.Assert().Equal("Extracted", dev.Name(), "Should extract name from manufacturer data initially")
 
 	// Update with advertisement that has LocalName
 	adv2 := testutils.CreateMockAdvertisementFromJSON(`{
@@ -296,14 +311,14 @@ func TestDevice_NameUpdateBehavior(t *testing.T) {
 			}`,
 		testutils.MustJSON([]byte{0x00, 0x01, 'D', 'i', 'f', 'f', 'e', 'r', 'e', 'n', 't'})).Build()
 
-	device.Update(adv2)
+	dev.Update(adv2)
 
-	ja.AssertDevice(device, `{
+	suite.ja.AssertDevice(dev, `{
 		"name": "OfficialName",
 		"rssi": -45
 	}`)
 
-	// Update with advertisement that has no LocalName
+	// Update with an advertisement that has no LocalName
 	adv3 := testutils.CreateMockAdvertisementFromJSON(`{
 				"name": "",
 				"rssi": -40,
@@ -314,19 +329,14 @@ func TestDevice_NameUpdateBehavior(t *testing.T) {
 			}`,
 		testutils.MustJSON([]byte{0x00, 0x01, 'N', 'e', 'w', 'N', 'a', 'm', 'e'})).Build()
 
-	device.Update(adv3)
-	ja.AssertDevice(device, `{
+	dev.Update(adv3)
+	suite.ja.AssertDevice(dev, `{
 		"name": "OfficialName",
 		"rssi": -40
 	}`)
 }
 
-// DeviceErrorTestSuite tests device-level error scenarios using MockBLEPeripheralSuite
-type DeviceErrorTestSuite struct {
-	DeviceTestSuite
-}
-
-func (suite *DeviceErrorTestSuite) TestDeviceWriteToCharacteristicErrors() {
+func (suite *DeviceBasicTestSuite) TestDeviceWriteToCharacteristicErrors() {
 	// GOAL: Verify characteristic write returns appropriate errors for invalid operations
 	//
 	// TEST SCENARIO: Various error conditions → proper device errors returned → error types match expectations
@@ -357,18 +367,20 @@ func (suite *DeviceErrorTestSuite) TestDeviceWriteToCharacteristicErrors() {
 		//
 		// TEST SCENARIO: Get invalid characteristic UUID → NotFoundError returned → error identifies missing resource
 
-		_, err := suite.connection.GetCharacteristic("180d", "ffff")
+		_, err := suite.connection.GetCharacteristic("180d", "fffe")
 
 		suite.Assert().Error(err, "GetCharacteristic MUST fail for non-existent characteristic")
 
 		var notFoundErr *device.NotFoundError
 		suite.Assert().ErrorAs(err, &notFoundErr, "error MUST be NotFoundError")
 		suite.Assert().Equal("characteristic", notFoundErr.Resource, "resource type MUST be 'characteristic'")
-		suite.Assert().Contains(notFoundErr.UUIDs, "ffff", "UUIDs MUST contain characteristic UUID")
+		suite.Assert().Contains(notFoundErr.UUIDs, "fffe", "UUIDs MUST contain characteristic UUID")
 	})
 }
 
-// TestDeviceErrorTestSuite runs the test suite
-func TestDeviceErrorTestSuite(t *testing.T) {
-	suite.Run(t, new(DeviceErrorTestSuite))
+// Note: Appearance is now accessed as a regular characteristic (UUID 0x2A01 in GAP service 0x1800)
+// Tests for appearance should use the characteristic API tests
+
+func TestDeviceBasicTestSuite(t *testing.T) {
+	suite.Run(t, new(DeviceBasicTestSuite))
 }

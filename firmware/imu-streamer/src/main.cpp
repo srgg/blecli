@@ -45,7 +45,7 @@ void loop() {
     static float imu_data[9];
 
     if (read_imu(imu_data)) {
-        update_imu(imu_data);  // Send BLE notification (NimBLE handles multi-connection)
+        update_imu(imu_data);
     }
 
     delay(20); // 50Hz streaming

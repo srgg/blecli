@@ -201,6 +201,100 @@ else
 end
 ```
 
+### `blim.bridge.pty_on_data(callback)`
+Registers a callback function to be invoked asynchronously when data arrives on the PTY (only available in bridge mode).
+
+**Parameters:**
+- `callback` (function or nil) - Callback function with signature `function(data)` where `data` is a string containing the received bytes
+  - Pass `nil` to unregister the callback
+
+**Returns:** Nothing
+
+**Notes:**
+- Callback is invoked asynchronously on a background thread
+- Only one callback can be registered at a time (registering a new one replaces the old one)
+- Callback receives binary-safe data (can contain null bytes)
+- Errors in callback are caught and logged (won't crash the process)
+
+**Example: Async PTY data handling**
+```lua
+-- Register callback for incoming PTY data
+blim.bridge.pty_on_data(function(data)
+    print("Received from PTY:", data)
+
+    -- Process binary data
+    for i = 1, #data do
+        local byte = string.byte(data, i)
+        io.write(string.format("%02X ", byte))
+    end
+    print()
+end)
+
+-- Main script continues executing...
+print("Waiting for PTY data (callback will handle it asynchronously)")
+blim.sleep(5000)
+
+-- Unregister callback when done
+blim.bridge.pty_on_data(nil)
+print("Callback unregistered")
+```
+
+**Example: Protocol handler with state**
+```lua
+-- State machine for processing protocol messages
+local buffer = ""
+local message_count = 0
+
+blim.bridge.pty_on_data(function(data)
+    -- Append to buffer
+    buffer = buffer .. data
+
+    -- Process complete messages (example: newline-delimited)
+    while true do
+        local newline_pos = string.find(buffer, "\n")
+        if not newline_pos then
+            break  -- No complete message yet
+        end
+
+        -- Extract message
+        local message = string.sub(buffer, 1, newline_pos - 1)
+        buffer = string.sub(buffer, newline_pos + 1)
+
+        -- Process message
+        message_count = message_count + 1
+        print("Message #" .. message_count .. ":", message)
+
+        -- Echo back with BLE data
+        local char = blim.characteristic("180f", "2a19")
+        local battery, err = char.read()
+        if battery then
+            local response = "Battery: " .. string.byte(battery, 1) .. "%\n"
+            blim.bridge.pty_write(response)
+        end
+    end
+end)
+
+-- Keep script running
+while true do
+    blim.sleep(1000)
+end
+```
+
+**Example: Replace old callback**
+```lua
+-- First callback
+blim.bridge.pty_on_data(function(data)
+    print("Handler A:", data)
+end)
+
+blim.sleep(2000)
+
+-- Replace with new callback (old one is automatically unregistered)
+blim.bridge.pty_on_data(function(data)
+    print("Handler B:", data)
+end)
+```
+
 ### `blim.list()`
 Returns a table mapping service UUIDs to service info.
 
@@ -452,6 +546,7 @@ Returns a characteristic handle with metadata and methods.
 - `uuid` (string) - Characteristic UUID
 - `service` (string) - Parent service UUID
 - `name` (string, optional) - Human-readable characteristic name (e.g., "Heart Rate Measurement" for UUID "2a37"). Only present for standard BLE characteristics.
+- `has_parser` (boolean) - True if characteristic has registered parser
 - `properties` (table) - Boolean flags for each property:
   - `read` (boolean) - Supports read operations
   - `write` (boolean) - Supports write operations
@@ -463,6 +558,8 @@ Returns a characteristic handle with metadata and methods.
 
 **Handle methods:**
 - `read()` → `data, error` - Reads characteristic value from device
+- `write(data, [with_response])` → `success, error` - Writes data to characteristic
+- `parse` (function or nil) - Parses raw value to human-readable format. `nil` when parser is not available (`has_parser` returns false).
 
 **Example: Read characteristic value**
 ```lua
@@ -474,6 +571,50 @@ if char.properties.read then
         print("Manufacturer:", value)
     else
         print("Read failed:", err)
+    end
+end
+```
+
+**Example: Write characteristic value**
+```lua
+local char = blim.characteristic("1234", "ABCD")  -- Custom Service/Characteristic
+
+-- Write with response (default, waits for acknowledgment)
+local success, err = char.write("\x01\x02\x03")
+if success then
+    print("Write successful")
+else
+    print("Write failed:", err)
+end
+
+-- Write without response (faster, no acknowledgment)
+local success, err = char.write("\x01\x02\x03", false)
+if success then
+    print("Write sent")
+end
+```
+
+**Example: Parse characteristic value**
+```lua
+-- Appearance characteristic (0x2A01) has a registered parser
+local char = blim.characteristic("1800", "2a01")  -- GAP: Appearance
+
+if char.has_parser then
+    local value, err = char.read()
+    if value then
+        -- Raw bytes (little-endian uint16)
+        local byte1 = string.byte(value, 1)
+        local byte2 = string.byte(value, 2)
+        local appearance_value = byte1 + (byte2 * 256)
+        print("Appearance (hex):", string.format("0x%04X", appearance_value))
+
+        -- Parse to human-readable string
+        local parsed = char.parse(value)
+        if parsed then
+            print("Appearance (parsed):", parsed)  -- e.g., "Phone", "Computer"
+        else
+            print("Unknown appearance value")
+        end
     end
 end
 ```
@@ -643,15 +784,18 @@ Both approaches will coexist - use whichever fits your use case.
 
 **✅ Available features:**
 - ✅ **Read operations** - `handle.read()` reads characteristic values on demand
-- ✅ **Characteristic inspection** - `blim.characteristic()` returns metadata (UUID, service, properties, descriptors)
+- ✅ **Write operations** - `handle.write(data, [with_response])` writes to characteristics with or without acknowledgment
+- ✅ **Value parsing** - `handle.parse(value)` parses known characteristic types (e.g., Appearance)
+- ✅ **Characteristic inspection** - `blim.characteristic()` returns metadata (UUID, service, properties, descriptors, has_parser)
 - ✅ **Service listing** - `blim.list()` enumerates all GATT services and characteristics
 - ✅ **Device information** - `blim.device` provides device metadata and advertisement data
 - ✅ **Subscriptions** - `blim.subscribe()` supports notifications/indications with multiple streaming modes
+- ✅ **PTY bridge** - `blim.bridge.pty_write()`, `pty_read()`, and `pty_on_data()` for async PTY communication
 
 **⚠️ Planned features:**
-- ⚠️ **Write operations** - Cannot write to characteristics yet
 - ⚠️ **Unsubscribe** - Subscriptions run indefinitely (no way to stop them)
 - ⚠️ **Function-based API** - Simplified `ble.read()`, `ble.write()` not yet available
+- ⚠️ **More parsers** - Currently only Appearance characteristic has a registered parser
 
 These will be addressed by the upcoming API extensions described above.
 
@@ -712,13 +856,16 @@ The wrapper handles panics as follows:
 
 All Go functions exposed to Lua are wrapped:
 
-**BLE API (`lua_api.go`):**
+**BLE API (`api.go`):**
 - ✅ `blim.subscribe()`
 - ✅ `blim.list()`
 - ✅ `blim.characteristic()`
 - ✅ `char.read()` (characteristic handle method)
+- ✅ `char.write(data, [with_response])` (characteristic handle method)
+- ✅ `char.parse(value)` (characteristic handle method)
 - ✅ `blim.bridge.pty_write()` (bridge PTY write)
 - ✅ `blim.bridge.pty_read()` (bridge PTY read)
+- ✅ `blim.bridge.pty_on_data(callback)` (bridge PTY async callback)
 - ✅ `blim.sleep()` (utility function for delays)
 
 **Engine Functions (`lua_engine.go`):**

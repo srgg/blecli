@@ -244,14 +244,38 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *devic
 			characteristic, ok := svc.Characteristics[charUUID]
 			if !ok {
 				// Use descriptors from DiscoverProfile (already discovered)
-				// Note: On Darwin/macOS, descriptor Handle fields are not populated by the BLE library,
+				// Note: On Darwin/macOS, the BLE library does not populate descriptor Handle fields,
 				// which means descriptors cannot be read. This is a limitation of the go-ble/ble Darwin implementation.
 				// The descriptors are listed for informational purposes, but their values will be nil.
 
 				// Create descriptors with values (reads are best-effort, won't fail characteristic creation)
 				descriptors := make([]device.Descriptor, 0, len(bleCharacteristic.Descriptors))
-				for _, d := range bleCharacteristic.Descriptors {
-					descriptors = append(descriptors, newDescriptor(d, client, c.descriptorReadTimeout, c.logger))
+				for idx, d := range bleCharacteristic.Descriptors {
+					descriptors = append(descriptors, newDescriptor(d, client, c.descriptorReadTimeout, uint8(idx), c.logger))
+				}
+
+				// Parse well-known descriptor formats. if any
+				for _, d := range descriptors {
+					if d.ParsedValue() != nil {
+						continue
+					}
+
+					// Parse well-known descriptors automatically
+					if parsed, err := device.ParseDescriptorValue(d.UUID(), d.Value(), descriptors); err == nil {
+						d.(*BLEDescriptor).parsedValue = parsed
+					} else {
+						// Parse error - set parsedValue to DescriptorError
+						d.(*BLEDescriptor).parsedValue = &device.DescriptorError{
+							Reason: "parse_error",
+							Err:    err,
+						}
+						if c.logger != nil {
+							c.logger.WithFields(logrus.Fields{
+								"descriptor_uuid": d.UUID(),
+								"error":           err,
+							}).Debug("Failed to parse descriptor value")
+						}
+					}
 				}
 				// Sort by UUID for consistent ordering
 				sort.Slice(descriptors, func(i, j int) bool {
@@ -285,7 +309,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *devic
 	c.ctx, c.cancel = context.WithCancelCause(ctx)
 
 	// Monitor go-ble client Disconnected() channel (Darwin-specific)
-	// This detects when CoreBluetooth reports disconnection
+	// This detects when CoreBluetooth reports a disconnection
 	if darwinClient, ok := client.(interface{ Disconnected() <-chan struct{} }); ok {
 		groutine.Go(context.Background(), "ble-connection-monitor", func(monitorCtx context.Context) {
 			select {
@@ -297,7 +321,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *devic
 					c.cancel(device.ErrNotConnected)
 				}
 			case <-c.ctx.Done():
-				// Connection context already cancelled, exit monitor
+				// Connection context already canceled, exit monitor
 			}
 		})
 	} else if c.logger != nil {
@@ -336,13 +360,13 @@ func (c *BLEConnection) Disconnect() error {
 		}).Info("Disconnecting BLE device...")
 	}
 
-	// Cancel all subscriptions via manager
+	// Cancel all subscriptions via the manager
 	if c.logger != nil {
 		c.logger.Debug("Cancelling all active subscriptions...")
 	}
 	c.subMgr.CancelAll()
 
-	// Grab client and cancel func to release lock before blocking waits
+	// Grab client and cancel the function to release the lock before blocking waits
 	client := c.client
 	cancel := c.cancel
 
@@ -379,7 +403,7 @@ func (c *BLEConnection) Disconnect() error {
 		c.logger.Debug("All subscription goroutines exited")
 	}
 
-	// Unsubscribe from remote BLE notifications before cancelling connection
+	// Unsubscribe from remote BLE notifications before canceling the connection
 	if c.logger != nil {
 		c.logger.Debug("Unsubscribing from remote BLE notifications...")
 	}
@@ -397,7 +421,7 @@ func (c *BLEConnection) Disconnect() error {
 		}
 	}
 
-	// Finally, disconnect BLE client (network call) outside the lock
+	// Finally, disconnect the BLE client (network call) outside the lock
 	var disconnectErr error
 	if client != nil {
 		disconnectErr = client.CancelConnection()
@@ -487,7 +511,7 @@ func (c *BLEConnection) IsConnected() bool {
 	return connected
 }
 
-// ConnectionContext returns the connection context that is cancelled when the connection
+// ConnectionContext returns the connection context canceled when the connection
 // experiences errors or is disconnected. All subscribers should monitor this context.
 // Returns nil if not connected.
 func (c *BLEConnection) ConnectionContext() context.Context {

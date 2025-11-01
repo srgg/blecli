@@ -27,9 +27,10 @@ func (suite *ConnectionTestSuite) TestConnectionServices() {
 
 		services := suite.connection.Services()
 
-		suite.Assert().Len(services, 2, "MUST return all services")
-		suite.Assert().Equal("180d", services[0].UUID(), "first service MUST be 180d (sorted order)")
-		suite.Assert().Equal("180f", services[1].UUID(), "second service MUST be 180f (sorted order)")
+		suite.Assert().Len(services, 3, "MUST return all services")
+		suite.Assert().Equal("1800", services[0].UUID(), "first service MUST be 1800 (Generic Access, sorted order)")
+		suite.Assert().Equal("180d", services[1].UUID(), "second service MUST be 180d (Heart Rate, sorted order)")
+		suite.Assert().Equal("180f", services[2].UUID(), "third service MUST be 180f (Battery, sorted order)")
 	})
 
 	suite.Run("get service by UUID", func() {

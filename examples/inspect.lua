@@ -55,10 +55,15 @@ local function collect_device_data()
 
                 -- Try to read the characteristic value if it's readable
                 local value = nil
+                local parsed_value = nil
                 if char_info.properties and char_info.properties.read and char_info.read then
                     local val, err = char_info.read()
                     if err == nil then
                         value = val
+                        -- Try to parse if parser is available and value is non-empty
+                        if char_info.has_parser and char_info.parse and value and value ~= "" then
+                            parsed_value = char_info:parse(value)  -- Use colon syntax
+                        end
                     end
                     -- Silently ignore read errors in inspect (characteristic may not be readable)
                 end
@@ -68,6 +73,8 @@ local function collect_device_data()
                     name = char_info.name,  -- Copy optional name field
                     properties = char_info.properties,  -- Keep dual-purpose table (array + hash)
                     value = value,
+                    parsed_value = parsed_value,  -- Add parsed value
+                    has_parser = char_info.has_parser,  -- Add parser availability flag
                     descriptors = char_info.descriptors or {}
                 })
             end
@@ -80,6 +87,60 @@ local function collect_device_data()
     data.device_info = extract_dis_info(data.services)
 
     return data
+end
+
+-- Recursively print descriptor information with proper indentation
+-- depth controls indentation level (0 = base level, 1 = nested, etc.)
+local function print_descriptor(descriptor, indent, depth)
+    local descriptor_display = blim.format_named(descriptor)
+    io.write(string.format("%sdescriptor: %s, Handle: %s\n", indent, descriptor_display, descriptor.handle))
+
+    -- Show descriptor value if available and non-empty
+    if descriptor.value and descriptor.value ~= "" then
+        io.write(string.format("%s  value: %s\n", indent, descriptor.value))
+    end
+
+    -- Show parsed value if available
+    if descriptor.parsed_value then
+        if type(descriptor.parsed_value) == "table" then
+            -- Check if it's an error
+            if descriptor.parsed_value.error then
+                io.write(string.format("%s  parsed: ERROR: %s\n", indent, descriptor.parsed_value.error))
+            -- Check if it's an aggregate format (array of descriptors)
+            elseif descriptor.parsed_value[1] and descriptor.parsed_value[1].uuid then
+                io.write(string.format("%s  parsed: Aggregate Format (%d descriptors)\n", indent, #descriptor.parsed_value))
+                -- Print each referenced descriptor
+                for i, ref_desc in ipairs(descriptor.parsed_value) do
+                    local ref_display = blim.format_named(ref_desc)
+                    io.write(string.format("%s    [%d] descriptor: %s, Handle: %s\n",
+                        indent, i, ref_display, ref_desc.handle))
+
+                    -- Show value if available
+                    if ref_desc.value and ref_desc.value ~= "" then
+                        io.write(string.format("%s        value: %s\n", indent, ref_desc.value))
+                    end
+
+                    -- Show parsed value if available
+                    if ref_desc.parsed_value and type(ref_desc.parsed_value) == "table"
+                       and not ref_desc.parsed_value.error then
+                        io.write(string.format("%s        parsed:\n", indent))
+                        for k, v in pairs(ref_desc.parsed_value) do
+                            io.write(string.format("%s          %s: %s\n", indent, k, tostring(v)))
+                        end
+                    end
+                end
+            else
+                -- Regular parsed table (not aggregate format, not error)
+                io.write(string.format("%s  parsed:\n", indent))
+                for k, v in pairs(descriptor.parsed_value) do
+                    io.write(string.format("%s    %s: %s\n", indent, k, tostring(v)))
+                end
+            end
+        else
+            -- String or other simple type
+            io.write(string.format("%s  parsed: %s\n", indent, tostring(descriptor.parsed_value)))
+        end
+    end
 end
 
 -- Format and output as human-readable text
@@ -199,36 +260,35 @@ local function output_text(data)
                 if value_ascii ~= "" then
                     io.write(string.format("      value (ascii): %s\n", value_ascii))
                 end
+
+                -- Show parsed value if available (similar to descriptor pattern)
+                if char.parsed_value ~= nil then
+                    io.write(string.format("      value (parsed): %s\n", tostring(char.parsed_value)))
+                end
             end
 
-            -- Show descriptors if available
+            -- Show descriptors if available (with recursive printing for aggregate formats)
             if #char.descriptors > 0 then
-                for _, descriptor in ipairs(char.descriptors) do
-                    local descriptor_display = blim.format_named(descriptor)
-                    io.write(string.format("      descriptor: %s\n", descriptor_display))
-
-                    -- Show descriptor value if available and non-empty
-                    if descriptor.value and descriptor.value ~= "" then
-                        io.write(string.format("        value: %s\n", descriptor.value))
-                    end
-
-                    -- Show parsed value if available
-                    if descriptor.parsed_value then
-                        if type(descriptor.parsed_value) == "table" then
-                            -- Check if it's an error
-                            if descriptor.parsed_value.error then
-                                io.write(string.format("        parsed: ERROR: %s\n", descriptor.parsed_value.error))
-                            else
-                                -- Pretty print the table fields
-                                io.write("        parsed:\n")
-                                for k, v in pairs(descriptor.parsed_value) do
-                                    io.write(string.format("          %s: %s\n", k, tostring(v)))
-                                end
+                -- Build set of descriptor indices referenced by 2905 aggregate descriptors
+                local referenced_indices = {}
+                for _, desc in ipairs(char.descriptors) do
+                    if string.upper(desc.uuid) == "2905" and desc.parsed_value and desc.parsed_value[1] then
+                        -- The parsed_value is an array of referenced descriptors
+                        for _, ref_desc in ipairs(desc.parsed_value) do
+                            if ref_desc.index then
+                                referenced_indices[ref_desc.index] = true
                             end
-                        else
-                            -- String or other simple type
-                            io.write(string.format("        parsed: %s\n", tostring(descriptor.parsed_value)))
                         end
+                    end
+                end
+
+                for _, descriptor in ipairs(char.descriptors) do
+                    -- Skip 2904 only if THIS specific 2904's index is referenced by a 2905
+                    if string.upper(descriptor.uuid) == "2904" and descriptor.index
+                       and referenced_indices[descriptor.index] then
+                        -- Skip: this specific 2904 is already shown inside a 2905
+                    else
+                        print_descriptor(descriptor, "      ", 0)
                     end
                 end
             end

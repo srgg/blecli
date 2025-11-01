@@ -894,7 +894,7 @@ func (api *LuaAPI) registerCharacteristicFunction(L *lua.State) {
 		serviceUUID := L.ToString(1)
 		charUUID := L.ToString(2)
 
-		// Get connection when function is called, not when registered
+		// Get connection when a function is called, not when registered
 		connection := api.device.GetConnection()
 		if connection == nil {
 			L.RaiseError("no connection available")
@@ -978,56 +978,35 @@ func (api *LuaAPI) registerCharacteristicFunction(L *lua.State) {
 
 		L.SetTable(-3)
 
-		// Field: descriptors (array of objects with uuid, name, value, and parsed_value)
+		// Field: descriptors (array of objects with uuid, handle, name, value, and parsed_value)
 		L.PushString("descriptors")
 		L.NewTable()
 		descriptors := char.GetDescriptors()
 		for i, desc := range descriptors {
 			L.PushInteger(int64(i + 1))
-			// Create descriptor object
-			L.NewTable()
-			// Add uuid
-			L.PushString("uuid")
-			L.PushString(desc.UUID())
-			L.SetTable(-3)
-			// Add name (only if known)
-			if knownName := desc.KnownName(); knownName != "" {
-				L.PushString("name")
-				L.PushString(knownName)
-				L.SetTable(-3)
-			}
-			// Add value (raw bytes as hex string)
-			if value := desc.Value(); value != nil {
-				L.PushString("value")
-				L.PushString(fmt.Sprintf("%X", value))
-				L.SetTable(-3)
-			}
-			// Add parsed_value (structured table for known descriptors)
-			if parsedValue := desc.ParsedValue(); parsedValue != nil {
-				L.PushString("parsed_value")
-				api.pushDescriptorParsedValue(L, parsedValue)
-				L.SetTable(-3)
-			}
+			api.pushDescriptor(L, desc)
 			L.SetTable(-3)
 		}
+		L.SetTable(-3)
+
+		// Field: has_parser (true if a parser is registered for this characteristic type)
+		L.PushString("has_parser")
+		L.PushBoolean(char.HasParser())
 		L.SetTable(-3)
 
 		// Method: read() - reads the characteristic value from the device
 		// Returns (value, nil) on success or (nil, error_message) on failure
 		api.SafePushGoFunction(L, "read", func(L *lua.State) int {
-			// Use the abstracted CharacteristicReader interface with timeout
-			value, err := char.Read(5 * time.Second) // Use 5s default timeout for Lua
+			value, err := char.Read(5 * time.Second)
 			if err != nil {
-				// Return (nil, error_message) for expected errors
-				// Strip wrapped Go error suffix for cleaner Lua messages
 				L.PushNil()
 				L.PushString(fmt.Sprintf("read() failed: %s", stripWrappedGoErrorSuffix(err.Error())))
 				return 2
 			}
-			// Return (value, nil) on success
+
 			L.PushString(string(value))
 			L.PushNil()
-			return 2
+			return 2 // (value, nil)
 		})
 		L.SetTable(-3)
 
@@ -1073,6 +1052,38 @@ func (api *LuaAPI) registerCharacteristicFunction(L *lua.State) {
 		})
 		L.SetTable(-3)
 
+		// Method: parse(value) - parses characteristic value (only for characteristics with registered parsers)
+		// Returns parsed value or nil if parse error
+		if char.HasParser() {
+			api.SafePushGoFunction(L, "parse", func(L *lua.State) int {
+				// Validate argument
+				// Note: when called as char:parse(value), char is passed as arg 1, value as arg 2 (colon syntax)
+				if !L.IsString(2) {
+					L.RaiseError("parse(value) expects a string argument")
+					return 0
+				}
+
+				// Get value to parse (argument 2 due to colon syntax)
+				value := []byte(L.ToString(2))
+
+				// Parse the value using the characteristic's registered parser
+				parsed, err := char.ParseValue(value)
+				if err != nil || parsed == nil {
+					L.PushNil()
+					return 1
+				}
+
+				// Return parsed value (currently only string type is supported for Appearance)
+				if str, ok := parsed.(string); ok {
+					L.PushString(str)
+				} else {
+					L.PushNil()
+				}
+				return 1
+			})
+			L.SetTable(-3)
+		}
+
 		// TODO: Add methods (subscribe, unsubscribe) if needed
 
 		return 1
@@ -1103,6 +1114,44 @@ func (api *LuaAPI) registerSleepFunction(L *lua.State) {
 		return 0
 	})
 	L.SetTable(-3)
+}
+
+// pushDescriptor pushes a descriptor object onto the Lua stack as a table.
+// Creates a table with uuid, handle, index, name, value, and parsed_value fields.
+// Stack effect: pushes one table
+func (api *LuaAPI) pushDescriptor(L *lua.State, desc device.Descriptor) {
+	// Create descriptor object
+	L.NewTable()
+	// Add uuid
+	L.PushString("uuid")
+	L.PushString(desc.UUID())
+	L.SetTable(-3)
+	// Add a handle
+	L.PushString("handle")
+	L.PushInteger(int64(desc.Handle()))
+	L.SetTable(-3)
+	// Add index
+	L.PushString("index")
+	L.PushInteger(int64(desc.Index()))
+	L.SetTable(-3)
+	// Add name (only if known)
+	if knownName := desc.KnownName(); knownName != "" {
+		L.PushString("name")
+		L.PushString(knownName)
+		L.SetTable(-3)
+	}
+	// Add value (raw bytes as hex string)
+	if value := desc.Value(); value != nil {
+		L.PushString("value")
+		L.PushString(fmt.Sprintf("%X", value))
+		L.SetTable(-3)
+	}
+	// Add parsed_value (structured table for known descriptors)
+	if parsedValue := desc.ParsedValue(); parsedValue != nil {
+		L.PushString("parsed_value")
+		api.pushDescriptorParsedValue(L, parsedValue)
+		L.SetTable(-3)
+	}
 }
 
 // pushDescriptorParsedValue pushes a parsed descriptor value onto the Lua stack as a table.
@@ -1165,9 +1214,18 @@ func (api *LuaAPI) pushDescriptorParsedValue(L *lua.State, parsedValue interface
 		L.PushString("max")
 		L.PushString(fmt.Sprintf("%X", v.MaxValue))
 		L.SetTable(-3)
+	case *device.AggregateFormat:
+		// Push AggregateFormat as an indexed array of descriptor objects
+		// Each descriptor has the same structure as char.descriptor
+		L.NewTable()
+		for i, desc := range *v {
+			L.PushInteger(int64(i + 1)) // Lua arrays are 1-indexed
+			api.pushDescriptor(L, desc)
+			L.SetTable(-3) // array[i] = descriptor_table
+		}
 
 	case string:
-		// User Description - push as plain string
+		// User Description - push as a plain string
 		L.PushString(v)
 
 	case []byte:

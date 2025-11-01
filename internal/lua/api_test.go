@@ -10,6 +10,7 @@ import (
 
 	_ "embed"
 
+	"github.com/srg/blim/internal/testutils"
 	suitelib "github.com/stretchr/testify/suite"
 )
 
@@ -75,6 +76,9 @@ func (t *testBridgeInfo) TriggerCallback(data []byte) {
 // BLEAPI2TestSuite
 type LuaApiTestSuite struct {
 	LuaApiSuite
+
+	// Test execution control flags
+	parserAPITestPassed bool // Set to true if Test000_CharacteristicParserAPI_Prerequisite passes
 }
 
 // AssertLuaError verifies that an error is a *LuaError and contains the expected message
@@ -1746,6 +1750,312 @@ func (suite *LuaApiTestSuite) TestPTYOnData() {
 // See test-scenarios/lua-api-well-known-descriptor-types-scenarios.yaml for individual test case documentation.
 func (suite *LuaApiTestSuite) TestWellKnownDescriptorTypes() {
 	suite.RunTestCasesFromFile("test-scenarios/lua-api-well-known-descriptor-types-scenarios.yaml")
+}
+
+// TestAppearanceCharacteristic validates appearance characteristic (0x2A01 in GAP service 0x1800) access and parsing via Lua API.
+//
+// GOAL: Verify appearance characteristic (0x2A01 in GAP service 0x1800) access and parsing via Lua API
+//
+// TEST SCENARIO: Access appearance characteristic → verify metadata (UUID, name), value read/parsing (little-endian uint16), and graceful degradation for unknown values
+//
+// DEPENDENCY: This test requires Test000_CharacteristicParserAPI_Prerequisite to pass first
+func (suite *LuaApiTestSuite) TestAppearanceCharacteristic() {
+	if !suite.parserAPITestPassed {
+		suite.T().Skip("Skipping TestAppearanceCharacteristic: prerequisite Test000_CharacteristicParserAPI_Prerequisite did not pass")
+		return
+	}
+
+	// Scenario struct to reduce boilerplate - contains only variable data
+	type scenario struct {
+		name            string
+		appearanceValue []byte  // Little-endian uint16 value
+		expectedHex     uint16  // Expected hex value (for verification)
+		expectedParsed  *string // Expected parsed string, nil if parser should return nil
+	}
+
+	// Helper to create string pointers
+	strPtr := func(s string) *string { return &s }
+
+	scenarios := []scenario{
+		{
+			name:            "Appearance: Known Value - Phone (0x0040)",
+			appearanceValue: []byte{0x40, 0x00},
+			expectedHex:     0x0040,
+			expectedParsed:  strPtr("Phone"),
+		},
+		{
+			name:            "Appearance: Known Value - Computer (0x0080)",
+			appearanceValue: []byte{0x80, 0x00},
+			expectedHex:     0x0080,
+			expectedParsed:  strPtr("Computer"),
+		},
+		{
+			name:            "Appearance: Known Value with Subcategory - Computer Desktop Workstation (0x0081)",
+			appearanceValue: []byte{0x81, 0x00},
+			expectedHex:     0x0081,
+			expectedParsed:  strPtr("Computer: Desktop Workstation"),
+		},
+		{
+			name:            "Appearance: Unknown Value Degradation (0xFFFF)",
+			appearanceValue: []byte{0xFF, 0xFF},
+			expectedHex:     0xFFFF,
+			expectedParsed:  nil,
+		},
+		{
+			name:            "Appearance: Zero Value Degradation (0x0000)",
+			appearanceValue: []byte{0x00, 0x00},
+			expectedHex:     0x0000,
+			expectedParsed:  nil,
+		},
+	}
+
+	// Common script template - only the assertions change based on expected values
+	const scriptTemplate = `
+		local char = blim.characteristic("1800", "2a01")
+		assert(char ~= nil, "appearance characteristic MUST exist")
+
+		-- Verify characteristic metadata
+		assert(char.uuid == "2a01", string.format("UUID MUST be 2a01, got: %%s", char.uuid or "nil"))
+		assert(char.service == "1800", string.format("service MUST be 1800 (GAP), got: %%s", char.service or "nil"))
+		assert(char.name == "Appearance", string.format("name MUST be 'Appearance', got: %%s", char.name or "nil"))
+
+		-- Verify characteristic properties
+		assert(char.properties ~= nil, "properties MUST exist")
+		assert(type(char.properties) == "table", "properties MUST be table")
+		assert(char.properties.read ~= nil, "read property MUST be set for appearance characteristic")
+
+		-- Verify parser is registered for appearance characteristic
+		assert(char.has_parser == true, string.format("has_parser MUST be true for appearance, got: %%s", tostring(char.has_parser)))
+		assert(char.parse ~= nil, "parse method MUST exist for parsable characteristics")
+		assert(type(char.parse) == "function" or type(char.parse) == "userdata", "parse MUST be callable")
+
+		-- Read value from characteristic
+		local value, err = char:read()
+		assert(err == nil, string.format("read MUST succeed, got error: %%s", tostring(err)))
+		assert(value ~= nil, "read value MUST exist")
+		assert(type(value) == "string", "value MUST be string type")
+		assert(#value == 2, string.format("appearance value MUST be 2 bytes (uint16), got: %%d bytes", #value))
+
+		-- Verify value as little-endian uint16
+		local byte1 = string.byte(value, 1)
+		local byte2 = string.byte(value, 2)
+		assert(byte1 >= 0 and byte1 <= 255, "first byte MUST be in range 0-255")
+		assert(byte2 >= 0 and byte2 <= 255, "second byte MUST be in range 0-255")
+		local appearance_value = byte1 + (byte2 * 256)
+		assert(appearance_value == 0x%04X, string.format("appearance MUST be 0x%04X (%%d), got: 0x%%04x (%%d)", %d, appearance_value, appearance_value))
+
+		-- Verify on-demand parsing
+		local parsed = char:parse(value)
+		%s
+	`
+
+	for _, tc := range scenarios {
+		// Capture scenario for closure
+		scenario := tc
+
+		// Reset peripheral builder BEFORE suite.Run() to ensure clean state
+		suite.PeripheralBuilder = testutils.NewPeripheralDeviceBuilder(suite.T())
+
+		// Configure peripheral BEFORE suite.Run() - SetupSubTest will build it
+		suite.WithPeripheral().
+			WithService("1800").
+			WithCharacteristic("2a01", "read", scenario.appearanceValue)
+
+		suite.Run(scenario.name, func() {
+			// Generate assertion for parsed value based on whether we expect a string or nil
+			var parseAssertion string
+			if scenario.expectedParsed == nil {
+				// Expect nil
+				parseAssertion = `assert(parsed == nil, string.format("parse(value) MUST return nil for unknown values, got: %s", tostring(parsed)))`
+			} else {
+				// Expect specific string - use %q for the Lua string literal, but escape the string in the error message
+				parseAssertion = fmt.Sprintf(`assert(parsed == %q, string.format("parse(value) MUST return '%s', got: %%s", tostring(parsed)))`,
+					*scenario.expectedParsed, *scenario.expectedParsed)
+			}
+
+			// Build complete script from template
+			script := fmt.Sprintf(scriptTemplate, scenario.expectedHex, scenario.expectedHex, scenario.expectedHex, parseAssertion)
+
+			// Execute the generated script
+			err := suite.ExecuteScript(script)
+			suite.NoError(err, "Test scenario should pass")
+		})
+	}
+}
+
+// Test000_CharacteristicParserAPI_Prerequisite validates has_parser field and parse() method behavior across all scenarios.
+// This test runs FIRST (alphabetically) and MUST pass before TestAppearanceCharacteristic runs.
+//
+// GOAL: Verify has_parser field and the parse() method work correctly for characteristics with/without parsers and handle edge cases
+//
+// TEST SCENARIO: Test multiple scenarios → verify has_parser field → verify parse field/method → verify parsing behavior → verify error handling
+func (suite *LuaApiTestSuite) Test000_CharacteristicParserAPI_Prerequisite() {
+	type scenario struct {
+		name        string
+		serviceUUID string
+		charUUID    string
+		charValue   []byte
+		testScript  string
+	}
+
+	scenarios := []scenario{
+		// Subtest group: Characteristics WITH parser (Appearance)
+		{
+			name:        "Known Value - Parser exists, returns string",
+			serviceUUID: "1800",
+			charUUID:    "2a01",
+			charValue:   []byte{0x40, 0x00}, // Phone
+			testScript: `
+				local char = blim.characteristic("1800", "2a01")
+				assert(char ~= nil, "characteristic MUST exist")
+
+				-- Verify has_parser is true
+				assert(char.has_parser == true, string.format("has_parser MUST be true for Appearance, got: %s", tostring(char.has_parser)))
+
+				-- Verify parse exists and is callable
+				assert(char.parse ~= nil, "parse MUST exist when has_parser is true")
+				assert(type(char.parse) == "function" or type(char.parse) == "userdata", "parse MUST be callable")
+
+				-- Parse the value
+				local value, err = char:read()
+				assert(err == nil, string.format("read MUST succeed, got error: %s", tostring(err)))
+
+				local parsed = char:parse(value)
+				assert(parsed == "Phone", string.format("parse MUST return 'Phone', got: %s", tostring(parsed)))
+			`,
+		},
+		{
+			name:        "Unknown Value - Parser exists, returns nil",
+			serviceUUID: "1800",
+			charUUID:    "2a01",
+			charValue:   []byte{0xFF, 0xFF}, // Unknown
+			testScript: `
+				local char = blim.characteristic("1800", "2a01")
+				assert(char ~= nil, "characteristic MUST exist")
+
+				-- Verify has_parser is true
+				assert(char.has_parser == true, "has_parser MUST be true for Appearance")
+
+				-- Verify parse exists
+				assert(char.parse ~= nil, "parse MUST exist when has_parser is true")
+
+				-- Parse unknown value returns nil
+				local value, err = char:read()
+				assert(err == nil, "read MUST succeed")
+
+				local parsed = char:parse(value)
+				assert(parsed == nil, string.format("parse MUST return nil for unknown value, got: %s", tostring(parsed)))
+			`,
+		},
+
+		// Subtest group: Characteristics WITHOUT parser
+		{
+			name:        "Battery Level - No parser, has_parser=false, parse=nil",
+			serviceUUID: "180f",
+			charUUID:    "2a19",
+			charValue:   []byte{0x64}, // 100%
+			testScript: `
+				local char = blim.characteristic("180f", "2a19")
+				assert(char ~= nil, "characteristic MUST exist")
+
+				-- CRITICAL: Verify has_parser is false
+				assert(char.has_parser == false, string.format("has_parser MUST be false for Battery Level, got: %s", tostring(char.has_parser)))
+
+				-- CRITICAL: Verify parse is nil when has_parser is false
+				assert(char.parse == nil, string.format("parse MUST be nil when has_parser is false, got: %s", type(char.parse)))
+
+				-- Read should still work
+				local value, err = char:read()
+				assert(err == nil, "read MUST succeed")
+				assert(value == "\x64", "value MUST be 0x64")
+			`,
+		},
+		{
+			name:        "Custom characteristic - No parser, has_parser=false, parse=nil",
+			serviceUUID: "12345678-1234-1234-1234-123456789abc",
+			charUUID:    "87654321-4321-4321-4321-cba987654321",
+			charValue:   []byte{0x01, 0x02, 0x03},
+			testScript: `
+				local char = blim.characteristic("12345678-1234-1234-1234-123456789abc", "87654321-4321-4321-4321-cba987654321")
+				assert(char ~= nil, "characteristic MUST exist")
+
+				-- Verify has_parser is false for custom characteristic
+				assert(char.has_parser == false, "has_parser MUST be false for custom characteristic")
+
+				-- Verify parse is nil
+				assert(char.parse == nil, "parse MUST be nil when has_parser is false")
+
+				-- Read should work
+				local value, err = char:read()
+				assert(err == nil, "read MUST succeed")
+			`,
+		},
+
+		// Subtest group: Edge cases - graceful degradation
+		{
+			name:        "Edge case - parse() with malformed data (1 byte instead of 2)",
+			serviceUUID: "1800",
+			charUUID:    "2a01",
+			charValue:   []byte{0x40, 0x00},
+			testScript: `
+				local char = blim.characteristic("1800", "2a01")
+				assert(char ~= nil, "characteristic MUST exist")
+				assert(char.has_parser == true, "has_parser MUST be true")
+
+				-- Parse with malformed data (1 byte instead of 2)
+				local parsed = char:parse("\x40")
+				assert(parsed == nil, "parse MUST return nil for malformed data (wrong length)")
+			`,
+		},
+		{
+			name:        "Edge case - parse() with empty string",
+			serviceUUID: "1800",
+			charUUID:    "2a01",
+			charValue:   []byte{0x40, 0x00},
+			testScript: `
+				local char = blim.characteristic("1800", "2a01")
+				assert(char ~= nil, "characteristic MUST exist")
+
+				-- Parse with empty string
+				local parsed = char:parse("")
+				assert(parsed == nil, "parse MUST return nil for empty string")
+			`,
+		},
+		{
+			name:        "Edge case - parse() with 3 bytes instead of 2",
+			serviceUUID: "1800",
+			charUUID:    "2a01",
+			charValue:   []byte{0x40, 0x00},
+			testScript: `
+				local char = blim.characteristic("1800", "2a01")
+				assert(char ~= nil, "characteristic MUST exist")
+
+				-- Parse with 3 bytes instead of 2
+				local parsed = char:parse("\x40\x00\xFF")
+				assert(parsed == nil, "parse MUST return nil for malformed data (wrong length)")
+			`,
+		},
+	}
+
+	for _, tc := range scenarios {
+		scenario := tc
+
+		// Reset peripheral builder BEFORE suite.Run()
+		suite.PeripheralBuilder = testutils.NewPeripheralDeviceBuilder(suite.T())
+
+		// Configure peripheral BEFORE suite.Run()
+		suite.WithPeripheral().
+			WithService(scenario.serviceUUID).
+			WithCharacteristic(scenario.charUUID, "read", scenario.charValue)
+
+		suite.Run(scenario.name, func() {
+			err := suite.ExecuteScript(scenario.testScript)
+			suite.NoError(err, "Test scenario should pass")
+		})
+	}
+
+	// All subtests passed - set flag so dependent tests can run
+	suite.parserAPITestPassed = true
 }
 
 // TestLuaAPITestSuite runs the test suite using testify/suite

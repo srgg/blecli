@@ -63,6 +63,8 @@ type ValidRange struct {
 	MaxValue []byte // Maximum value (format depends on characteristic)
 }
 
+type AggregateFormat = []Descriptor
+
 // Format types for PresentationFormat.Format field
 const (
 	FormatBoolean  = 0x01
@@ -189,17 +191,95 @@ func ParseValidRange(data []byte) (*ValidRange, error) {
 	}, nil
 }
 
-// ParseDescriptorValue parses a descriptor value based on its UUID.
-// Returns the parsed value for well-known descriptors, or raw []byte for unknown descriptors.
-// Returns (nil, nil) for empty data.
-func ParseDescriptorValue(uuid string, data []byte) (interface{}, error) {
-	// Early return for empty data - nothing to parse
-	if len(data) == 0 {
-		return nil, nil
+// ParseDescriptorAggregateFormat parses the Aggregate Format descriptor (0x2908), which references
+// multiple Presentation Format descriptors via their ATT handles.
+//
+// macOS CoreBluetooth Limitation & Workaround:
+// CoreBluetooth does not expose ATT handles for descriptors, making it impossible to match
+// the handles in the aggregate format value to actual descriptor objects. As a workaround,
+// this implementation relies on positional correlation:
+//   - Assumes Presentation Format descriptors are discovered in the same order as their handles
+//     appear in the aggregate format value
+//   - Validates that the count of discovered 0x2904 descriptors matches the count of handles
+//   - Maps descriptors to aggregate format entries by index position
+//
+// This approach follows the Bluetooth spec's implicit assumption that descriptors are enumerated
+// in handle order. While not ideal, it's the only viable solution under CoreBluetooth's API constraints.
+func ParseDescriptorAggregateFormat(data []byte, descriptors []Descriptor) (*AggregateFormat, error) {
+
+	// 1. Parse the raw handles from the aggregate descriptor value data
+	var aggregatedHandles []uint16
+	for i := 0; i < len(data); i += 2 {
+		if i+2 > len(data) {
+			return nil, fmt.Errorf("malformed aggregate format data: incomplete handle")
+		}
+
+		// Handles are typically little-endian in the BLE ATT protocol
+		handle := binary.LittleEndian.Uint16(data[i : i+2])
+		aggregatedHandles = append(aggregatedHandles, handle)
 	}
 
+	// Empty aggregate is valid - no presentation format descriptors referenced
+	if len(aggregatedHandles) == 0 {
+		emptyAggregate := AggregateFormat{}
+		return &emptyAggregate, nil
+	}
+
+	handleSet := make(map[uint16]bool)
+	for _, handle := range aggregatedHandles {
+		handleSet[handle] = true
+	}
+
+	// 2. Filter the provided descriptors list to include only Presentation Format descriptors (0x2904)
+	var allFormatDescriptors []Descriptor
+
+	for _, d := range descriptors {
+		if d.UUID() == DescriptorPresentationFormat {
+			allFormatDescriptors = append(allFormatDescriptors, d)
+		}
+	}
+
+	// Unique handle values are expected, but we cannot verify the validity of the handles.
+	// However, we can check for duplicates in the parsed handle list
+	// Duplicates make the macOS positional workaround ambiguous (exception: single handle case)
+	if len(aggregatedHandles) != len(handleSet) && len(aggregatedHandles) != 1 && len(allFormatDescriptors) != 1 {
+		return nil, fmt.Errorf("aggregate format contains duplicate handles, cannot map descriptors reliably (macOS CoreBluetooth limitation)")
+	}
+
+	if len(allFormatDescriptors) != len(aggregatedHandles) {
+		// This is a valid scenario, according to the BLE specification, but it can cause the workaround logic to become indeterminate.
+		// This check prevents issues related to the "extra descriptor" case, where index mapping could fail.
+		// Under strict Core Bluetooth compliance, we assume the order is consistent if the manufacturer adheres to the specification.
+		return nil, fmt.Errorf("descriptor count mismatch (%d found, %d expected), cannot map reliably (macOS CoreBluetooth limitation)",
+			len(allFormatDescriptors), len(aggregatedHandles))
+	}
+
+	var orderedFormatDescriptors AggregateFormat
+	// Iterate through the master list of handles, assuming positional correlation
+	for i := range aggregatedHandles {
+		// We cannot verify the handle value, but we select the object at that reliable position.
+		if i < len(allFormatDescriptors) {
+			orderedFormatDescriptors = append(orderedFormatDescriptors, allFormatDescriptors[i])
+		} else {
+			// This case indicates an error in the peripheral's implementation or a communication issue
+			return nil, fmt.Errorf("descriptor mapping failed at position %d, insufficient descriptors discovered (macOS CoreBluetooth limitation)", i)
+		}
+	}
+
+	return &orderedFormatDescriptors, nil
+}
+
+// ParseDescriptorValue parses a descriptor value based on its UUID.
+// Returns the parsed value for well-known descriptors, or raw []byte for unknown descriptors.
+// Returns (nil, nil) for empty data, except for AggregateFormat, which allows empty arrays.
+func ParseDescriptorValue(uuid string, data []byte, descriptors []Descriptor) (interface{}, error) {
 	// Normalize UUID for comparison (remove dashes, lowercase)
 	normalizedUUID := NormalizeUUID(uuid)
+
+	// Early return for empty data - nothing to parse (except AggregateFormat, which allows empty)
+	if len(data) == 0 && normalizedUUID != DescriptorAggregateFormat {
+		return nil, nil
+	}
 
 	switch normalizedUUID {
 	case DescriptorExtendedProperties:
@@ -214,6 +294,8 @@ func ParseDescriptorValue(uuid string, data []byte) (interface{}, error) {
 		return ParsePresentationFormat(data)
 	case DescriptorValidRange:
 		return ParseValidRange(data)
+	case DescriptorAggregateFormat:
+		return ParseDescriptorAggregateFormat(data, descriptors)
 	default:
 		// Unknown descriptor UUID, return raw data
 		return data, nil

@@ -164,6 +164,8 @@ type CharacteristicInfo interface {
 // DescriptorInfo represents descriptor metadata
 type DescriptorInfo interface {
 	UUID() string
+	Handle() uint16
+	Index() uint8
 	KnownName() string
 	Value() []byte            // Returns raw descriptor value bytes, nil if read failed or skipped
 	ParsedValue() interface{} // Returns parsed value, *DescriptorError if read failed, nil if skipped
@@ -184,6 +186,9 @@ type Characteristic interface {
 	CharacteristicInfo
 	CharacteristicReader
 	CharacteristicWriter
+
+	HasParser() bool                              // Returns true if a parser is registered for this characteristic type
+	ParseValue(value []byte) (interface{}, error) // Parses value using registered parser
 }
 
 // Descriptor combines descriptor information (writes deferred to future implementation)

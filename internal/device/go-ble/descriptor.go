@@ -22,6 +22,8 @@ const (
 // It stores both raw descriptor values and parsed representations for well-known descriptor types.
 type BLEDescriptor struct {
 	uuid        string
+	handle      uint16
+	index       uint8
 	knownName   string
 	value       []byte
 	parsedValue interface{}
@@ -32,12 +34,14 @@ type BLEDescriptor struct {
 // If timeout is 0, descriptor reads are skipped entirely (fast path - no blocking).
 // If timeout > 0, attempts to read with that timeout (best-effort, won't fail on error/timeout).
 // For well-known descriptor UUIDs (0x2900-0x2906), values are automatically parsed.
-func newDescriptor(d *ble.Descriptor, client ble.Client, timeout time.Duration, logger *logrus.Logger) *BLEDescriptor {
+func newDescriptor(d *ble.Descriptor, client ble.Client, timeout time.Duration, index uint8, logger *logrus.Logger) *BLEDescriptor {
 	descRawUUID := d.UUID.String()
 	descUUID := device.NormalizeUUID(descRawUUID)
 
 	bleDesc := &BLEDescriptor{
 		uuid:      descUUID,
+		handle:    d.Handle,
+		index:     index,
 		knownName: bledb.LookupDescriptor(descRawUUID),
 		BLEDesc:   d,
 	}
@@ -72,23 +76,6 @@ func newDescriptor(d *ble.Descriptor, client ble.Client, timeout time.Duration, 
 	case result := <-resultCh:
 		if result.err == nil {
 			bleDesc.value = result.data
-
-			// Parse well-known descriptors automatically
-			if parsed, err := device.ParseDescriptorValue(descUUID, result.data); err == nil {
-				bleDesc.parsedValue = parsed
-			} else {
-				// Parse error - set parsedValue to DescriptorError
-				bleDesc.parsedValue = &device.DescriptorError{
-					Reason: "parse_error",
-					Err:    err,
-				}
-				if logger != nil {
-					logger.WithFields(logrus.Fields{
-						"descriptor_uuid": descUUID,
-						"error":           err,
-					}).Debug("Failed to parse descriptor value")
-				}
-			}
 		} else {
 			// Read error - set parsedValue to DescriptorError
 			bleDesc.parsedValue = &device.DescriptorError{
@@ -134,6 +121,15 @@ func (d *BLEDescriptor) KnownName() string {
 // Returns nil if the value was not successfully read or was skipped.
 func (d *BLEDescriptor) Value() []byte {
 	return d.value
+}
+
+func (d *BLEDescriptor) Handle() uint16 {
+	return d.handle
+}
+
+// Index returns the descriptor index within the characteristic.
+func (d *BLEDescriptor) Index() uint8 {
+	return d.index
 }
 
 // ParsedValue returns the parsed descriptor value for well-known descriptor types.

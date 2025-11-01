@@ -46,20 +46,24 @@ func (suite *DeviceTestSuite) ensureConnected() {
 	suite.Require().NotNil(suite.connection, "connection MUST not be nil")
 }
 
-// SetupTest configures a default peripheral with one service containing all needed characteristics
+// SetupTest configures a default peripheral with Generic Access (1800), Battery Service (180F), and Heart Rate Service (180D)
 func (suite *DeviceTestSuite) SetupTest() {
-	// Configure a default peripheral with Heart Rate Service (180D) containing all characteristics needed by tests
 	suite.WithPeripheral().
-		WithService("180F").
-		WithCharacteristic("2A19", "read", []byte{85}).
+		WithService("1800").                                                                        // Generic Access
+		WithCharacteristic("2A00", "read", []byte("Test Device")).                                  // Device Name (mandatory, read)
+		WithCharacteristic("2A01", "read", []byte{0x40, 0x00}).                                     // Appearance (mandatory, read) - Phone (0x0040, little-endian)
+		WithCharacteristic("2A04", "read", []byte{0x08, 0x00, 0x10, 0x00, 0x00, 0x00, 0xE8, 0x03}). // Peripheral Preferred Connection Parameters (optional, read) - min=10ms, max=20ms, latency=0, timeout=10s
+		WithService("180F").                                                                        // Battery Service
+		WithCharacteristic("2A19", "read", []byte{85}).                                             // Battery Level (mandatory, read)
 		WithCharacteristic("2A20", "read", []byte{}).
 		WithService("180D").                                                                    // Heart Rate Service
-		WithCharacteristic("2A37", "notify", []byte{0, 75}).                                    // Heart Rate Measurement (notify)
-		WithCharacteristic("2A38", "read", []byte{1}).                                          // Body Sensor Location (read)
-		WithCharacteristic("2A39", "write", []byte{}).                                          // Heart Rate Control Point (write)
-		WithCharacteristic("2A40", "read,write", []byte{0x00}).                                 // "Battery Level" (read, write)
-		WithCharacteristic("2A41", "read", []byte{42}, testutils.WithReadDelay(1*time.Second)). // Timeout read test
-		WithCharacteristic("2A42", "write", []byte{}, testutils.WithWriteDelay(1*time.Second))  // Timeout write test
+		WithCharacteristic("2A37", "notify", []byte{0, 75}).                                    // Heart Rate Measurement (mandatory, notify)
+		WithCharacteristic("2A38", "read", []byte{1}).                                          // Body Sensor Location (optional, read)
+		WithCharacteristic("2A39", "write", []byte{}).                                          // Heart Rate Control Point (optional, write)
+		WithCharacteristic("2A40", "read,write", []byte{0x00}).                                 // Test characteristic (read, write)
+		WithCharacteristic("2A41", "read", []byte{42}, testutils.WithReadDelay(1*time.Second)). // Test characteristic with read delay
+		WithCharacteristic("2A42", "write", []byte{}, testutils.WithWriteDelay(1*time.Second)). // Test characteristic with write delay
+		WithCharacteristic("FFFF", "read", []byte{0xAA, 0xBB})                                  // Unknown characteristic UUID for testing
 
 	// Call parent to apply the configuration and set up the device factory
 	suite.MockBLEPeripheralSuite.SetupTest()

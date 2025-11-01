@@ -12,11 +12,6 @@
     #define CONFIG_BT_NIMBLE_PINNED_TO_CORE   ARDUINO_RUNNING_CORE
 #endif
 
-//Uncomment to set the debug log messages level from the NimBLE host stack.
-// Values: 0 = DEBUG, 1 = INFO, 2 = WARNING, 3 = ERROR, 4 = CRITICAL, 5+ = NONE
-// Uses approx. 32kB of flash memory.
-#define CONFIG_BT_NIMBLE_LOG_LEVEL 0
-#define CONFIG_BT_NIMBLE_LOG_LEVEL 5
 #include <NimBLEDevice.h>
 
 
@@ -42,7 +37,11 @@ inline constexpr char deviceNameShort[] = DEVICE_NAME_SHORT;
 using ImuDevice = blim::Server<
     deviceName,
     deviceNameShort,
-    blim::AdvertisingConfig<9, 120, 140>,  // TX=9dBm, Intervals=120-140ms
+    blim::AdvertisingConfig<
+        9,                                                              // TX=9dBm
+        120, 140,                                                       // Intervals=120-140ms
+        static_cast<uint16_t>(blim::BleAppearance::kGenericSensor)     // Appearance=Generic Sensor (0x0540)
+    >,
     blim::ConnectionConfig<247, 12, 12, 0, 400>,  // MTU=247, Interval=15ms, Latency=0, Timeout=4s
     blim::PassiveAdvService<DeviceSettingsService<blim>>,
     blim::ActiveAdvService<DeviceInfoService<blim>>,
@@ -50,6 +49,13 @@ using ImuDevice = blim::Server<
 >;
 
 bool setup_ble() {
+    // Verify NimBLE logging is configured
+    #ifdef CONFIG_NIMBLE_CPP_LOG_LEVEL
+        Serial.printf("[BLE] CONFIG_NIMBLE_CPP_LOG_LEVEL = %d\n", CONFIG_NIMBLE_CPP_LOG_LEVEL);
+    #else
+        Serial.println("[BLE] WARNING: CONFIG_NIMBLE_CPP_LOG_LEVEL not defined!");
+    #endif
+
     bool success = ImuDevice::init();
     if (!success) {
         BLIM_LOG_ERROR("BLE initialization failed\n");

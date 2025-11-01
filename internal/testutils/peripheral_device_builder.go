@@ -83,6 +83,65 @@ type DeviceProfileConfig struct {
 	Services []ServiceConfig `json:"services"`
 }
 
+// AggregateFormatDescriptorBuilder builds an Aggregate Format descriptor (0x2905)
+// along with its referenced Presentation Format descriptors (0x2904).
+//
+// The builder automatically:
+//   - Adds all Presentation Format descriptors to the characteristic
+//   - Calculates their ATT handles based on descriptor position
+//   - Creates the Aggregate Format descriptor with encoded handle references
+//   - Returns to the characteristic builder for continued fluent chaining
+//
+// # Usage
+//
+//	builder.WithService("1234").
+//	    WithCharacteristic("5678").
+//	        WithAggregateFormatDescriptor().
+//	            WithPresentationFormat([]byte{0x04, 0x00, 0x01, 0x29, 0x01, 0x00, 0x00}).
+//	            WithPresentationFormat([]byte{0x04, 0x00, 0x01, 0x29, 0x01, 0x00, 0x00}).
+//	            Build()
+type AggregateFormatDescriptorBuilder struct {
+	parentBuilder       *PeripheralDeviceBuilder
+	presentationFormats [][]byte // Values for 0x2904 descriptors
+}
+
+// WithPresentationFormat adds a Presentation Format descriptor (0x2904) that will be
+// referenced by the aggregate. Multiple calls add multiple format descriptors.
+func (b *AggregateFormatDescriptorBuilder) WithPresentationFormat(value []byte) *AggregateFormatDescriptorBuilder {
+	b.presentationFormats = append(b.presentationFormats, value)
+	return b
+}
+
+// Build finalizes the aggregate descriptor and returns to the characteristic builder.
+// Adds all Presentation Format descriptors (0x2904) followed by the Aggregate Format
+// descriptor (0x2905) with properly encoded handle references.
+func (b *AggregateFormatDescriptorBuilder) Build() *PeripheralDeviceBuilder {
+	// Get the current descriptor count using the same pattern as addDescriptor
+	lastServiceIdx := len(b.parentBuilder.profile.Services) - 1
+	lastCharIdx := len(b.parentBuilder.profile.Services[lastServiceIdx].Characteristics) - 1
+	currentDescriptorCount := len(b.parentBuilder.profile.Services[lastServiceIdx].Characteristics[lastCharIdx].Descriptors)
+
+	// Add all 0x2904 Presentation Format descriptors
+	formatDescriptorStartIndex := currentDescriptorCount
+	for _, formatValue := range b.presentationFormats {
+		b.parentBuilder.WithDescriptor("2904", formatValue)
+	}
+
+	// Calculate handles for the presentation format descriptors
+	// Handles are assigned sequentially: 0x0100 + descriptor index
+	var aggregateValue []byte
+	for i := 0; i < len(b.presentationFormats); i++ {
+		handle := uint16(0x0100 + formatDescriptorStartIndex + i)
+		// Encode as little-endian uint16
+		aggregateValue = append(aggregateValue, byte(handle), byte(handle>>8))
+	}
+
+	// Add the 0x2905 Aggregate Format descriptor with encoded handles
+	b.parentBuilder.WithDescriptor("2905", aggregateValue)
+
+	return b.parentBuilder
+}
+
 // PeripheralDeviceBuilder builds a mocked BLE Device with full service/characteristic support.
 //
 // Supports building complex BLE device profiles with services, characteristics, and descriptors.
@@ -209,6 +268,15 @@ func (b *PeripheralDeviceBuilder) WithDescriptor(uuid string, value []byte) *Per
 	return b.addDescriptor(DescriptorConfig{UUID: uuid, Value: value})
 }
 
+// WithAggregateFormatDescriptor creates a builder for adding an Aggregate Format descriptor
+// with its referenced Presentation Format descriptors.
+func (b *PeripheralDeviceBuilder) WithAggregateFormatDescriptor() *AggregateFormatDescriptorBuilder {
+	return &AggregateFormatDescriptorBuilder{
+		parentBuilder:       b,
+		presentationFormats: [][]byte{},
+	}
+}
+
 // WithDescriptorReadTimeout adds a descriptor that times out when read
 func (b *PeripheralDeviceBuilder) WithDescriptorReadTimeout(uuid string) *PeripheralDeviceBuilder {
 	return b.addDescriptor(DescriptorConfig{UUID: uuid, ReadErrorBehavior: DescriptorReadTimeout})
@@ -242,6 +310,34 @@ func (b *PeripheralDeviceBuilder) WithScanAdvertisements() *AdvertisementArrayBu
 		return parent
 	}
 	return arrayBuilder
+}
+
+// remapAggregateIndices decodes placeholder handles from aggregate value and replaces them
+// with actual descriptor handles. The builder uses placeholder handles (0x0100 + index) to
+// represent descriptor indices, which are replaced with real ATT handles during Build().
+func remapAggregateIndices(aggregateValue []byte, descriptorHandles []uint16) []byte {
+	if len(aggregateValue) == 0 {
+		return aggregateValue
+	}
+
+	var result []byte
+	for i := 0; i < len(aggregateValue); i += 2 {
+		// Decode placeholder handle (little-endian)
+		placeholderHandle := uint16(aggregateValue[i]) | uint16(aggregateValue[i+1])<<8
+
+		// Extract index from placeholder (0x0100 + index)
+		index := int(placeholderHandle - 0x0100)
+
+		// Validate index bounds
+		if index < 0 || index >= len(descriptorHandles) {
+			panic(fmt.Sprintf("aggregate format references invalid descriptor index %d (valid: 0-%d)", index, len(descriptorHandles)-1))
+		}
+
+		// Replace with actual handle
+		actualHandle := descriptorHandles[index]
+		result = append(result, byte(actualHandle), byte(actualHandle>>8))
+	}
+	return result
 }
 
 // parseCharacteristicProperties converts the property string to BLE.Property flags
@@ -287,24 +383,42 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 	mockDevice := &blemocks.MockDevice{}
 	mockClient := &blemocks.MockClient{}
 
+	// Calculate sequential ATT handles for the entire profile
+	// Handles increment: service → characteristic → descriptors
+	currentHandle := uint16(0x0001)
+
 	// Create the BLE profile with services and characteristics
 	var bleServices []*blelib.Service
 	for _, svcConfig := range b.profile.Services {
 		bleService := &blelib.Service{
 			UUID: createMockUUID(svcConfig.UUID),
 		}
+		currentHandle++ // Service consumes one handle
 
 		var bleCharacteristics []*blelib.Characteristic
 		for _, charConfig := range svcConfig.Characteristics {
-			// Create descriptors for this characteristic
+			currentHandle++ // Characteristic consumes one handle
+
+			// Track descriptor handles for this characteristic
+			var descriptorHandles []uint16
 			var bleDescriptors []*blelib.Descriptor
-			for descIdx, descConfig := range charConfig.Descriptors {
+			for _, descConfig := range charConfig.Descriptors {
+				descriptorHandles = append(descriptorHandles, currentHandle)
 				bleDesc := &blelib.Descriptor{
 					UUID:   createMockUUID(descConfig.UUID),
 					Value:  descConfig.Value,
-					Handle: uint16(0x0100 + descIdx), // Set a valid handle for testing (0 would be rejected immediately)
+					Handle: currentHandle,
 				}
 				bleDescriptors = append(bleDescriptors, bleDesc)
+				currentHandle++ // Descriptor consumes one handle
+			}
+
+			// Fix up Aggregate Format descriptors: replace placeholder indices with actual handles
+			aggregateUUID := createMockUUID("2905")
+			for i, desc := range bleDescriptors {
+				if desc.UUID.String() == aggregateUUID.String() { // 0x2905 Aggregate Format
+					bleDescriptors[i].Value = remapAggregateIndices(desc.Value, descriptorHandles)
+				}
 			}
 
 			bleChar := &blelib.Characteristic{
@@ -467,6 +581,11 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 // GetServices returns the configured services for use in creating connection options
 func (b *PeripheralDeviceBuilder) GetServices() []ServiceConfig {
 	return b.profile.Services
+}
+
+// GetProfile returns the device profile configuration
+func (b *PeripheralDeviceBuilder) GetProfile() DeviceProfileConfig {
+	return b.profile
 }
 
 // GetDisconnectChannel returns the disconnect channel created by Build().

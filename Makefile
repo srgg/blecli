@@ -76,7 +76,7 @@ run: build
 
 ## clean: Remove all build artifacts and generated files
 .PHONY: clean
-clean: clean-mocks clean-docs clean-bledb
+clean: clean-mocks clean-docs clean-bledb clean-depend
 	@echo "Cleaning build artifacts..."
 	@rm -f $(BUILD_DIR)/$(BINARY_NAME)
 	@rm -rf $(COVERAGE_DIR)
@@ -87,9 +87,9 @@ clean: clean-mocks clean-docs clean-bledb
 # Code Generation
 #------------------------------------------------------------------------------
 
-## generate: Generate all code (BLE database, mocks, etc.)
+## generate: Generate all code (BLE database, mocks, depend tests, etc.)
 .PHONY: generate
-generate: $(BLEDB_GENERATED) generate-mocks
+generate: $(BLEDB_GENERATED) generate-mocks generate-depend
 
 ## generate-bledb: Generate BLE UUID database
 $(BLEDB_GENERATED): internal/bledb/*.go
@@ -111,6 +111,13 @@ generate-mocks:
 	@mockery --quiet 2>/dev/null || mockery
 	@echo "✓ Mocks generated"
 
+## generate-depend: Generate dependency test infrastructure using dependgen
+.PHONY: generate-depend
+generate-depend:
+	@echo "Generating depend test code..."
+	@$(GO) generate -tags test ./internal/device
+	@echo "✓ Depend test code generated"
+
 ## clean-bledb: Remove generated BLE database
 .PHONY: clean-bledb
 clean-bledb:
@@ -125,6 +132,13 @@ clean-mocks:
 	@find "$(MOCKS_DIR)" -type f -name 'mock_*.go' -exec rm -f {} +
 	@echo "✓ Mocks cleaned"
 
+## clean-depend: Remove generated depend test files
+.PHONY: clean-depend
+clean-depend:
+	@echo "Cleaning generated depend test files..."
+	@find ./internal/device -type f -name '*_depend_test.go' -exec rm -f {} +
+	@echo "✓ Depend test files cleaned"
+
 #------------------------------------------------------------------------------
 # Testing
 #------------------------------------------------------------------------------
@@ -134,10 +148,10 @@ clean-mocks:
 test: generate
 	@if [ -z "$(TEST)" ]; then \
 		echo "Running all tests..."; \
-		$(GO) test $(GO_TEST_FLAGS) -v ./...; \
+		$(GO) test $(GO_TEST_FLAGS) -v ./... 2>&1; \
 	else \
 		echo "Running tests matching: $(TEST)"; \
-		$(GO) test $(GO_TEST_FLAGS) -v -run $(TEST) ./...; \
+		$(GO) test $(GO_TEST_FLAGS) -v -run $(TEST) ./... 2>&1; \
 	fi
 
 ## test-race: Run tests with race detector
@@ -344,11 +358,13 @@ help:
 	@echo "  check            Run full quality check"
 	@echo ""
 	@echo "Code Generation:"
-	@echo "  generate         Generate all code (BLE database, mocks)"
+	@echo "  generate         Generate all code (BLE database, mocks, depend tests)"
 	@echo "  generate-bledb   Generate BLE UUID database"
 	@echo "  generate-mocks   Generate test mocks"
+	@echo "  generate-depend  Generate dependency test infrastructure"
 	@echo "  clean-bledb      Remove generated BLE database"
 	@echo "  clean-mocks      Remove generated mocks"
+	@echo "  clean-depend     Remove generated depend test files"
 	@echo ""
 	@echo "Dependencies:"
 	@echo "  tidy             Tidy dependencies"

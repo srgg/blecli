@@ -15,7 +15,11 @@ import (
 // AdvertisementBuilder builds mocked BLE advertisements for testing.
 // It provides a fluent API for configuring MockAdvertisement instances
 // with explicit field tracking to ensure only set fields have mock expectations.
-type AdvertisementBuilder struct {
+//
+// Type parameter T determines the return type of Build():
+//   - *MockAdvertisement for standalone usage
+//   - Custom parent type when using parent chaining (buildFunc must be set)
+type AdvertisementBuilder[T any] struct {
 	name        string
 	address     string
 	rssi        int
@@ -35,33 +39,48 @@ type AdvertisementBuilder struct {
 	serviceDataSet bool
 	txPowerSet     bool
 	connectableSet bool
+
+	// Optional parent chaining support
+	parent    T
+	buildFunc func(T, device.Advertisement) T
 }
 
 // NewAdvertisementBuilder creates a new AdvertisementBuilder with default values.
 // The builder starts with connectable=true and empty serviceData map.
-func NewAdvertisementBuilder() *AdvertisementBuilder {
-	return &AdvertisementBuilder{
+func NewAdvertisementBuilder() *AdvertisementBuilder[*devicemocks.MockAdvertisement] {
+	return &AdvertisementBuilder[*devicemocks.MockAdvertisement]{
 		serviceData: make(map[string][]byte),
 		connectable: true,
 	}
 }
 
+// NewAdvertisementBuilderWithParent creates a new AdvertisementBuilder with parent chaining support.
+// The builder will call buildFunc with parent and the built advertisement when Build() is called.
+func NewAdvertisementBuilderWithParent[T any](parent T, buildFunc func(T, device.Advertisement) T) *AdvertisementBuilder[T] {
+	return &AdvertisementBuilder[T]{
+		serviceData: make(map[string][]byte),
+		connectable: true,
+		parent:      parent,
+		buildFunc:   buildFunc,
+	}
+}
+
 // WithName sets the local name for the advertisement.
-func (b *AdvertisementBuilder) WithName(name string) *AdvertisementBuilder {
+func (b *AdvertisementBuilder[T]) WithName(name string) *AdvertisementBuilder[T] {
 	b.name = name
 	b.nameSet = true
 	return b
 }
 
 // WithAddress sets the device address for the advertisement.
-func (b *AdvertisementBuilder) WithAddress(addr string) *AdvertisementBuilder {
+func (b *AdvertisementBuilder[T]) WithAddress(addr string) *AdvertisementBuilder[T] {
 	b.address = addr
 	b.addressSet = true
 	return b
 }
 
 // WithRSSI sets the signal strength for the advertisement.
-func (b *AdvertisementBuilder) WithRSSI(rssi int) *AdvertisementBuilder {
+func (b *AdvertisementBuilder[T]) WithRSSI(rssi int) *AdvertisementBuilder[T] {
 	b.rssi = rssi
 	b.rssiSet = true
 	return b
@@ -69,21 +88,21 @@ func (b *AdvertisementBuilder) WithRSSI(rssi int) *AdvertisementBuilder {
 
 // WithServices adds service UUIDs to the advertisement.
 // UUIDs can be in short form (e.g., "180D") or full form.
-func (b *AdvertisementBuilder) WithServices(uuids ...string) *AdvertisementBuilder {
+func (b *AdvertisementBuilder[T]) WithServices(uuids ...string) *AdvertisementBuilder[T] {
 	b.services = append(b.services, uuids...)
 	b.servicesSet = true
 	return b
 }
 
 // WithManufacturerData sets the manufacturer-specific data.
-func (b *AdvertisementBuilder) WithManufacturerData(data []byte) *AdvertisementBuilder {
+func (b *AdvertisementBuilder[T]) WithManufacturerData(data []byte) *AdvertisementBuilder[T] {
 	b.manufData = data
 	b.manufDataSet = true
 	return b
 }
 
 // WithServiceData adds service-specific data for the given service UUID.
-func (b *AdvertisementBuilder) WithServiceData(uuid string, data []byte) *AdvertisementBuilder {
+func (b *AdvertisementBuilder[T]) WithServiceData(uuid string, data []byte) *AdvertisementBuilder[T] {
 	b.serviceData[uuid] = data
 	b.serviceDataSet = true
 	return b
@@ -91,21 +110,21 @@ func (b *AdvertisementBuilder) WithServiceData(uuid string, data []byte) *Advert
 
 // WithNoServiceData explicitly sets service data to nil.
 // Use this to distinguish between unset and empty service data.
-func (b *AdvertisementBuilder) WithNoServiceData() *AdvertisementBuilder {
+func (b *AdvertisementBuilder[T]) WithNoServiceData() *AdvertisementBuilder[T] {
 	b.serviceDataSet = true
 	b.serviceData = nil
 	return b
 }
 
 // WithTxPower sets the transmission power level.
-func (b *AdvertisementBuilder) WithTxPower(power int) *AdvertisementBuilder {
+func (b *AdvertisementBuilder[T]) WithTxPower(power int) *AdvertisementBuilder[T] {
 	b.txPower = &power
 	b.txPowerSet = true
 	return b
 }
 
 // WithConnectable sets whether the device accepts connections.
-func (b *AdvertisementBuilder) WithConnectable(c bool) *AdvertisementBuilder {
+func (b *AdvertisementBuilder[T]) WithConnectable(c bool) *AdvertisementBuilder[T] {
 	b.connectable = c
 	b.connectableSet = true
 	return b
@@ -113,7 +132,7 @@ func (b *AdvertisementBuilder) WithConnectable(c bool) *AdvertisementBuilder {
 
 // FromJSON fills builder fields from a JSON string with format support.
 // Panics on invalid JSON as this is intended for test data setup.
-func (b *AdvertisementBuilder) FromJSON(jsonStrFmt string, args ...interface{}) *AdvertisementBuilder {
+func (b *AdvertisementBuilder[T]) FromJSON(jsonStrFmt string, args ...interface{}) *AdvertisementBuilder[T] {
 	jsonStr := fmt.Sprintf(jsonStrFmt, args...)
 
 	// First, detect which fields are present in the JSON (even if null)
@@ -197,10 +216,13 @@ func (b *AdvertisementBuilder) FromJSON(jsonStrFmt string, args ...interface{}) 
 // Build creates a MockAdvertisement that implements device.Advertisement interface.
 // All mock expectations are set based on explicitly configured fields only.
 // Following testify best practices for mock setup.
-func (b *AdvertisementBuilder) Build() *devicemocks.MockAdvertisement {
+//
+// If buildFunc is set (parent chaining), calls buildFunc with the advertisement and returns type T.
+// Otherwise returns the MockAdvertisement (when T is *MockAdvertisement).
+func (b *AdvertisementBuilder[T]) Build() T {
 	adv := &devicemocks.MockAdvertisement{}
 
-	// Convert service data to expected format
+	// Convert service data to the expected format
 	var deviceServiceData []struct {
 		UUID string
 		Data []byte
@@ -252,13 +274,25 @@ func (b *AdvertisementBuilder) Build() *devicemocks.MockAdvertisement {
 	adv.On("OverflowService").Return([]string{}).Maybe()
 	adv.On("SolicitedService").Return([]string{}).Maybe()
 
-	return adv
+	// Note: Appearance is NOT part of advertisements
+	// It is read from the GAP service (0x1800) during connection, not from advertisement packets
+
+	// If parent chaining is configured, call buildFunc and return its result
+	if b.buildFunc != nil {
+		return b.buildFunc(b.parent, adv)
+	}
+
+	// Otherwise return the advertisement (cast to T)
+	var result interface{} = adv
+	return result.(T)
 }
 
 // BuildDevice creates a device.Device by building a fresh MockAdvertisement internally.
 // Convenience method for creating Device instances in tests without needing to call Build() separately.
-func (b *AdvertisementBuilder) BuildDevice(logger *logrus.Logger) device.Device {
-	adv := b.Build()
+func (b *AdvertisementBuilder[T]) BuildDevice(logger *logrus.Logger) device.Device {
+	// Build returns T, but we know for BuildDevice it must be *MockAdvertisement
+	var result interface{} = b.Build()
+	adv := result.(*devicemocks.MockAdvertisement)
 	return goble.NewBLEDeviceFromAdvertisement(adv, logger)
 }
 
@@ -282,8 +316,8 @@ func (b *AdvertisementBuilder) BuildDevice(logger *logrus.Logger) device.Device 
 //	ad1 := NewAdvertisementBuilder().WithName("Device1").Build()
 //	ad2 := NewAdvertisementBuilder().WithName("Device2").Build()
 //
-//	// Build an array with mix of pre-existing and new advertisements
-//	advertisements := NewAdvertisementArrayBuilder[[]device.Advertisement]().
+//	// Build an array with a mix of pre-existing and new advertisements
+//	 := NewAdvertisementArrayBuilder[[]device.Advertisement]().
 //	    WithAdvertisements(ad1, ad2). // Add multiple at once
 //	    WithNewAdvertisement().
 //	        WithName("HeartRate3").
@@ -331,7 +365,7 @@ func (ab *AdvertisementArrayBuilder[T]) WithNewAdvertisement() *AdvertisementArr
 	builder := NewAdvertisementBuilder()
 
 	// Create a custom builder that knows about its parent array builder
-	customBuilder := &AdvertisementBuilder{
+	customBuilder := &AdvertisementBuilder[*devicemocks.MockAdvertisement]{
 		serviceData: make(map[string][]byte),
 		connectable: true,
 		name:        builder.name,
@@ -362,7 +396,7 @@ func (ab *AdvertisementArrayBuilder[T]) Build() T {
 // AdvertisementArrayBuilderItem wraps AdvertisementBuilder to provide array functionality.
 // It embeds AdvertisementBuilder and adds the capability to return to the parent array builder.
 type AdvertisementArrayBuilderItem[T any] struct {
-	*AdvertisementBuilder
+	*AdvertisementBuilder[*devicemocks.MockAdvertisement]
 	parent *AdvertisementArrayBuilder[T]
 }
 

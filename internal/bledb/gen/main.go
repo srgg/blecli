@@ -21,6 +21,8 @@ import (
 )
 
 const (
+	// https://github.com/NordicSemiconductor/bluetooth-numbers-database/tree/master
+	// https://bitbucket.org/bluetooth-SIG/public/src/main/assigned_numbers/
 	cacheDir          = "../../.tmp/bledb-cache"
 	outFile           = "../../internal/bledb/bledb_generated.go"
 	serviceURL        = "https://raw.githubusercontent.com/NordicSemiconductor/bluetooth-numbers-database/master/v1/service_uuids.json"
@@ -36,6 +38,7 @@ const (
 	bsigVendorURL         = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/company_identifiers/company_identifiers.yaml"
 	bsigUnitURL           = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/units.yaml"
 	bsigMemberUUIDsURL    = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/uuids/member_uuids.yaml"
+	bsigAppearanceURL     = "https://bitbucket.org/bluetooth-SIG/public/raw/main/assigned_numbers/core/appearance_values.yaml"
 
 	bleakURL = "https://raw.githubusercontent.com/hbldh/bleak/refs/heads/develop/bleak/uuids.py"
 )
@@ -64,6 +67,7 @@ type templateData struct {
 	VendorEntries         []templateEntry
 	UnitEntries           []templateEntry
 	BleakEntries          []templateEntry
+	AppearanceEntries     []templateEntry
 }
 
 // templateEntry represents a UUID entry in the template.
@@ -81,6 +85,7 @@ const (
 	Descriptor     BLEType = "Descriptor"
 	Vendor         BLEType = "Vendor"
 	Unit           BLEType = "Unit"
+	Appearance     BLEType = "Appearance"
 	Other          BLEType = "Other"
 )
 
@@ -217,6 +222,16 @@ func run() error {
 		return err
 	}
 
+	// BSIG Appearance values
+	bsigAppearancePath, err := ensureCached("appearance_values.yaml", bsigAppearanceURL)
+	if err != nil {
+		return err
+	}
+	bsigAppearances, err := parseAppearanceYAML(bsigAppearancePath)
+	if err != nil {
+		return err
+	}
+
 	// -- Last Hope Bleak unsorted UUIDs
 	bleakPath, err := ensureCached("bleak_uuids.py", bleakURL)
 	if err != nil {
@@ -249,7 +264,7 @@ func run() error {
 	}
 	defer f.Close()
 
-	if err := writeGeneratedFile(f, services, characteristics, descriptors, vendors, bsigUnits, bleakEntries, timestamp); err != nil {
+	if err := writeGeneratedFile(f, services, characteristics, descriptors, vendors, bsigUnits, bsigAppearances, bleakEntries, timestamp); err != nil {
 		return fmt.Errorf("failed to write generated file: %w", err)
 	}
 	fmt.Println("Generated", outFile)
@@ -486,8 +501,128 @@ func parseBleakUUIDs(path string) ([]rawEntry, error) {
 	return entries, nil
 }
 
+// parseAppearanceYAML parses the Bluetooth SIG appearance values YAML file.
+// Appearance values encode device type as category (upper 10 bits) + subcategory (lower 6 bits).
+// Format: category=1 (0x0001) → category only, category=1 subcategory=2 (0x0042) → specific subcategory
+func parseAppearanceYAML(path string) ([]rawEntry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read appearance file %s: %w", path, err)
+	}
+
+	var root map[string]interface{}
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("failed to parse appearance YAML %s: %w", path, err)
+	}
+
+	entries := make([]rawEntry, 0)
+
+	// Parse categories array
+	categoriesRaw, ok := root["appearance_values"]
+	if !ok {
+		return nil, fmt.Errorf("missing appearance_values in %s", path)
+	}
+
+	categories, ok := categoriesRaw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid appearance_values format in %s", path)
+	}
+
+	for _, cat := range categories {
+		catMap, ok := cat.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Get category value (upper 10 bits) - handle hex string (0x001) or int
+		catValue := 0
+		if v, ok := catMap["category"]; ok {
+			switch v := v.(type) {
+			case int:
+				catValue = v
+			case float64:
+				catValue = int(v)
+			case string:
+				// Parse hex string like "0x001"
+				fmt.Sscanf(v, "0x%x", &catValue)
+			}
+		}
+
+		// Get category name
+		catName := ""
+		if n, ok := catMap["name"].(string); ok {
+			catName = n
+		}
+
+		// Add category-only entry (subcategory=0)
+		if catValue > 0 && catName != "" {
+			// Category-only appearance: category value, subcategory 0
+			appearanceValue := fmt.Sprintf("%04x", catValue<<6)
+			entries = append(entries, rawEntry{
+				UUID: appearanceValue,
+				Name: catName,
+				Type: Appearance,
+			})
+		}
+
+		// Parse subcategories if present (note: key is "subcategory" singular, not "subcategories")
+		if subCatsRaw, ok := catMap["subcategory"]; ok {
+			subCats, ok := subCatsRaw.([]interface{})
+			if !ok {
+				continue
+			}
+
+			for _, sub := range subCats {
+				subMap, ok := sub.(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				// Get subcategory value (lower 6 bits) - field is "value", handle hex string or int
+				subValue := 0
+				if v, ok := subMap["value"]; ok {
+					switch v := v.(type) {
+					case int:
+						subValue = v
+					case float64:
+						subValue = int(v)
+					case string:
+						// Parse hex string like "0x01"
+						fmt.Sscanf(v, "0x%x", &subValue)
+					}
+				}
+
+				// Get subcategory name
+				subName := ""
+				if n, ok := subMap["name"].(string); ok {
+					subName = n
+				}
+
+				// Add subcategory entry
+				if subValue > 0 && subName != "" {
+					// Full appearance value: (category << 6) | subcategory
+					appearanceValue := fmt.Sprintf("%04x", (catValue<<6)|subValue)
+					// Compose full name: "Category: Subcategory"
+					fullName := fmt.Sprintf("%s: %s", catName, subName)
+					entries = append(entries, rawEntry{
+						UUID: appearanceValue,
+						Name: fullName,
+						Type: Appearance,
+					})
+				}
+			}
+		}
+	}
+
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("appearance file %s contains no valid entries", path)
+	}
+
+	return entries, nil
+}
+
 // writeGeneratedFile writes the BLE database to a Go source file using a template.
-func writeGeneratedFile(f *os.File, services, characteristics, descriptors, vendors, units, bleakEntries []rawEntry, timestamp string) error {
+func writeGeneratedFile(f *os.File, services, characteristics, descriptors, vendors, units, appearances, bleakEntries []rawEntry, timestamp string) error {
 	tmpl, err := template.New("bledb").Parse(codeTemplate)
 	if err != nil {
 		return fmt.Errorf("failed to parse template: %w", err)
@@ -553,6 +688,7 @@ func writeGeneratedFile(f *os.File, services, characteristics, descriptors, vend
 		DescriptorEntries:     convertEntries(descriptors, Descriptor),
 		VendorEntries:         convertEntries(vendors, Vendor),
 		UnitEntries:           convertEntries(units, Unit),
+		AppearanceEntries:     convertEntries(appearances, Appearance),
 		BleakEntries:          convertEntries(bleakEntries, Other),
 	}
 

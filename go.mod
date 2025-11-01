@@ -19,6 +19,7 @@ require (
 require (
 	github.com/hedzr/go-ringbuf/v2 v2.2.2
 	github.com/smallnest/ringbuffer v0.0.0-20250317021400-0da97b586904
+	github.com/srgg/testify v0.0.0-20251031192711-c4afda2f4a67
 	github.com/wk8/go-ordered-map/v2 v2.1.8
 	github.com/yudai/gojsondiff v1.0.0
 	golang.org/x/sys v0.37.0
@@ -54,3 +55,6 @@ require (
 //replace github.com/aarzilli/golua => /Users/srg/src/golua
 
 replace github.com/go-ble/ble => github.com/srgg/go-ble v0.0.0-20251019021511-162008c817dc
+
+//tool github.com/srgg/testify/depend/cmd/dependgen
+tool github.com/srgg/testify/depend

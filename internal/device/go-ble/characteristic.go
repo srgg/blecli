@@ -206,6 +206,14 @@ func (c *BLECharacteristic) GetDescriptors() []device.Descriptor {
 	return c.descriptors
 }
 
+func (c *BLECharacteristic) HasParser() bool {
+	return device.IsParsableCharacteristic(c.uuid)
+}
+
+func (c *BLECharacteristic) ParseValue(value []byte) (interface{}, error) {
+	return device.ParseCharacteristicValue(c.uuid, value)
+}
+
 // GetValue returns the current cached value of the characteristic.
 // IMPORTANT: The returned slice is READ-ONLY. Callers MUST NOT modify it.
 // Modifying the returned slice will cause data races and undefined behavior.

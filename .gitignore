@@ -53,3 +53,6 @@ scripts/*.log
 
 # PlatformIO Compilation database (IDE-specific, regenerated on build)
 compile_commands.json
+
+# Generated testify/depend dependency files
+*_depend_test.go
