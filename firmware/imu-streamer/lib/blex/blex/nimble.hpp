@@ -8,6 +8,33 @@
 #include "platform.hpp"
 #include "core.hpp"
 
+// Lightweight span-like view for type-safe buffer operations
+// (std::span not available in Arduino ESP32 framework despite GCC 12.2.0)
+namespace blex_detail {
+    template<typename T>
+    class buffer_view {
+        T* data_;
+        size_t size_;
+    public:
+        constexpr buffer_view(T* ptr, size_t n) noexcept : data_(ptr), size_(n) {}
+
+        template<size_t N>
+        constexpr buffer_view(T (&arr)[N]) noexcept : data_(arr), size_(N) {}
+
+        template<size_t N>
+        constexpr buffer_view(std::array<T, N>& arr) noexcept : data_(arr.data()), size_(N) {}
+
+        constexpr T* data() const noexcept { return data_; }
+        constexpr size_t size() const noexcept { return size_; }
+        constexpr bool empty() const noexcept { return size_ == 0; }
+
+        constexpr T& operator[](size_t idx) const noexcept { return data_[idx]; }
+        constexpr T* begin() const noexcept { return data_; }
+        constexpr T* end() const noexcept { return data_ + size_; }
+    };
+}
+
+
 // Detect if NimBLE is available
 #ifdef NIMBLE_CPP_DEVICE_H_
     #define BLEX_NIMBLE_AVAILABLE
@@ -115,7 +142,9 @@ struct BLECharShim final : NimBLECharacteristicCallbacks {
                 } else {
                     std::array<uint8_t, sizeof(T)> buf{};
                     std::memcpy(buf.data(), &newValue, sizeof(T));
-                    p->setValue(buf.data(), sizeof(T));
+                    // Use buffer_view for type-safe buffer operations
+                    blex_detail::buffer_view<const uint8_t> safe_buffer{buf.data(), buf.size()};
+                    p->setValue(safe_buffer.data(), safe_buffer.size());
                 }
 
                 if constexpr (CharT::perms_type::canNotify) {
@@ -155,17 +184,24 @@ struct BLECharShim final : NimBLECharacteristicCallbacks {
                 CharT::WriteHandler(pChar->getValue());
             } else {
                 const auto& data = pChar->getValue();
-                assert(data.size() >= sizeof(typename CharT::value_type) &&
+                // Use buffer_view for type-safe bounds-checked buffer access
+                blex_detail::buffer_view<const uint8_t> safe_data{
+                    reinterpret_cast<const uint8_t*>(data.data()),
+                    data.size()
+                };
+
+                assert(safe_data.size() >= sizeof(typename CharT::value_type) &&
                        "BLE write data size mismatch");
+
                 // Using memcpy to avoid undefined behavior from pointer aliasing/misalignment
                 typename CharT::value_type val;
-                std::memcpy(&val, data.data(), sizeof(typename CharT::value_type));
+                std::memcpy(&val, safe_data.data(), sizeof(typename CharT::value_type));
                 CharT::WriteHandler(val);
             }
         }
     }
 
-    void onStatus(NimBLECharacteristic* pChar, int code) override {
+    void onStatus([[maybe_unused]] NimBLECharacteristic* pChar, [[maybe_unused]] int code) override {
         // StatusHandler is NOT thread-safe; the user-provided handler must be safe for concurrent execution.
         if constexpr (CharT::StatusHandler != nullptr) {
             CharT::StatusHandler(code);
@@ -329,38 +365,42 @@ struct ConstCharacteristic {
     static constexpr void validate_all_descriptors() {}
 };
 
-// Characteristic (dynamic with callbacks)
 template<
     typename T,
     auto UUID,
     typename Perms,
-    auto OnRead = nullptr,
-    auto OnWrite = nullptr,
-    auto OnStatus = nullptr,
-    auto OnSubscribe = nullptr,
-    typename... Descriptors
->
+    typename... Args
+> requires blex_core::AllValidCharArgs<UUID, Args...>  // Hybrid: concept + diagnostic with UUID, type, position
 struct Characteristic {
     static constexpr auto _ = (blex_core::check_uuid_type<decltype(UUID)>(), 0);
 
-    static_assert( OnRead == nullptr || blex_core::CallbackTraits<T, OnRead>::is_valid_on_read && Perms::canRead,
-        "Invalid BLE OnRead callback: must be invocable with 'T&' and characteristic must allow Read");
+    // Extract callbacks from Args using tag-based helper (directly use find_char_callback)
+    // Use explicit type aliases to avoid auto deduction issues
+    using ReadHandlerType = decltype(blex_core::find_char_callback<0, Args...>::value);
+    using WriteHandlerType = decltype(blex_core::find_char_callback<1, Args...>::value);
+    using StatusHandlerType = decltype(blex_core::find_char_callback<2, Args...>::value);
+    using SubscribeHandlerType = decltype(blex_core::find_char_callback<3, Args...>::value);
 
-    static_assert( OnWrite == nullptr || blex_core::CallbackTraits<T, OnWrite>::is_valid_on_write && Perms::canWrite,
-        "Invalid BLE OnWrite callback: must be invocable with 'const T&' and characteristic must allow Write");
+    static constexpr ReadHandlerType ReadHandler = blex_core::find_char_callback<0, Args...>::value;
+    static constexpr WriteHandlerType WriteHandler = blex_core::find_char_callback<1, Args...>::value;
+    static constexpr StatusHandlerType StatusHandler = blex_core::find_char_callback<2, Args...>::value;
+    static constexpr SubscribeHandlerType SubscribeHandler = blex_core::find_char_callback<3, Args...>::value;
 
-    static_assert( OnSubscribe== nullptr || blex_core::CallbackTraits<T, OnSubscribe>::is_valid_on_subscribe && Perms::canNotify,
-        "Invalid BLE OnSubscribe callback: must be invocable with 'uint16_t' and characteristic must allow Notifications");
+    // Validate callbacks against permissions
+    static_assert( ReadHandler == nullptr || (blex_core::CallbackTraits<T, ReadHandler>::is_valid_on_read && Perms::canRead),
+                   "Invalid BLE OnRead callback: must be invocable with 'T&' and characteristic must allow Read");
+
+    static_assert( WriteHandler == nullptr || (blex_core::CallbackTraits<T, WriteHandler>::is_valid_on_write && Perms::canWrite),
+                   "Invalid BLE OnWrite callback: must be invocable with 'const T&' and characteristic must allow Write");
+
+    static_assert( SubscribeHandler== nullptr || (blex_core::CallbackTraits<T, SubscribeHandler>::is_valid_on_subscribe && Perms::canNotify),
+                   "Invalid BLE OnSubscribe callback: must be invocable with 'uint16_t' and characteristic must allow Notifications");
 
     using value_type = T;
     static constexpr auto uuid = UUID;
     using perms_type = Perms;
-    using descriptors_pack = blex_core::DescriptorsPack<Descriptors...>;
+    using descriptors_pack = typename blex_core::filter_descriptors_from_args<Args...>::type;
     static constexpr bool is_const_characteristic = false;
-    static constexpr auto ReadHandler = OnRead;
-    static constexpr auto WriteHandler = OnWrite;
-    static constexpr auto StatusHandler = OnStatus;
-    static constexpr auto SubscribeHandler = OnSubscribe;
 
 #ifdef BLEX_NIMBLE_AVAILABLE
     // Make pChar accessible via template parameter LockPolicy
@@ -383,11 +423,13 @@ struct Characteristic {
 
     template<template<typename> class LockPolicy = DefaultLock>
     static void setValue(const T& newValue) {
-         return blex_nimble::BLECharShim<Characteristic, LockPolicy>::setValue(newValue);
+        return blex_nimble::BLECharShim<Characteristic, LockPolicy>::setValue(newValue);
     }
 
     static constexpr void validate_all_descriptors() {}
 };
+
+// Characteristic - Dynamic with callbacks and descriptors
 
 // ---------------------- Service Template ----------------------
 

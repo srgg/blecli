@@ -51,10 +51,6 @@ struct IMUServiceImpl {
         float[9],
         0XFF11,
         typename Blex::template Permissions<typename Blex::Readable, typename Blex::Notifiable>,
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr,
         IMUUserDesc,
         ImuFormatDesc
     >;

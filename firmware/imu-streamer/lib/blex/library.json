@@ -1,8 +1,8 @@
 {
     "name": "blex",
-    "version": "0.0.1",
-    "description": "Compile-Time BLE Meta-Framework - Zero-runtime declarative BLE framework for embedded devices",
-    "keywords": ["ble", "bluetooth", "nimble", "esp32"],
+    "version": "0.1.0",
+    "description": "A modern compile-time BLE framework for C++20 embedded systems. Enables zero-runtime, declarative BLE design with support for GCC 12.2.0+ (espressif32@6.0.0+).",
+    "keywords": ["ble", "bluetooth", "nimble", "esp32", "cpp20", "metaprogramming"],
     "authors": [
       {
         "name": "Serhii Halkin",
@@ -10,12 +10,13 @@
       }
     ],
     "frameworks": ["arduino", "espidf"],
-    "platforms": ["espressif32"],
+    "platforms": ["espressif32@^6.0.0"],
     "dependencies": {
       "h2zero/NimBLE-Arduino": "^1.4.0"
     },
     "build": {
-      "flags": ["-std=c++17"]
+      "flags": ["-std=gnu++2a", "-fconcepts"],
+      "unflags": ["-std=c++17", "-std=gnu++17"]
     },
     "export": {
         "exclude": [

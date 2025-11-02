@@ -1,5 +1,5 @@
 /**
- * BLEX Core - Pure C++ type-level BLE API (no NimBLE dependencies)
+ * BLEX Core - Pure C++ type-level BLE API
  */
 
 #ifndef BLEX_CORE_HPP_
@@ -7,8 +7,8 @@
 
 #include <tuple>
 #include <type_traits>
-#include <string>
 #include <cstring>
+#include <cstdint>
 
 // Forward declare blex template for friendship
 template<template<typename> class LockPolicy>
@@ -16,24 +16,75 @@ struct blex;
 
 namespace blex_core {
 
+// ---------------------- Connection Abstraction (NimBLE-agnostic) ----------------------
+
+// Connection information (implementation-agnostic)
+struct ConnectionInfo {
+    const char* address;      // MAC address as string (e.g., "aa:bb:cc:dd:ee:ff")
+    uint16_t conn_handle;     // Connection handle
+    uint16_t mtu;             // Current MTU size
+};
+
+// Disconnect reason codes (subset of BLE spec)
+enum class DisconnectReason : uint8_t {
+    Unknown = 0,
+    UserTerminated = 0x13,
+    RemoteTerminated = 0x13,
+    ConnectionTimeout = 0x08,
+    LocalHostTerminated = 0x16,
+};
+
+// ---------------------- C++20 Concepts ----------------------
+
+// UUID type concept
+template<typename T>
+concept UuidType = requires {
+    requires std::is_integral_v<std::remove_cv_t<std::remove_reference_t<T>>> ||
+             std::is_same_v<std::remove_cv_t<std::remove_pointer_t<std::remove_cv_t<std::remove_reference_t<T>>>>, char> ||
+             std::is_same_v<std::remove_cv_t<std::remove_extent_t<std::remove_cv_t<std::remove_reference_t<T>>>>, char>;
+};
+
+// Service wrapper concept
+template<typename T>
+concept ServiceWrapper = requires { typename T::service_type; };
+
+// Advertising config concept
+template<typename T>
+concept AdvertisingConfigType = requires { typename T::is_blex_advertising_config_tag; };
+
+// Connection config concept
+template<typename T>
+concept ConnectionConfigType = requires { typename T::is_blex_connection_config_tag; };
+
+// Security config concept
+template<typename T>
+concept SecurityConfigType = requires { typename T::is_blex_security_config_tag; };
+
+// Callback tag concept
+template<typename T>
+concept CharCallbackTag = requires { typename T::is_blex_char_callback_tag; };
+
+// Server callback tag concept
+template<typename T>
+concept ServerCallbackTag = requires { typename T::is_blex_server_callback_tag; };
+
+// Security callback tag concept
+template<typename T>
+concept SecurityCallbackTag = requires { typename T::is_blex_security_callback_tag; };
+
+// Presentation format descriptor concept
+template<typename T>
+concept PresentationFormatDescriptor = requires { typename T::is_presentation_format_descriptor; };
+
 // ---------------------- Type Traits and Metaprogramming ----------------------
 
-// UUID type validation
+// UUID type validation (compile-time evaluation)
 template<typename T>
 static constexpr void check_uuid_type() {
-    using U = std::remove_cv_t<std::remove_reference_t<T>>;
-    using P = std::remove_cv_t<std::remove_pointer_t<U>>;
-    using E = std::remove_cv_t<std::remove_extent_t<U>>;
-
-    static_assert(
-        std::is_integral_v<U> ||
-        std::is_same_v<P, char> ||
-        std::is_same_v<E, char>,
-        "UUID must be an integer (e.g., uint16_t) or a C string (char*/char[])"
-    );
+    static_assert(UuidType<T>, "UUID must be an integer (e.g., uint16_t) or a C string (char*/char[])");
 }
 
-// Constexpr string length helper
+// Compile-time string length helper
 static constexpr size_t const_strlen(const char* str) {
     return *str ? 1 + const_strlen(str + 1) : 0;
 }
@@ -49,21 +100,18 @@ struct value_storage_size<const char*, Val> {
     static constexpr size_t value = const_strlen(Val) + 1;
 };
 
-// Service wrapper detection
-template<typename, typename = void>
-struct is_service_wrapper : std::false_type {};
-
+// Service wrapper detection (trait for backwards compatibility)
 template<typename T>
-struct is_service_wrapper<T, std::void_t<typename T::service_type>> : std::true_type {};
+struct is_service_wrapper : std::bool_constant<ServiceWrapper<T>> {};
 
-// Unwrap service type
+// Unwrap service type (concept-based with SFINAE for member access)
 template<typename T, typename = void>
 struct unwrap_service_impl {
     using type = T;
 };
 
 template<typename T>
-struct unwrap_service_impl<T, std::enable_if_t<is_service_wrapper<T>::value>> {
+struct unwrap_service_impl<T, std::enable_if_t<ServiceWrapper<T>>> {
     using type = typename T::service_type;
 };
 
@@ -108,47 +156,44 @@ struct filter_services_pack<Predicate, ServicesPack<Services...>> {
     using type = typename filter_services<Predicate, Services...>::type;
 };
 
-// Presentation Format descriptor detection
-template<typename, typename = void>
-struct has_presentation_format_marker_impl : std::false_type {};
-
-template<typename T>
-struct has_presentation_format_marker_impl<T, std::void_t<typename T::is_presentation_format_descriptor>> : std::true_type {};
-
+// Presentation Format descriptor detection (concept-based)
 template<typename T>
 static constexpr bool has_presentation_format_marker() {
-    return has_presentation_format_marker_impl<T>::value;
+    return PresentationFormatDescriptor<T>;
 }
 
-// Predicates for filtering
-template<typename, typename = void>
+// Predicates for filtering (concept-based with SFINAE fallback for member access)
+template<typename T, typename = void>
 struct is_passive_adv_pred : std::false_type {};
 
 template<typename T>
-struct is_passive_adv_pred<T, std::enable_if_t<is_service_wrapper<T>::value>>
-    : std::integral_constant<bool, T::passive_adv> {};
+struct is_passive_adv_pred<T, std::enable_if_t<ServiceWrapper<T>>>
+    : std::bool_constant<T::passive_adv> {};
 
-template<typename, typename = void>
+template<typename T, typename = void>
 struct is_active_adv_pred : std::false_type {};
 
 template<typename T>
-struct is_active_adv_pred<T, std::enable_if_t<is_service_wrapper<T>::value>>
-    : std::integral_constant<bool, T::active_adv> {};
+struct is_active_adv_pred<T, std::enable_if_t<ServiceWrapper<T>>>
+    : std::bool_constant<T::active_adv> {};
 
-// Config type detection (forward-compatible)
-template<typename, typename = void>
-struct is_advertising_config : std::false_type {};
-
-// Specialize for any type that has is_blex_advertising_config_tag
+// Config type detection (concept-based with trait wrappers for compatibility)
 template<typename T>
-struct is_advertising_config<T, std::void_t<typename T::is_blex_advertising_config_tag>> : std::true_type {};
+struct is_advertising_config : std::bool_constant<AdvertisingConfigType<T>> {};
 
-template<typename, typename = void>
-struct is_connection_config : std::false_type {};
-
-// Specialize for any type that has is_blex_connection_config_tag
 template<typename T>
-struct is_connection_config<T, std::void_t<typename T::is_blex_connection_config_tag>> : std::true_type {};
+struct is_connection_config : std::bool_constant<ConnectionConfigType<T>> {};
+
+template<typename T>
+struct is_security_config : std::bool_constant<SecurityConfigType<T>> {};
+
+// Server callback tag type detection (concept-based with trait wrapper)
+template<typename T>
+struct is_server_callback_tag : std::bool_constant<ServerCallbackTag<T>> {};
+
+// Security callback tag type detection (concept-based with trait wrapper)
+template<typename T>
+struct is_security_callback_tag : std::bool_constant<SecurityCallbackTag<T>> {};
 
 // Helper to concatenate ServicesPack types
 template<typename Pack1, typename Pack2>
@@ -159,7 +204,7 @@ struct concat_pack<ServicesPack<S1...>, ServicesPack<S2...>> {
     using type = ServicesPack<S1..., S2...>;
 };
 
-// Filter out AdvertisingConfig and ConnectionConfig to get only Services
+// Filter out config types, server callbacks, and security callbacks to get only Services
 template<typename...>
 struct filter_non_config {
     using type = ServicesPack<>;  // Base case: empty pack
@@ -169,7 +214,11 @@ template<typename First, typename... Rest>
 struct filter_non_config<First, Rest...> {
     using filtered_rest = typename filter_non_config<Rest...>::type;
     using type = std::conditional_t<
-        is_advertising_config<First>::value || is_connection_config<First>::value,
+        (is_advertising_config<First>::value ||
+         is_connection_config<First>::value ||
+         is_security_config<First>::value ||
+         is_server_callback_tag<First>::value ||
+         is_security_callback_tag<First>::value),
         filtered_rest,
         typename concat_pack<ServicesPack<First>, filtered_rest>::type
     >;
@@ -184,7 +233,173 @@ struct CallbackTraits {
     static constexpr bool is_valid_on_subscribe = std::is_invocable_v<decltype(CallbackFunc), uint16_t>;
 };
 
+// Characteristic callback tag type detection (concept-based with trait wrapper)
+template<typename T>
+struct is_char_callback_tag : std::bool_constant<CharCallbackTag<T>> {};
+
+// Server callback extraction helper - finds server callback tag with matching type in variadic Args
+template<int TargetType, typename...>
+struct find_server_callback;
+
+// Helper to safely check if a type is a server callback tag with matching type
+template<typename T, int TargetType, typename = void>
+struct matches_server_callback_type : std::false_type {};
+
+template<typename T, int TargetType>
+struct matches_server_callback_type<T, TargetType, std::enable_if_t<is_server_callback_tag<T>::value>>
+    : std::bool_constant<T::callback_type == TargetType> {};
+
+// Specialization helper for server callbacks
+template<int TargetType, bool IsMatch, typename First, typename... Rest>
+struct find_server_callback_impl {
+    static constexpr auto value = find_server_callback<TargetType, Rest...>::value;
+};
+
+template<int TargetType, typename First, typename... Rest>
+struct find_server_callback_impl<TargetType, true, First, Rest...> {
+    static constexpr auto value = First::callback;
+};
+
+// Base case: no matching server callback found
+template<int TargetType, typename...>
+struct find_server_callback {
+    static constexpr void(*value)() = nullptr;
+};
+
+// Recursive case: check if First matches, otherwise continue searching
+template<int TargetType, typename First, typename... Rest>
+struct find_server_callback<TargetType, First, Rest...> {
+private:
+    static constexpr bool is_match = matches_server_callback_type<First, TargetType>::value;
+public:
+    static constexpr auto value = find_server_callback_impl<TargetType, is_match, First, Rest...>::value;
+};
+
+// Security callback extraction helper - finds security callback tag with matching type in variadic Args
+template<int TargetType, typename...>
+struct find_security_callback;
+
+// Helper to safely check if a type is a security callback tag with matching type
+template<typename T, int TargetType, typename = void>
+struct matches_security_callback_type : std::false_type {};
+
+template<typename T, int TargetType>
+struct matches_security_callback_type<T, TargetType, std::enable_if_t<is_security_callback_tag<T>::value>>
+    : std::bool_constant<T::callback_type == TargetType> {};
+
+// Specialization helper for security callbacks
+template<int TargetType, bool IsMatch, typename First, typename... Rest>
+struct find_security_callback_impl {
+    static constexpr auto value = find_security_callback<TargetType, Rest...>::value;
+};
+
+template<int TargetType, typename First, typename... Rest>
+struct find_security_callback_impl<TargetType, true, First, Rest...> {
+    static constexpr auto value = First::callback;
+};
+
+// Base case: no matching security callback found
+template<int TargetType, typename...>
+struct find_security_callback {
+    static constexpr void(*value)() = nullptr;
+};
+
+// Recursive case: check if First matches, otherwise continue searching
+template<int TargetType, typename First, typename... Rest>
+struct find_security_callback<TargetType, First, Rest...> {
+private:
+    static constexpr bool is_match = matches_security_callback_type<First, TargetType>::value;
+public:
+    static constexpr auto value = find_security_callback_impl<TargetType, is_match, First, Rest...>::value;
+};
+
 } // namespace blex_core
+
+// ---------------------- Characteristic Callback Tag Types ----------------------
+
+// Callback tag templates (user-facing API)
+template<auto Func>
+struct OnRead {
+    using is_blex_char_callback_tag = void;
+    static constexpr int callback_type = 0;  // 0 = Read
+    static constexpr auto callback = Func;
+};
+
+template<auto Func>
+struct OnWrite {
+    using is_blex_char_callback_tag = void;
+    static constexpr int callback_type = 1;  // 1 = Write
+    static constexpr auto callback = Func;
+};
+
+template<auto Func>
+struct OnStatus {
+    using is_blex_char_callback_tag = void;
+    static constexpr int callback_type = 2;  // 2 = Status
+    static constexpr auto callback = Func;
+};
+
+template<auto Func>
+struct OnSubscribe {
+    using is_blex_char_callback_tag = void;
+    static constexpr int callback_type = 3;  // 3 = Subscribe
+    static constexpr auto callback = Func;
+};
+
+// ---------------------- Server Callback Tag Types ----------------------
+
+// Server callback tag templates (user-facing API)
+template<auto Func>
+struct OnConnect {
+    using is_blex_server_callback_tag = void;
+    static constexpr int callback_type = 0;  // 0 = Connect
+    static constexpr auto callback = Func;
+};
+
+template<auto Func>
+struct OnDisconnect {
+    using is_blex_server_callback_tag = void;
+    static constexpr int callback_type = 1;  // 1 = Disconnect
+    static constexpr auto callback = Func;
+};
+
+template<auto Func>
+struct OnMTUChange {
+    using is_blex_server_callback_tag = void;
+    static constexpr int callback_type = 2;  // 2 = MTU Change
+    static constexpr auto callback = Func;
+};
+
+// ---------------------- Security Callback Tag Types ----------------------
+
+// Security callback tag templates (user-facing API)
+template<auto Func>
+struct OnPasskeyRequest {
+    using is_blex_security_callback_tag = void;
+    static constexpr int callback_type = 0;  // 0 = Passkey Request
+    static constexpr auto callback = Func;
+};
+
+template<auto Func>
+struct OnAuthComplete {
+    using is_blex_security_callback_tag = void;
+    static constexpr int callback_type = 1;  // 1 = Auth Complete
+    static constexpr auto callback = Func;
+};
+
+template<auto Func>
+struct OnConfirmPasskey {
+    using is_blex_security_callback_tag = void;
+    static constexpr int callback_type = 2;  // 2 = Confirm Passkey
+    static constexpr auto callback = Func;
+};
+
+template<auto Func>
+struct OnPasskeyDisplay {
+    using is_blex_security_callback_tag = void;
+    static constexpr int callback_type = 3;  // 3 = Passkey Display
+    static constexpr auto callback = Func;
+};
 
 // Forward declarations for config templates (needed by extract helpers)
 template<int8_t, uint16_t, uint16_t, auto>
@@ -193,12 +408,148 @@ struct AdvertisingConfig;
 template<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t>
 struct ConnectionConfig;
 
+template<uint8_t, bool, bool, bool>
+struct SecurityConfig;
+
 namespace blex_core {
+
+// Callback extraction helper - finds callback tag with matching type in variadic Args
+// Forward declaration
+template<int TargetType, typename...>
+struct find_char_callback;
+
+// Helper to safely check if a type is a callback tag with matching type
+template<typename T, int TargetType, typename = void>
+struct matches_char_callback_type : std::false_type {};
+
+template<typename T, int TargetType>
+struct matches_char_callback_type<T, TargetType, std::enable_if_t<is_char_callback_tag<T>::value>>
+    : std::bool_constant<T::callback_type == TargetType> {};
+
+// Specialization helper: avoids accessing non-existent members by using template specialization
+template<int TargetType, bool IsMatch, typename First, typename... Rest>
+struct find_char_callback_impl {
+    static constexpr auto value = find_char_callback<TargetType, Rest...>::value;
+};
+
+template<int TargetType, typename First, typename... Rest>
+struct find_char_callback_impl<TargetType, true, First, Rest...> {
+    static constexpr auto value = First::callback;
+};
+
+// Base case: no matching callback found - return nullptr with explicit type
+template<int TargetType, typename...>
+struct find_char_callback {
+    static constexpr void(*value)() = nullptr;  // Explicit function pointer type for nullptr
+};
+
+// Recursive case: check if First matches, otherwise continue searching
+template<int TargetType, typename First, typename... Rest>
+struct find_char_callback<TargetType, First, Rest...> {
+private:
+    // Check if First is a callback tag with matching type (using SFINAE to avoid accessing non-existent members)
+    static constexpr bool is_match = matches_char_callback_type<First, TargetType>::value;
+public:
+    static constexpr auto value = find_char_callback_impl<TargetType, is_match, First, Rest...>::value;
+};
+
+// Helper to concatenate DescriptorsPack
+template<typename Pack1, typename Pack2>
+struct concat_descriptors;
+
+template<typename... D1, typename... D2>
+struct concat_descriptors<DescriptorsPack<D1...>, DescriptorsPack<D2...>> {
+    using type = DescriptorsPack<D1..., D2...>;
+};
+
+// ---------------------- Hybrid Concept + Static Assert Validation ----------------------
+
+// Validate that Args are either callback tags or descriptor types
+template<typename T>
+struct is_valid_characteristic_arg : std::bool_constant<
+    is_char_callback_tag<T>::value ||
+    // Accept any type as a potential descriptor (will be validated by descriptor traits later)
+    !std::is_same_v<T, std::nullptr_t>  // Reject nullptr_t
+> {};
+
+// Macros for cleaner error message formatting
+#define BLEX_ERROR_HEADER \
+"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" \
+"❌  BLEX Characteristic Argument Error\n" \
+"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+#define BLEX_ERROR_FOOTER \
+"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+// Individual argument validator with detailed static_assert - shows UUID, type, and position
+template<auto UUID, typename T, size_t Index>
+struct validate_single_arg {
+    static_assert(
+        is_valid_characteristic_arg<T>::value,
+        BLEX_ERROR_HEADER
+        "\n"
+        "  ▸ LOOK ABOVE for: validate_single_arg<UUID, BAD_TYPE, INDEX>\n"
+        "\n"
+        "    UUID  = Characteristic UUID (identifies which characteristic has the error)\n"
+        "    INDEX = 0-indexed position in Args (add 1 for actual position after Permissions)\n"
+        "\n"
+        "  Expected arguments:\n"
+        "    • OnRead<func>, OnWrite<func>, OnStatus<func>, OnSubscribe<func>\n"
+        "    • UserDescription, PresentationFormat, AggregateFormat\n"
+        "\n"
+        "  ✓ Valid:   Characteristic<T, UUID, Permissions<...>, Descriptor>\n"
+        "  ✗ Invalid: std::nullptr_t, raw function pointers\n"
+        "\n"
+        BLEX_ERROR_FOOTER
+    );
+    static constexpr bool value = true;
+};
+
+// Hybrid concept: checks validity AND forces diagnostic on failure
+// The OR trick: valid ? true : (instantiate_validator, false)
+template<auto UUID, typename T, size_t Index>
+concept ValidCharArgWithDiagnostic =
+    is_valid_characteristic_arg<T>::value ||  // ← Fast path: if valid, done
+    (validate_single_arg<UUID, T, Index>::value, false);  // ← Force static_assert, then fail
+
+// Helper to validate all args with indices using the diagnostic concept
+template<auto UUID, typename IndexSeq, typename... Args>
+struct validate_all_args_with_diagnostic_impl;
+
+template<auto UUID, size_t... Indices, typename... Args>
+struct validate_all_args_with_diagnostic_impl<UUID, std::index_sequence<Indices...>, Args...> {
+    static constexpr bool value = (ValidCharArgWithDiagnostic<UUID, Args, Indices> && ...);
+};
+
+// Concept that validates all args with diagnostics
+template<auto UUID, typename... Args>
+concept AllValidCharArgs = validate_all_args_with_diagnostic_impl<
+    UUID,
+    std::make_index_sequence<sizeof...(Args)>,
+    Args...
+>::value;
+
+// Filter out callback tags to get only Descriptors
+template<typename...>
+struct filter_descriptors_from_args {
+    using type = DescriptorsPack<>;
+};
+
+template<typename First, typename... Rest>
+struct filter_descriptors_from_args<First, Rest...> {
+    using filtered_rest = typename filter_descriptors_from_args<Rest...>::type;
+    using type = std::conditional_t<
+        is_char_callback_tag<First>::value,
+        filtered_rest,
+        typename concat_descriptors<DescriptorsPack<First>, filtered_rest>::type
+    >;
+};
+
 
 // Extract AdvertisingConfig from variadic args, or use default
 template<typename... /*Args*/>
 struct extract_adv_config {
-    using type = AdvertisingConfig<-127, 0, 0, 0x0000>; // Default: use NimBLE defaults (sentinels), 0x0000 = Unknown appearance
+    using type = AdvertisingConfig<-127, 0, 0, 0>;
 };
 
 template<typename First, typename... Rest>
@@ -213,7 +564,7 @@ struct extract_adv_config<First, Rest...> {
 // Extract ConnectionConfig from variadic args, or use default
 template<typename...>
 struct extract_conn_config {
-    // Default: use NimBLE defaults (sentinels)
+    // Default
     using type = ConnectionConfig<0, 0, 0, 0, 0>;
 };
 
@@ -226,27 +577,135 @@ struct extract_conn_config<First, Rest...> {
     >;
 };
 
+// Extract SecurityConfig from variadic args, or use default
+template<typename...>
+struct extract_security_config {
+    // Default: NoInputNoOutput, no MITM, bonding enabled, secure connections enabled
+    using type = SecurityConfig<0, false, true, true>;
+};
+
+template<typename First, typename... Rest>
+struct extract_security_config<First, Rest...> {
+    using type = std::conditional_t<
+        is_security_config<First>::value,
+        First,
+        typename extract_security_config<Rest...>::type
+    >;
+};
+
 } // namespace blex_core
 
 // ---------------------- Public API Types ----------------------
 
-// Permission types
-struct Readable   { static constexpr bool canRead = true;  static constexpr bool canWrite = false; static constexpr bool canNotify = false; };
-struct Writable   { static constexpr bool canRead = false; static constexpr bool canWrite = true;  static constexpr bool canNotify = false; };
-struct Notifiable { static constexpr bool canRead = false; static constexpr bool canWrite = false; static constexpr bool canNotify = true; };
+// Permission types (basic, no security)
+struct Readable   {
+    static constexpr bool canRead = true;
+    static constexpr bool canWrite = false;
+    static constexpr bool canNotify = false;
+    static constexpr bool requireEncryption = false;
+    static constexpr bool requireAuthentication = false;
+    static constexpr bool requireAuthorization = false;
+};
+
+struct Writable   {
+    static constexpr bool canRead = false;
+    static constexpr bool canWrite = true;
+    static constexpr bool canNotify = false;
+    static constexpr bool requireEncryption = false;
+    static constexpr bool requireAuthentication = false;
+    static constexpr bool requireAuthorization = false;
+};
+
+struct Notifiable {
+    static constexpr bool canRead = false;
+    static constexpr bool canWrite = false;
+    static constexpr bool canNotify = true;
+    static constexpr bool requireEncryption = false;
+    static constexpr bool requireAuthentication = false;
+    static constexpr bool requireAuthorization = false;
+};
+
+// Security-enhanced permission types
+struct ReadEncrypted {
+    static constexpr bool canRead = true;
+    static constexpr bool canWrite = false;
+    static constexpr bool canNotify = false;
+    static constexpr bool requireEncryption = true;
+    static constexpr bool requireAuthentication = false;
+    static constexpr bool requireAuthorization = false;
+};
+
+struct WriteEncrypted {
+    static constexpr bool canRead = false;
+    static constexpr bool canWrite = true;
+    static constexpr bool canNotify = false;
+    static constexpr bool requireEncryption = true;
+    static constexpr bool requireAuthentication = false;
+    static constexpr bool requireAuthorization = false;
+};
+
+struct ReadAuthenticated {
+    static constexpr bool canRead = true;
+    static constexpr bool canWrite = false;
+    static constexpr bool canNotify = false;
+    static constexpr bool requireEncryption = true;
+    static constexpr bool requireAuthentication = true;
+    static constexpr bool requireAuthorization = false;
+};
+
+struct WriteAuthenticated {
+    static constexpr bool canRead = false;
+    static constexpr bool canWrite = true;
+    static constexpr bool canNotify = false;
+    static constexpr bool requireEncryption = true;
+    static constexpr bool requireAuthentication = true;
+    static constexpr bool requireAuthorization = false;
+};
+
+struct ReadAuthorized {
+    static constexpr bool canRead = true;
+    static constexpr bool canWrite = false;
+    static constexpr bool canNotify = false;
+    static constexpr bool requireEncryption = true;
+    static constexpr bool requireAuthentication = true;
+    static constexpr bool requireAuthorization = true;
+};
+
+struct WriteAuthorized {
+    static constexpr bool canRead = false;
+    static constexpr bool canWrite = true;
+    static constexpr bool canNotify = false;
+    static constexpr bool requireEncryption = true;
+    static constexpr bool requireAuthentication = true;
+    static constexpr bool requireAuthorization = true;
+};
 
 template<typename... Perms>
 struct Permissions {
     static_assert(
         (... && (std::is_same_v<Perms, Readable> ||
                  std::is_same_v<Perms, Writable> ||
-                 std::is_same_v<Perms, Notifiable>)),
-        "Permissions only accept Readable, Writable, or Notifiable permission types."
+                 std::is_same_v<Perms, Notifiable> ||
+                 std::is_same_v<Perms, ReadEncrypted> ||
+                 std::is_same_v<Perms, WriteEncrypted> ||
+                 std::is_same_v<Perms, ReadAuthenticated> ||
+                 std::is_same_v<Perms, WriteAuthenticated> ||
+                 std::is_same_v<Perms, ReadAuthorized> ||
+                 std::is_same_v<Perms, WriteAuthorized>)),
+        "Permissions only accept: Readable, Writable, Notifiable, "
+        "ReadEncrypted, WriteEncrypted, ReadAuthenticated, WriteAuthenticated, "
+        "ReadAuthorized, WriteAuthorized"
     );
 
+    // Aggregate basic capabilities
     static constexpr bool canRead   = (... || Perms::canRead);
     static constexpr bool canWrite  = (... || Perms::canWrite);
     static constexpr bool canNotify = (... || Perms::canNotify);
+
+    // Aggregate security requirements (most restrictive wins)
+    static constexpr bool requireEncryption = (... || Perms::requireEncryption);
+    static constexpr bool requireAuthentication = (... || Perms::requireAuthentication);
+    static constexpr bool requireAuthorization = (... || Perms::requireAuthorization);
 };
 
 /**
@@ -697,6 +1156,35 @@ struct ConnectionConfig {
                  "Connection latency must be <= 499");
     static_assert(SupervisionTimeout >= min_supervision_timeout && SupervisionTimeout <= max_supervision_timeout,
                  "Supervision timeout must be in range [10, 3200] (10ms units)");
+};
+
+// SecurityConfig: Compile-time BLE security and pairing configuration
+template<
+    uint8_t IOCapabilities = 0,
+    bool MITMProtection = false,
+    bool Bonding = true,
+    bool SecureConnections = true
+>
+struct SecurityConfig {
+    // Marker for trait detection
+    using is_blex_security_config_tag = void;
+
+    // Compile-time configuration
+    static constexpr uint8_t io_capabilities = IOCapabilities;
+    static constexpr bool mitm_protection = MITMProtection;
+    static constexpr bool bonding = Bonding;
+    static constexpr bool secure_connections = SecureConnections;
+
+    // IO Capability values (BLE Core Spec Vol 3, Part H, Section 2.3.5.1)
+    static constexpr uint8_t IO_CAP_DISPLAY_ONLY = 0;
+    static constexpr uint8_t IO_CAP_DISPLAY_YES_NO = 1;
+    static constexpr uint8_t IO_CAP_KEYBOARD_ONLY = 2;
+    static constexpr uint8_t IO_CAP_NO_INPUT_NO_OUTPUT = 3;
+    static constexpr uint8_t IO_CAP_KEYBOARD_DISPLAY = 4;
+
+    // Compile-time validation
+    static_assert(IOCapabilities <= 4,
+                 "IO Capabilities must be 0-4 (DisplayOnly, DisplayYesNo, KeyboardOnly, NoInputNoOutput, KeyboardDisplay)");
 };
 
 #endif // BLEX_CORE_HPP_

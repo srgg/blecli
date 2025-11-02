@@ -77,24 +77,26 @@ struct DeviceSettingsServiceImpl {
         }
     }
 
-    // Characteristics
+    // Characteristics - write operations require authenticated pairing
     using ConfigChar = typename Blex::template Characteristic<
         std::string, 0xFF21, typename Blex::template Permissions<
-            typename Blex::Readable, typename Blex::Writable>,
-        onBleReadConfig, onBleWriteConfig, nullptr, nullptr,
+            typename Blex::Readable, typename Blex::WriteAuthenticated>,
+        typename Blex::template OnRead<onBleReadConfig>,
+        typename Blex::template OnWrite<onBleWriteConfig>,
         ConfigDesc
     >;
 
     struct StateChar : Blex::template Characteristic<
         uint8_t, 0xFF22, typename Blex::template Permissions<
-            typename Blex::Readable, typename Blex::Writable, typename Blex::Notifiable>,
-        onBleReadState, onBleWriteState, nullptr, nullptr,
+            typename Blex::Readable, typename Blex::WriteAuthenticated, typename Blex::Notifiable>,
+        typename Blex::template OnRead<onBleReadState>,
+        typename Blex::template OnWrite<onBleWriteState>,
         StateDesc
     > {};
 
     using ControlChar = typename Blex::template Characteristic<
-        uint8_t, 0xFF23, typename Blex::template Permissions<typename Blex::Writable>,
-        nullptr, onBleWriteControlPoint, nullptr, nullptr,
+        uint8_t, 0xFF23, typename Blex::template Permissions<typename Blex::WriteAuthenticated>,
+        typename Blex::template OnWrite<onBleWriteControlPoint>,
         ControlDesc
     >;
 };

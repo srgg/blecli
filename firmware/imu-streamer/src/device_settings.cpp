@@ -86,9 +86,10 @@ static constexpr size_t MAX_JSON_SIZE = 500;
 static constexpr size_t MAX_JSON_NESTING_DEPTH = 10;  // Prevent stack overflow
 
 // Buffer size includes ArduinoJson metadata overhead (~2x input size)
+// Note: JsonDocument (v7+) handles buffer allocation automatically
 static constexpr size_t JSON_DOC_BUFFER_SIZE = 1024;
 
-using JsonDoc = StaticJsonDocument<JSON_DOC_BUFFER_SIZE>;
+using JsonDoc = JsonDocument;
 
 static constexpr DeviceSettingsImpl FACTORY_DEFAULTS = {
   .imu_cal = {

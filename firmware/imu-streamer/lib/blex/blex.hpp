@@ -1,7 +1,7 @@
 /**
 * BLEX — Compile-Time BLE Meta-Framework maximizes C++17 features usage for the sake of API simplicity
  *
- * Provides a fully declarative, zero-runtime BLE framework for embedded devices.
+ * Provides a fully declarative, zero-runtime BLE meta-framework for embedded devices.
  *
  * Features:
  *   - Type-level Descriptors & Characteristics
@@ -68,16 +68,45 @@ struct blex {
     using GattUnit = ::GattUnit;
     using PresentationFormatValue = ::PresentationFormatValue;
 
-    // Re-export permission types
+    // Re-export permission types (basic, no security)
     using Readable = ::Readable;
     using Writable = ::Writable;
     using Notifiable = ::Notifiable;
+
+    // Re-export security-enhanced permission types
+    using ReadEncrypted = ::ReadEncrypted;
+    using WriteEncrypted = ::WriteEncrypted;
+    using ReadAuthenticated = ::ReadAuthenticated;
+    using WriteAuthenticated = ::WriteAuthenticated;
+    using ReadAuthorized = ::ReadAuthorized;
+    using WriteAuthorized = ::WriteAuthorized;
+
     template<typename... Perms>
     using Permissions = ::Permissions<Perms...>;
 
+    // Re-export callback tag types
+    template<auto Func> using OnRead = ::OnRead<Func>;
+    template<auto Func> using OnWrite = ::OnWrite<Func>;
+    template<auto Func> using OnStatus = ::OnStatus<Func>;
+    template<auto Func> using OnSubscribe = ::OnSubscribe<Func>;
+
+    // Re-export server callback tag types
+    template<auto Func> using OnConnect = ::OnConnect<Func>;
+    template<auto Func> using OnDisconnect = ::OnDisconnect<Func>;
+    template<auto Func> using OnMTUChange = ::OnMTUChange<Func>;
+
+    // Re-export security callback tag types
+    template<auto Func> using OnPasskeyRequest = ::OnPasskeyRequest<Func>;
+    template<auto Func> using OnAuthComplete = ::OnAuthComplete<Func>;
+    template<auto Func> using OnConfirmPasskey = ::OnConfirmPasskey<Func>;
+    template<auto Func> using OnPasskeyDisplay = ::OnPasskeyDisplay<Func>;
+
+    // Connection info type alias (exposes NimBLE connection metadata directly)
+    using ConnectionInfo = NimBLEConnInfo;
+
     // Re-export config templates
     template<int8_t TxPower = 0, uint16_t IntervalMin = 100, uint16_t IntervalMax = 150,
-             uint16_t Appearance = static_cast<uint16_t>(BleAppearance::kUnknown)>
+             auto Appearance = BleAppearance::kUnknown>
     using AdvertisingConfig = ::AdvertisingConfig<TxPower, IntervalMin, IntervalMax, Appearance>;
 
     template<
@@ -88,6 +117,14 @@ struct blex {
         uint16_t SupervisionTimeout = 400
     >
     using ConnectionConfig = ::ConnectionConfig<MTU, ConnIntervalMin, ConnIntervalMax, ConnLatency, SupervisionTimeout>;
+
+    template<
+        uint8_t IOCapabilities = 0,
+        bool MITMProtection = false,
+        bool Bonding = true,
+        bool SecureConnections = true
+    >
+    using SecurityConfig = ::SecurityConfig<IOCapabilities, MITMProtection, Bonding, SecureConnections>;
 
     // Helper variable template
     template<typename T, T Val = T{}>
@@ -138,17 +175,8 @@ struct blex {
     template<typename T, auto UUID, T Value, typename... Descriptors>
     using ConstCharacteristic = ::ConstCharacteristic<T, UUID, Value, Descriptors...>;
 
-    template<
-        typename T,
-        auto UUID,
-        typename Perms,
-        auto OnRead = nullptr,
-        auto OnWrite = nullptr,
-        auto OnStatus = nullptr,
-        auto OnSubscribe = nullptr,
-        typename... Descriptors
-    >
-    using Characteristic = ::Characteristic<T, UUID, Perms, OnRead, OnWrite, OnStatus, OnSubscribe, Descriptors...>;
+    template<typename T, auto UUID, typename Perms, typename... Args>
+    using Characteristic = ::Characteristic<T, UUID, Perms, Args...>;
 
     template<auto UUID, typename... Chars>
     using Service = ::Service<UUID, Chars...>;
@@ -159,6 +187,9 @@ struct blex {
 
     template<typename... Args>
     using extract_conn_config = typename blex_core::extract_conn_config<Args...>::type;
+
+    template<typename... Args>
+    using extract_security_config = typename blex_core::extract_security_config<Args...>::type;
 
     // BlexAdvertising: Applies advertising configuration to NimBLE
     template<typename PassiveServicesTuple, typename ActiveServicesTuple, typename AdvConfig = AdvertisingConfig<>>
@@ -234,7 +265,30 @@ struct blex {
 #endif
     };
 
-    // Server
+    // Server: Main BLE server configuration
+    //
+    // Template Parameters:
+    //   DeviceName  - Full device name (used in scan response)
+    //   ShortName   - Short name (used in advertising packet)
+    //   Args...     - Variadic list accepting:
+    //                 * AdvertisingConfig<...> (optional, max 1)
+    //                 * ConnectionConfig<...> (optional, max 1)
+    //                 * OnConnect<callback> (optional)
+    //                 * OnDisconnect<callback> (optional)
+    //                 * OnMTUChange<callback> (optional)
+    //                 * Service types (can be wrapped with PassiveAdvService/ActiveAdvService/BothAdvService)
+    //
+    // Example:
+    //   using MyServer = blex<>::Server<
+    //       &deviceName,
+    //       &shortName,
+    //       AdvertisingConfig<9, 120, 140>,           // TX power, adv intervals
+    //       ConnectionConfig<247, 12, 12, 0, 400>,    // MTU, intervals, latency, timeout
+    //       OnConnect<myConnectHandler>,               // Custom connect callback
+    //       OnDisconnect<myDisconnectHandler>,         // Custom disconnect callback
+    //       PassiveAdvService<MyService1>,             // Services
+    //       ActiveAdvService<MyService2>
+    //   >;
     template<
         const char* DeviceName,
         const char* ShortName,
@@ -254,38 +308,61 @@ struct blex {
         static inline uint16_t runtime_adv_interval_min_ = 0;    // 0 = not set, use default
         static inline uint16_t runtime_adv_interval_max_ = 0;    // 0 = not set, use default
 
+        // Extract server callback types (use decltype to get proper types)
+        using ConnectHandlerType = decltype(blex_core::find_server_callback<0, Args...>::value);
+        using DisconnectHandlerType = decltype(blex_core::find_server_callback<1, Args...>::value);
+        using MTUChangeHandlerType = decltype(blex_core::find_server_callback<2, Args...>::value);
+
+        // Store extracted callbacks as static constexpr members
+        static constexpr ConnectHandlerType ConnectHandler = blex_core::find_server_callback<0, Args...>::value;
+        static constexpr DisconnectHandlerType DisconnectHandler = blex_core::find_server_callback<1, Args...>::value;
+        static constexpr MTUChangeHandlerType MTUChangeHandler = blex_core::find_server_callback<2, Args...>::value;
+
         struct Callbacks final : NimBLEServerCallbacks {
-            void onConnect(NimBLEServer* pServer, NimBLEConnInfo& conn) override {
-                Serial.printf("🔗 Connected: %s\n", conn.getAddress().toString().c_str());
+            void onConnect([[maybe_unused]] NimBLEServer* pServer, NimBLEConnInfo& conn) override {
+                if constexpr (ConnectHandler != nullptr) {
+                    ConnectHandler(pServer, conn);
+                } else {
+                    Serial.printf("🔗 Connected: %s\n", conn.getAddress().toString().c_str());
+                }
             }
 
-            void onDisconnect(NimBLEServer*, NimBLEConnInfo& conn, const int reason) override {
-                Serial.printf("❌ Disconnected (reason=%d)\n", reason);
-                NimBLEDevice::startAdvertising();
-                Serial.println("📡 Advertising restarted");
+            void onDisconnect([[maybe_unused]] NimBLEServer* pServer, NimBLEConnInfo& conn, const int reason) override {
+                if constexpr (DisconnectHandler != nullptr) {
+                    DisconnectHandler(pServer, conn, reason);
+                } else {
+                    Serial.printf("❌ Disconnected (reason=%d)\n", reason);
+                    NimBLEDevice::startAdvertising();
+                    Serial.println("📡 Advertising restarted");
+                }
             }
 
             void onMTUChange(const uint16_t MTU, NimBLEConnInfo& conn) override {
-                Serial.printf("📏 MTU updated: %u bytes for %s\n", MTU, conn.getAddress().toString().c_str());
+                if constexpr (MTUChangeHandler != nullptr) {
+                    MTUChangeHandler(MTU, conn);
+                } else {
+                    Serial.printf("📏 MTU updated: %u bytes for %s\n", MTU, conn.getAddress().toString().c_str());
 
-                // Request connection parameters from compile-time configuration
-                if (auto* pServer = server.get()) {
-                    pServer->updateConnParams(
-                        conn.getConnHandle(),
-                        ConnConfig::conn_interval_min,
-                        ConnConfig::conn_interval_max,
-                        ConnConfig::conn_latency,
-                        ConnConfig::supervision_timeout
-                    );
-                    Serial.printf("📊 Requested connection parameters: interval=%u-%u (%.1f-%.1fms), latency=%u, timeout=%u (%.1fs)\n",
-                                ConnConfig::conn_interval_min, ConnConfig::conn_interval_max,
-                                ConnConfig::conn_interval_min * 1.25f, ConnConfig::conn_interval_max * 1.25f,
-                                ConnConfig::conn_latency,
-                                ConnConfig::supervision_timeout, ConnConfig::supervision_timeout * 10.0f / 1000.0f);
+                    // Request connection parameters from compile-time configuration
+                    if (auto* pServer = server.get()) {
+                        pServer->updateConnParams(
+                            conn.getConnHandle(),
+                            ConnConfig::conn_interval_min,
+                            ConnConfig::conn_interval_max,
+                            ConnConfig::conn_latency,
+                            ConnConfig::supervision_timeout
+                        );
+                        Serial.printf("📊 Requested connection parameters: interval=%u-%u (%.1f-%.1fms), latency=%u, timeout=%u (%.1fs)\n",
+                                    ConnConfig::conn_interval_min, ConnConfig::conn_interval_max,
+                                    ConnConfig::conn_interval_min * 1.25f, ConnConfig::conn_interval_max * 1.25f,
+                                    ConnConfig::conn_latency,
+                                    ConnConfig::supervision_timeout, ConnConfig::supervision_timeout * 10.0f / 1000.0f);
+                    }
                 }
             }
         };
 
+        [[nodiscard]]
         static bool init() {
             static std::atomic_flag init_called = ATOMIC_FLAG_INIT;
             if (init_called.test_and_set(std::memory_order_acq_rel)) {
@@ -336,6 +413,7 @@ struct blex {
             return true;
         }
 
+        [[nodiscard]]
         static bool setTxPower(int8_t dbm) {
             using advConfig = BlexAdvertising<std::tuple<>, std::tuple<>>;
             if (dbm < advConfig::min_tx_power || dbm > advConfig::max_tx_power) {
@@ -348,6 +426,7 @@ struct blex {
             return true;
         }
 
+        [[nodiscard]]
         static bool setAdvInterval(uint16_t min_ms, uint16_t max_ms) {
             using advConfig = BlexAdvertising<std::tuple<>, std::tuple<>>;
             if (min_ms < advConfig::min_adv_interval || min_ms > advConfig::max_adv_interval ||
@@ -386,21 +465,51 @@ struct blex {
             Serial.println("✓ Advertising updated and restarted");
         }
 
+        // Connection Management
+        [[nodiscard]]
+        static bool isConnected() {
+            return server.with_lock([](auto* s) {
+                return s ? s->getConnectedCount() > 0 : false;
+            });
+        }
+
+        [[nodiscard]]
+        static uint16_t getConnectedCount() {
+            return server.with_lock([](auto* s) {
+                return s ? s->getConnectedCount() : 0;
+            });
+        }
+
+        static void disconnect(uint16_t conn_handle) {
+            server.with_lock([conn_handle](auto* s) {
+                if (s) s->disconnect(conn_handle);
+            });
+        }
+
+        [[nodiscard]]
+        static int8_t getRSSI(uint16_t conn_handle) {
+            return server.with_lock([conn_handle](auto* s) -> int8_t {
+                if (!s) return 0;
+                auto* conn_info = s->getPeerInfo(conn_handle);
+                return conn_info ? conn_info->getRSSI() : 0;
+            });
+        }
+
     private:
         template<typename... Services>
-        using ServicesPack = typename blex_core::template ServicesPack<Services...>;
+        using ServicesPack = blex_core::ServicesPack<Services...>;
 
         template<typename ServiceOrWrapped>
         static void register_service() {
-            using ActualService = typename blex_core::template unwrap_service_impl<ServiceOrWrapped>::type;
+            using ActualService = typename blex_core::unwrap_service_impl<ServiceOrWrapped>::type;
             blex::register_service<ActualService>(server.get(), adv.get());
         }
 
         template<typename ServiceOrWrapped>
         static void start_service() {
-            using ActualService = typename blex_core::template unwrap_service_impl<ServiceOrWrapped>::type;
+            using ActualService = typename blex_core::unwrap_service_impl<ServiceOrWrapped>::type;
             if (auto* srv = server.get()) {
-                if (auto* s = srv->getServiceByUUID(blex_nimble::template make_uuid<ActualService::uuid>())) {
+                if (auto* s = srv->getServiceByUUID(blex_nimble::make_uuid<ActualService::uuid>())) {
                     s->start();
                 }
             }
@@ -428,17 +537,51 @@ struct blex {
     // NimBLE Registration
 #ifdef BLEX_NIMBLE_AVAILABLE
     template<typename... Descriptors>
-    static void register_all_descriptors(NimBLECharacteristic* pC, typename blex_core::template DescriptorsPack<Descriptors...>) {
+    static void register_all_descriptors([[maybe_unused]] NimBLECharacteristic* pC, typename blex_core::template DescriptorsPack<Descriptors...>) {
         (Descriptors::register_descriptor(pC), ...);
     }
 
     template<typename CharT>
     static NimBLECharacteristic* register_characteristic(NimBLEService* svc) {
+        using Perms = typename CharT::perms_type;
+
+        // Build property flags with security requirements
+        uint16_t properties = 0;
+
+        // Read permissions
+        if constexpr (Perms::canRead) {
+            if constexpr (Perms::requireAuthorization) {
+                properties |= NIMBLE_PROPERTY::READ_AUTHOR;
+            } else if constexpr (Perms::requireAuthentication) {
+                properties |= NIMBLE_PROPERTY::READ_AUTHEN;
+            } else if constexpr (Perms::requireEncryption) {
+                properties |= NIMBLE_PROPERTY::READ_ENC;
+            } else {
+                properties |= NIMBLE_PROPERTY::READ;
+            }
+        }
+
+        // Write permissions
+        if constexpr (Perms::canWrite) {
+            if constexpr (Perms::requireAuthorization) {
+                properties |= NIMBLE_PROPERTY::WRITE_AUTHOR;
+            } else if constexpr (Perms::requireAuthentication) {
+                properties |= NIMBLE_PROPERTY::WRITE_AUTHEN;
+            } else if constexpr (Perms::requireEncryption) {
+                properties |= NIMBLE_PROPERTY::WRITE_ENC;
+            } else {
+                properties |= NIMBLE_PROPERTY::WRITE;
+            }
+        }
+
+        // Notify permission (no security variants in BLE spec)
+        if constexpr (Perms::canNotify) {
+            properties |= NIMBLE_PROPERTY::NOTIFY;
+        }
+
         NimBLECharacteristic* pC = svc->createCharacteristic(
             blex_nimble::template make_uuid<CharT::uuid>(),
-            (CharT::perms_type::canRead    ? NIMBLE_PROPERTY::READ  : 0) |
-            (CharT::perms_type::canWrite   ? NIMBLE_PROPERTY::WRITE : 0) |
-            (CharT::perms_type::canNotify  ? NIMBLE_PROPERTY::NOTIFY: 0)
+            properties
         );
 
         if constexpr (CharT::is_const_characteristic) {
