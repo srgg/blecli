@@ -761,7 +761,7 @@ test_cases:
       Aggregate Format test passed
 
   - name: "Aggregate Format: Empty Array"
-    # GOAL: Verify Aggregate Format with no references returns empty array
+    # GOAL: Verify Aggregate Format with no references returns an empty array
     #
     # TEST SCENARIO: Read Aggregate Format with no descriptor references → verify parsed_value is empty table
     script: |

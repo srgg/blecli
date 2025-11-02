@@ -64,12 +64,13 @@ type DescriptorConfig struct {
 
 // CharacteristicConfig represents a BLE characteristic configuration for mocking
 type CharacteristicConfig struct {
-	UUID        string             `json:"uuid" yaml:"uuid"`
-	Properties  string             `json:"properties,omitempty" yaml:"properties,omitempty"` // e.g., "read,write,notify"
-	Value       []byte             `json:"value,omitempty" yaml:"value,omitempty"`
-	Descriptors []DescriptorConfig `json:"descriptors,omitempty" yaml:"descriptors,omitempty"`
-	ReadDelay   time.Duration      `json:"-" yaml:"-"` // Delay before returning read response (for timeout testing)
-	WriteDelay  time.Duration      `json:"-" yaml:"-"` // Delay before returning write response (for timeout testing)
+	UUID         string             `json:"uuid" yaml:"uuid"`
+	Properties   string             `json:"properties,omitempty" yaml:"properties,omitempty"` // e.g., "read,write,notify"
+	NoProperties bool               `json:"-" yaml:"-"`                                       // If true, characteristic has no properties (property flags = 0)
+	Value        []byte             `json:"value,omitempty" yaml:"value,omitempty"`
+	Descriptors  []DescriptorConfig `json:"descriptors,omitempty" yaml:"descriptors,omitempty"`
+	ReadDelay    time.Duration      `json:"-" yaml:"-"` // Delay before returning read response (for timeout testing)
+	WriteDelay   time.Duration      `json:"-" yaml:"-"` // Delay before returning write response (for timeout testing)
 }
 
 // ServiceConfig represents a BLE service configuration for mocking
@@ -246,6 +247,33 @@ func (b *PeripheralDeviceBuilder) WithCharacteristic(uuid, properties string, va
 	return b
 }
 
+// WithCharacteristicNoProperties adds a characteristic with no properties (property flags = 0) to the last added service.
+// This is useful for testing characteristics that require pairing/authentication, where macOS/iOS CoreBluetooth
+// hides the properties until the device is paired.
+func (b *PeripheralDeviceBuilder) WithCharacteristicNoProperties(uuid string, value []byte, opts ...CharacteristicOption) *PeripheralDeviceBuilder {
+	if len(b.profile.Services) == 0 {
+		panic("WithCharacteristicNoProperties: no service added yet, call WithService first")
+	}
+
+	lastServiceIdx := len(b.profile.Services) - 1
+	char := CharacteristicConfig{
+		UUID:         uuid,
+		NoProperties: true, // Skip property parsing and use 0
+		Properties:   "",   // Ignored when NoProperties is true
+		Value:        value,
+		Descriptors:  []DescriptorConfig{},
+	}
+
+	// Apply functional options
+	for _, opt := range opts {
+		opt(&char)
+	}
+
+	b.profile.Services[lastServiceIdx].Characteristics = append(
+		b.profile.Services[lastServiceIdx].Characteristics, char)
+	return b
+}
+
 // addDescriptor adds a descriptor to the last added characteristic (internal helper)
 func (b *PeripheralDeviceBuilder) addDescriptor(desc DescriptorConfig) *PeripheralDeviceBuilder {
 	if len(b.profile.Services) == 0 {
@@ -363,6 +391,8 @@ func parseCharacteristicProperties(props string) blelib.Property {
 			property |= blelib.CharNotify
 		case "indicate":
 			property |= blelib.CharIndicate
+		case "authenticated_signed_writes":
+			property |= blelib.CharSignedWrite
 		default:
 			// FAIL FAST on unknown properties to catch configuration errors
 			panic(fmt.Sprintf("parseCharacteristicProperties: unknown property '%s' in '%s'", part, props))
@@ -421,9 +451,17 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 				}
 			}
 
+			// Determine property flags: use 0 if NoProperties flag is set, otherwise parse Properties string
+			var property blelib.Property
+			if charConfig.NoProperties {
+				property = 0 // No properties (macOS hidden until paired)
+			} else {
+				property = parseCharacteristicProperties(charConfig.Properties)
+			}
+
 			bleChar := &blelib.Characteristic{
 				UUID:        createMockUUID(charConfig.UUID),
-				Property:    parseCharacteristicProperties(charConfig.Properties),
+				Property:    property,
 				Value:       charConfig.Value,
 				Descriptors: bleDescriptors,
 			}

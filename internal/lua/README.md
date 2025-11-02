@@ -547,6 +547,7 @@ Returns a characteristic handle with metadata and methods.
 - `service` (string) - Parent service UUID
 - `name` (string, optional) - Human-readable characteristic name (e.g., "Heart Rate Measurement" for UUID "2a37"). Only present for standard BLE characteristics.
 - `has_parser` (boolean) - True if characteristic has registered parser
+- `requires_authentication` (boolean) - True if characteristic requires pairing/authentication to access
 - `properties` (table) - Boolean flags for each property:
   - `read` (boolean) - Supports read operations
   - `write` (boolean) - Supports write operations

@@ -75,6 +75,7 @@ local function collect_device_data()
                     value = value,
                     parsed_value = parsed_value,  -- Add parsed value
                     has_parser = char_info.has_parser,  -- Add parser availability flag
+                    requires_authentication = char_info.requires_authentication,  -- Add authentication flag
                     descriptors = char_info.descriptors or {}
                 })
             end
@@ -241,12 +242,28 @@ local function output_text(data)
             if char.properties then
                 local prop_names = {}
                 for _, prop in ipairs(char.properties) do
-                    table.insert(prop_names, prop.name)
+                    local prop_name = prop.name
+
+                    -- Add (Auth) suffix for authenticated properties
+                    if prop_name == "AuthenticatedSignedWrites" then
+                        prop_name = prop_name .. "(Auth)"
+                    end
+
+                    table.insert(prop_names, prop_name)
                 end
                 local props_display = table.concat(prop_names, ", ")
                 if props_display ~= "" then
                     io.write(string.format("      properties: %s\n", props_display))
+                else
+                    -- No properties found - potentially hidden due to security
+                    io.write("      properties: (none - may be hidden)\n")
                 end
+            end
+
+            -- Show warning if pairing/authentication is required
+            -- (Show outside properties block to catch cases where properties are missing/hidden)
+            if char.requires_authentication then
+                io.write("      ⚠️  Pairing may be required for full access\n")
             end
 
             -- Show characteristic value if available

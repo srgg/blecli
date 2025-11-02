@@ -448,6 +448,104 @@ func (suite *CharacteristicTestSuite) TestCharacteristicParserAPI() {
 	})
 }
 
+func (suite *CharacteristicTestSuite) TestRequiresAuthentication() {
+	// GOAL: Verify RequiresAuthentication() detects pairing requirements using CoreBluetooth heuristics
+	//
+	// TEST SCENARIO: Various property configurations → correct authentication detection → macOS hidden properties handled
+
+	suite.Run("explicit AuthenticatedSignedWrites property requires authentication", func() {
+		// GOAL: Verify RequiresAuthentication() detects explicit AuthenticatedSignedWrites property
+		//
+		// TEST SCENARIO: Characteristic with authenticated_signed_writes property → RequiresAuthentication() returns true
+
+		suite.WithPeripheral().
+			WithService("1234").
+			WithCharacteristic("5678", "authenticated_signed_writes", []byte{0x01})
+
+		err := suite.device.Disconnect()
+		suite.Require().NoError(err, "disconnect MUST succeed")
+		suite.ensureConnected()
+
+		char, err := suite.connection.GetCharacteristic("1234", "5678")
+		suite.Require().NoError(err, "MUST find characteristic")
+
+		requiresAuth := char.RequiresAuthentication()
+		suite.Assert().True(requiresAuth, "RequiresAuthentication() MUST return true for AuthenticatedSignedWrites property")
+	})
+
+	suite.Run("no properties exposed indicates macOS hidden due to encryption requirement", func() {
+		// GOAL: Verify RequiresAuthentication() detects macOS/iOS hidden properties pattern
+		//
+		// TEST SCENARIO: Characteristic with no properties (macOS hides until paired) → RequiresAuthentication() returns true
+		//
+		// macOS/iOS CoreBluetooth behavior: When a peripheral requires encryption/pairing,
+		// the OS hides characteristic properties (returns 0) until pairing completes.
+		// This is a common indicator that authentication is required.
+
+		suite.WithPeripheral().
+			WithService("1234").
+			WithCharacteristicNoProperties("ABCD", []byte{0x01})
+
+		err := suite.device.Disconnect()
+		suite.Require().NoError(err, "disconnect MUST succeed")
+		suite.ensureConnected()
+
+		char, err := suite.connection.GetCharacteristic("1234", "ABCD")
+		suite.Require().NoError(err, "MUST find characteristic")
+
+		requiresAuth := char.RequiresAuthentication()
+		suite.Assert().True(requiresAuth, "RequiresAuthentication() MUST return true when properties hidden (macOS pairing required)")
+	})
+
+	suite.Run("normal read characteristic does not require authentication", func() {
+		// GOAL: Verify RequiresAuthentication() returns false for standard readable characteristics
+		//
+		// TEST SCENARIO: Characteristic with read property → RequiresAuthentication() returns false
+
+		char, err := suite.connection.GetCharacteristic("180f", "2a19")
+		suite.Require().NoError(err, "MUST find Battery Level characteristic")
+
+		requiresAuth := char.RequiresAuthentication()
+		suite.Assert().False(requiresAuth, "RequiresAuthentication() MUST return false for standard read characteristic")
+	})
+
+	suite.Run("read/write characteristic does not require authentication", func() {
+		// GOAL: Verify RequiresAuthentication() returns false for read/write characteristics
+		//
+		// TEST SCENARIO: Characteristic with read,write properties → RequiresAuthentication() returns false
+
+		char, err := suite.connection.GetCharacteristic("180d", "2a40")
+		suite.Require().NoError(err, "MUST find read/write characteristic")
+
+		requiresAuth := char.RequiresAuthentication()
+		suite.Assert().False(requiresAuth, "RequiresAuthentication() MUST return false for read/write characteristic")
+	})
+
+	suite.Run("notify characteristic does not require authentication", func() {
+		// GOAL: Verify RequiresAuthentication() returns false for notification characteristics
+		//
+		// TEST SCENARIO: Characteristic with notify property → RequiresAuthentication() returns false
+
+		char, err := suite.connection.GetCharacteristic("180d", "2a37")
+		suite.Require().NoError(err, "MUST find Heart Rate Measurement characteristic")
+
+		requiresAuth := char.RequiresAuthentication()
+		suite.Assert().False(requiresAuth, "RequiresAuthentication() MUST return false for notify characteristic")
+	})
+
+	suite.Run("write-only characteristic does not require authentication", func() {
+		// GOAL: Verify RequiresAuthentication() returns false for write-only characteristics
+		//
+		// TEST SCENARIO: Characteristic with write property → RequiresAuthentication() returns false
+
+		char, err := suite.connection.GetCharacteristic("180d", "2a39")
+		suite.Require().NoError(err, "MUST find write-only characteristic")
+
+		requiresAuth := char.RequiresAuthentication()
+		suite.Assert().False(requiresAuth, "RequiresAuthentication() MUST return false for write-only characteristic")
+	})
+}
+
 // @dependsOn TestCharacteristicParserAPI
 func (suite *CharacteristicTestSuite) TestWellKnownCharacteristicParsers() {
 	// GOAL: Verify each well-known parser implementation correctness

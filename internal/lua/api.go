@@ -994,6 +994,11 @@ func (api *LuaAPI) registerCharacteristicFunction(L *lua.State) {
 		L.PushBoolean(char.HasParser())
 		L.SetTable(-3)
 
+		// Field: requires_authentication (true if characteristic requires pairing/authentication)
+		L.PushString("requires_authentication")
+		L.PushBoolean(char.RequiresAuthentication())
+		L.SetTable(-3)
+
 		// Method: read() - reads the characteristic value from the device
 		// Returns (value, nil) on success or (nil, error_message) on failure
 		api.SafePushGoFunction(L, "read", func(L *lua.State) int {

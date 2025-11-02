@@ -206,6 +206,45 @@ func (c *BLECharacteristic) GetDescriptors() []device.Descriptor {
 	return c.descriptors
 }
 
+// RequiresAuthentication returns true if the characteristic requires pairing/authentication.
+// Detection heuristic:
+//   - AuthenticatedSignedWrites property indicates explicit authentication requirement
+//   - No properties exposed (props == 0) likely indicates hidden due to encryption/pairing requirements
+//     (Common on macOS/iOS when peripheral requires encryption before revealing properties)
+func (c *BLECharacteristic) RequiresAuthentication() bool {
+	if c.properties == nil {
+		return false
+	}
+
+	// Check if ALL properties are nil (equivalent to underlying ble.Property == 0)
+	// macOS/iOS CoreBluetooth limitation: When a peripheral requires encryption/pairing,
+	// the OS hides characteristic properties (returns 0) until pairing completes.
+	// The peripheral's GATT database may define properties, but CoreBluetooth masks them
+	// for security reasons. This is a common indicator that authentication is required.
+	hasAnyProperty := c.properties.Broadcast() != nil ||
+		c.properties.Read() != nil ||
+		c.properties.Write() != nil ||
+		c.properties.WriteWithoutResponse() != nil ||
+		c.properties.Notify() != nil ||
+		c.properties.Indicate() != nil ||
+		c.properties.AuthenticatedSignedWrites() != nil ||
+		c.properties.ExtendedProperties() != nil
+
+	if !hasAnyProperty {
+		return true // No properties exposed - macOS/iOS hides properties until paired
+	}
+
+	// AuthenticatedSignedWrites explicitly requires authentication
+	if c.properties.AuthenticatedSignedWrites() != nil {
+		return true
+	}
+
+	// Note: ExtendedProperties alone is not a reliable security indicator
+	// Would need to read descriptor 0x2900 to confirm security requirements
+
+	return false
+}
+
 func (c *BLECharacteristic) HasParser() bool {
 	return device.IsParsableCharacteristic(c.uuid)
 }

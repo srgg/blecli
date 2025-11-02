@@ -159,6 +159,7 @@ type CharacteristicInfo interface {
 	KnownName() string
 	GetProperties() Properties
 	GetDescriptors() []Descriptor
+	RequiresAuthentication() bool // Returns true if characteristic requires pairing/authentication
 }
 
 // DescriptorInfo represents descriptor metadata
