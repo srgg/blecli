@@ -1,8 +1,10 @@
 package goble
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -54,6 +56,7 @@ type BLEDevice struct {
 	lastSeen           time.Time
 	advertisedServices []string
 	manufData          []byte
+	parsedManufData    interface{}
 	serviceData        map[string][]byte
 	connection         *BLEConnection
 	onData             func(uuid string, data []byte)
@@ -104,6 +107,16 @@ func NewBLEDeviceFromAdvertisement(adv device.Advertisement, logger *logrus.Logg
 	if adv.TxPowerLevel() != 127 { // 127 means TX power not available
 		txPower := int(adv.TxPowerLevel())
 		dev.txPower = &txPower
+	}
+
+	// Parse manufacturer data if available
+	// Note: BLE advertisements do not provide a separate company/vendor field.
+	// The manufacturer data is raw bytes, and the company ID (if present) is
+	// embedded in the data itself (conventionally first 2 bytes, little-endian).
+	// Therefore, we always use UnknownCompanyID and let the parser extract the
+	// company ID from the raw data.
+	if len(dev.manufData) > 0 {
+		dev.parsedManufData, _ = device.ParseManufacturerData(device.UnknownCompanyID, dev.manufData)
 	}
 
 	// Try to extract name from manufacturer data if no local name
@@ -174,6 +187,12 @@ func (d *BLEDevice) ManufacturerData() []byte {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.manufData
+}
+
+func (d *BLEDevice) ParsedManufacturerData() interface{} {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.parsedManufData
 }
 
 func (d *BLEDevice) ServiceData() map[string][]byte {
@@ -288,9 +307,26 @@ func (d *BLEDevice) Update(adv device.Advertisement) {
 		}
 	}
 
-	// Update manufacturer data
+	// Update manufacturer data and parse if changed
 	if manufData := adv.ManufacturerData(); len(manufData) > 0 {
-		d.manufData = manufData
+		// Only parse if raw manufacturer data changed (cheap byte comparison)
+		if !bytes.Equal(d.manufData, manufData) {
+			d.manufData = manufData
+
+			// Parse manufacturer data (see NewBLEDeviceFromAdvertisement for explanation of UnknownCompanyID)
+			newParsed, _ := device.ParseManufacturerData(device.UnknownCompanyID, d.manufData)
+
+			// Log if parsed data changed (e.g., firmware update, device type change)
+			if !reflect.DeepEqual(d.parsedManufData, newParsed) {
+				d.logger.WithFields(logrus.Fields{
+					"address": d.address,
+					"old":     d.parsedManufData,
+					"new":     newParsed,
+				}).Info("Manufacturer data changed")
+			}
+
+			d.parsedManufData = newParsed
+		}
 	}
 
 	// Merge advertised services (ensure UUID entries exist)

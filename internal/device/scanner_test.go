@@ -28,8 +28,8 @@ func (suite *ScannerErrorTestSuite) TearDownSuite() {
 	goble.DeviceFactory = suite.originalFactory
 }
 
-func (suite *ScannerErrorTestSuite) TestScanner_NormalizesBluetoothOffError() {
-	// GOAL: Verify scanner normalizes platform-specific Bluetooth errors to standard sentinel errors
+func (suite *ScannerErrorTestSuite) TestScanner_NormalizesErrors() {
+	// GOAL: Verify scanner normalizes platform-specific and context errors to domain sentinel errors
 	//
 	// TEST SCENARIO: Scan with various error conditions → errors normalized or passed through → error chain preserved
 
@@ -50,6 +50,12 @@ func (suite *ScannerErrorTestSuite) TestScanner_NormalizesBluetoothOffError() {
 			mockErr:       fmt.Errorf("bluetooth is turned off"),
 			expectIsError: device.ErrBluetoothOff,
 			expectMessage: "bluetooth is turned off",
+		},
+		{
+			name:          "normalizes context timeout to ErrTimeout",
+			mockErr:       context.DeadlineExceeded,
+			expectIsError: device.ErrTimeout,
+			expectMessage: "timeout",
 		},
 		{
 			name:          "passes through context canceled",

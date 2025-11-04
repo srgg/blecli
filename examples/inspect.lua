@@ -173,8 +173,28 @@ local function output_text(data)
     end
 
     -- Manufacturer Data section
-    if data.device.manufacturer_data and data.device.manufacturer_data ~= "" then
-        io.write(string.format("  Manufacturer Data: %s\n", blim.bytes_to_hex(data.device.manufacturer_data)))
+    if data.device.manufacturer_data then
+        io.write(string.format("  Manufacturer Data: %s\n", data.device.manufacturer_data.value))
+
+        -- Show parsed manufacturer data if available
+        if data.device.manufacturer_data.parsed_value then
+            io.write("    Parsed:\n")
+
+            -- Show vendor info first if available
+            if data.device.manufacturer_data.parsed_value.vendor then
+                io.write(string.format("      Vendor ID: 0x%04X\n", data.device.manufacturer_data.parsed_value.vendor.id))
+                if data.device.manufacturer_data.parsed_value.vendor.name then
+                    io.write(string.format("      Vendor: %s\n", data.device.manufacturer_data.parsed_value.vendor.name))
+                end
+            end
+
+            -- Show other parsed fields
+            for k, v in pairs(data.device.manufacturer_data.parsed_value) do
+                if k ~= "vendor" and type(v) ~= "table" then
+                    io.write(string.format("      %s: %s\n", k, tostring(v)))
+                end
+            end
+        end
     else
         io.write("  Manufacturer Data: none\n")
     end
@@ -334,6 +354,13 @@ local function output_json(data)
             end
         end
     end
+
+    -- Simplify manufacturer_data for JSON output if no parsed_value
+    -- (Backward compatibility: tests expect simple string when no parser available)
+    if data.device.manufacturer_data and not data.device.manufacturer_data.parsed_value then
+        data.device.manufacturer_data = data.device.manufacturer_data.value
+    end
+    -- If manufacturer_data is nil, keep it as nil (outputs as JSON null)
 
     local json = require("json")
     print(json.encode(data))

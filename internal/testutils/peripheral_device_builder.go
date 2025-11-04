@@ -3,6 +3,7 @@
 package testutils
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -182,6 +183,7 @@ func (b *AggregateFormatDescriptorBuilder) Build() *PeripheralDeviceBuilder {
 type PeripheralDeviceBuilder struct {
 	profile            DeviceProfileConfig
 	scanAdvertisements []device.Advertisement
+	scanDelayMs        int           // Delay in milliseconds before emitting each advertisement during scan
 	t                  *testing.T    // Testing instance for automatic cleanup registration
 	disconnectChan     chan struct{} // Disconnect channel for graceful disconnect testing
 }
@@ -328,16 +330,55 @@ func (b *PeripheralDeviceBuilder) FromJSON(jsonStrFmt string, args ...interface{
 	return b
 }
 
-// WithScanAdvertisements returns an AdvertisementArrayBuilder that will return this PeripheralDeviceBuilder on Build()
-func (b *PeripheralDeviceBuilder) WithScanAdvertisements() *AdvertisementArrayBuilder[*PeripheralDeviceBuilder] {
+// ScanAdvertisementArrayBuilder wraps AdvertisementArrayBuilder to add scan delay support.
+// This allows configuring timing behavior for scan mock testing.
+type ScanAdvertisementArrayBuilder struct {
+	*AdvertisementArrayBuilder[*PeripheralDeviceBuilder]
+	scanDelayMs int // Delay in milliseconds before emitting each advertisement
+}
+
+// WithScanDelay sets the delay in milliseconds before emitting advertisements during scan.
+// This simulates real-world BLE scanning where advertisements arrive over time.
+// Useful for testing timeout behavior.
+func (sb *ScanAdvertisementArrayBuilder) WithScanDelay(delayMs int) *ScanAdvertisementArrayBuilder {
+	sb.scanDelayMs = delayMs
+	return sb
+}
+
+// WithBlockingScan configures the scan to block indefinitely after emitting advertisements.
+// This simulates real-world BLE scan behavior where the scan continues until the context is canceled.
+// Useful for testing interrupt handling (SIGINT) and watch mode behavior.
+func (sb *ScanAdvertisementArrayBuilder) WithBlockingScan() *ScanAdvertisementArrayBuilder {
+	sb.scanDelayMs = -1 // Sentinel value for blocking mode
+	return sb
+}
+
+// WithAdvertisements wraps the embedded method to return the correct type for fluent chaining.
+func (sb *ScanAdvertisementArrayBuilder) WithAdvertisements(ads ...device.Advertisement) *ScanAdvertisementArrayBuilder {
+	sb.AdvertisementArrayBuilder.WithAdvertisements(ads...)
+	return sb
+}
+
+// Build completes the advertisement configuration and passes scan delay to the peripheral builder.
+func (sb *ScanAdvertisementArrayBuilder) Build() *PeripheralDeviceBuilder {
+	parent := sb.AdvertisementArrayBuilder.Build()
+	parent.scanDelayMs = sb.scanDelayMs // Transfer delay to peripheral builder
+	return parent
+}
+
+// WithScanAdvertisements returns a ScanAdvertisementArrayBuilder that supports scan delay configuration
+func (b *PeripheralDeviceBuilder) WithScanAdvertisements() *ScanAdvertisementArrayBuilder {
 	arrayBuilder := NewAdvertisementArrayBuilder[*PeripheralDeviceBuilder]()
 	arrayBuilder.parent = b
 	arrayBuilder.buildFunc = func(parent *PeripheralDeviceBuilder, ads []device.Advertisement) *PeripheralDeviceBuilder {
-		// Add ble.Advertisements are directly to scan advertisements
+		// Add ble.Advertisements directly to scan advertisements
 		parent.scanAdvertisements = append(parent.scanAdvertisements, ads...)
 		return parent
 	}
-	return arrayBuilder
+
+	return &ScanAdvertisementArrayBuilder{
+		AdvertisementArrayBuilder: arrayBuilder,
+	}
 }
 
 // remapAggregateIndices decodes placeholder handles from aggregate value and replaces them
@@ -558,9 +599,37 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 	}
 
 	// Set up scan expectations using configured advertisements
-	mockDevice.On("Scan", mock.Anything, mock.Anything, mock.MatchedBy(func(handler blelib.AdvHandler) bool {
+	mockDevice.On("Scan", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		ctx := args.Get(0).(context.Context)
+		handler := args.Get(2).(blelib.AdvHandler)
+
+		if len(b.scanAdvertisements) > 0 {
+			b.t.Logf("Mock scan: emitting %d advertisement(s) with %dms delay", len(b.scanAdvertisements), b.scanDelayMs)
+		}
+
 		// Simulate discovering all configured advertisements
-		for _, devAdv := range b.scanAdvertisements {
+		for i, devAdv := range b.scanAdvertisements {
+			// Apply scan delay if configured, respecting context cancellation
+			if b.scanDelayMs > 0 {
+				b.t.Logf("Mock scan: waiting %dms before emitting advertisement %d/%d (addr=%s)",
+					b.scanDelayMs, i+1, len(b.scanAdvertisements), devAdv.Addr())
+				select {
+				case <-time.After(time.Duration(b.scanDelayMs) * time.Millisecond):
+					// Delay completed, proceed to emit advertisement
+				case <-ctx.Done():
+					b.t.Logf("Mock scan: context cancelled during delay, stopping scan")
+					return
+				}
+			}
+
+			// Check context before emitting an advertisement
+			select {
+			case <-ctx.Done():
+				b.t.Logf("Mock scan: context cancelled, stopping scan")
+				return
+			default:
+			}
+
 			// Create an inline adapter that wraps the device.Advertisement as ble.Advertisement
 			mockAddr := &blemocks.MockAddr{}
 			mockAddr.On("String").Return(devAdv.Addr())
@@ -608,10 +677,23 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 			}
 			adapter.On("SolicitedService").Return(bleSolicited)
 
+			b.t.Logf("Mock scan: emitting advertisement %d/%d (addr=%s, name=%s)",
+				i+1, len(b.scanAdvertisements), devAdv.Addr(), devAdv.LocalName())
 			handler(adapter)
 		}
-		return true
-	})).Return(nil)
+
+		// If blocking mode is enabled (scanDelayMs == -1), block until context is canceled
+		// This simulates real-world BLE scanning where the scan continues indefinitely
+		if b.scanDelayMs == -1 {
+			b.t.Logf("Mock scan: blocking mode enabled, waiting for context cancellation")
+			<-ctx.Done()
+			b.t.Logf("Mock scan: context cancelled in blocking mode, stopping scan")
+		}
+	}).Return(func(ctx context.Context, _ bool, _ blelib.AdvHandler) error {
+		// Return raw context errors like the actual ble.Device does
+		// The bleScanner wrapper (go-ble/scanner.go) will normalize them
+		return ctx.Err()
+	})
 
 	return mockDevice
 }

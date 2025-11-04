@@ -1,15 +1,16 @@
 //go:build test
 
+//go:generate go run github.com/srgg/testify/depend/cmd/dependgen
+
 package device_test
 
 import (
-	"testing"
-	"time"
-
 	"github.com/srg/blim/internal/device"
 	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
-	"github.com/stretchr/testify/suite"
+	"github.com/srgg/testify/depend"
+	"testing"
+	"time"
 )
 
 // DeviceBasicTestSuite tests device functionality that doesn't require device connection
@@ -381,6 +382,196 @@ func (suite *DeviceBasicTestSuite) TestDeviceWriteToCharacteristicErrors() {
 // Note: Appearance is now accessed as a regular characteristic (UUID 0x2A01 in GAP service 0x1800)
 // Tests for appearance should use the characteristic API tests
 
+func (suite *DeviceBasicTestSuite) TestParsedManufacturerData() {
+	// GOAL: Verify device properly parses and exposes manufacturer data via DeviceInfo interface
+	//
+	// TEST SCENARIO: Create device from advertisement with manufacturer data → ParsedManufacturerData() returns parsed struct
+
+	suite.Run("Blim manufacturer data", func() {
+		tests := []struct {
+			name               string
+			manufData          []byte
+			expectedDeviceType device.BlimDeviceType
+			expectedHWVersion  string
+			expectedFWVersion  string
+		}{
+			{
+				name: "BLE Test Device v1.0 fw2.1.3",
+				manufData: []byte{
+					0xFE, 0xFF, // Company ID (0xFFFE = BLIMCo)
+					0x00,             // Device Type (BLE Test Device)
+					0x10,             // HW Version (1.0)
+					0x02, 0x01, 0x03, // FW Version (2.1.3)
+				},
+				expectedDeviceType: device.BlimDeviceTypeBLETest,
+				expectedHWVersion:  "1.0",
+				expectedFWVersion:  "2.1.3",
+			},
+			{
+				name: "IMU Streamer v2.3 fw1.0.0",
+				manufData: []byte{
+					0xFE, 0xFF, // Company ID (0xFFFE = BLIMCo)
+					0x01,             // Device Type (IMU Streamer)
+					0x23,             // HW Version (2.3)
+					0x01, 0x00, 0x00, // FW Version (1.0.0)
+				},
+				expectedDeviceType: device.BlimDeviceTypeIMU,
+				expectedHWVersion:  "2.3",
+				expectedFWVersion:  "1.0.0",
+			},
+			{
+				name: "Unknown device type v1.5 fw3.2.1",
+				manufData: []byte{
+					0xFE, 0xFF, // Company ID (0xFFFE = BLIMCo)
+					0x42,             // Device Type (unknown)
+					0x15,             // HW Version (1.5)
+					0x03, 0x02, 0x01, // FW Version (3.2.1)
+				},
+				expectedDeviceType: device.BlimDeviceType(0x42),
+				expectedHWVersion:  "1.5",
+				expectedFWVersion:  "3.2.1",
+			},
+		}
+
+		for _, tt := range tests {
+			suite.Run(tt.name, func() {
+				// Create a device from advertisement with Blim manufacturer data
+				adv := testutils.CreateMockAdvertisementFromJSON(`{
+					"name": "Blim Device",
+					"address": "AA:BB:CC:DD:EE:FF",
+					"rssi": -50,
+					"manufacturerData": %s,
+					"serviceData": null,
+					"services": [],
+					"txPower": 0,
+					"connectable": true
+				}`, testutils.MustJSON(tt.manufData)).Build()
+
+				dev := devicefactory.NewDeviceFromAdvertisement(adv, suite.helper.Logger)
+
+				// Verify raw manufacturer data is stored
+				suite.Assert().Equal(tt.manufData, dev.ManufacturerData(), "raw manufacturer data MUST match")
+
+				// Verify parsed manufacturer data is available
+				parsed := dev.ParsedManufacturerData()
+				suite.Require().NotNil(parsed, "ParsedManufacturerData() MUST return parsed data for Blim devices")
+
+				blimData, ok := parsed.(*device.BlimManufacturerData)
+				suite.Require().True(ok, "MUST return *BlimManufacturerData type")
+
+				// Verify parsed fields
+				suite.Assert().Equal(tt.expectedDeviceType, blimData.DeviceType, "device type MUST match")
+				suite.Assert().Equal(tt.expectedHWVersion, blimData.HardwareVersion, "hardware version MUST match")
+				suite.Assert().Equal(tt.expectedFWVersion, blimData.FirmwareVersion, "firmware version MUST match")
+			})
+		}
+	})
+
+	suite.Run("Unknown company IDs", func() {
+		tests := []struct {
+			name      string
+			manufData []byte
+		}{
+			{
+				name:      "Apple company ID (0x004C)",
+				manufData: []byte{0x4C, 0x00, 0x01, 0x02, 0x03},
+			},
+			{
+				name:      "Google company ID (0x00E0)",
+				manufData: []byte{0xE0, 0x00, 0x05, 0x06},
+			},
+			{
+				name:      "Unknown company ID",
+				manufData: []byte{0x12, 0x34, 0xFF, 0xFF},
+			},
+		}
+
+		for _, tt := range tests {
+			suite.Run(tt.name, func() {
+				// Create device from advertisement with unknown manufacturer data
+				adv := testutils.CreateMockAdvertisementFromJSON(`{
+					"name": "Unknown Device",
+					"address": "AA:BB:CC:DD:EE:FF",
+					"rssi": -50,
+					"manufacturerData": %s,
+					"serviceData": null,
+					"services": [],
+					"txPower": 0,
+					"connectable": true
+				}`, testutils.MustJSON(tt.manufData)).Build()
+
+				dev := devicefactory.NewDeviceFromAdvertisement(adv, suite.helper.Logger)
+
+				// Verify raw manufacturer data is stored
+				suite.Assert().Equal(tt.manufData, dev.ManufacturerData(), "raw manufacturer data MUST match")
+
+				// Verify parsed manufacturer data is nil for unknown companies
+				parsed := dev.ParsedManufacturerData()
+				suite.Assert().Nil(parsed, "ParsedManufacturerData() MUST return nil for unknown company IDs")
+			})
+		}
+	})
+
+	suite.Run("No manufacturer data", func() {
+		// GOAL: Verify device without manufacturer data returns nil for parsed data
+		//
+		// TEST SCENARIO: Create device without manufacturer data → ParsedManufacturerData() returns nil
+
+		adv := testutils.CreateMockAdvertisementFromJSON(`{
+			"name": "No Manuf Data",
+			"address": "AA:BB:CC:DD:EE:FF",
+			"rssi": -50,
+			"manufacturerData": null,
+			"serviceData": null,
+			"services": [],
+			"txPower": 0,
+			"connectable": true
+		}`).Build()
+
+		dev := devicefactory.NewDeviceFromAdvertisement(adv, suite.helper.Logger)
+
+		// Verify no manufacturer data
+		suite.Assert().Nil(dev.ManufacturerData(), "ManufacturerData() MUST return nil")
+		suite.Assert().Nil(dev.ParsedManufacturerData(), "ParsedManufacturerData() MUST return nil")
+	})
+}
+
+// @dependsOn TestParsedManufacturerData
+func (suite *DeviceBasicTestSuite) TestBlimDeviceTypeString() {
+	// GOAL: Verify BlimDeviceType.String() returns correct human-readable names
+	//
+	// TEST SCENARIO: Known and unknown device types → String() called → proper names returned
+
+	tests := []struct {
+		deviceType   device.BlimDeviceType
+		expectedName string
+	}{
+		{
+			deviceType:   device.BlimDeviceTypeBLETest,
+			expectedName: "BLE Test Device",
+		},
+		{
+			deviceType:   device.BlimDeviceTypeIMU,
+			expectedName: "IMU Streamer",
+		},
+		{
+			deviceType:   device.BlimDeviceType(0x42),
+			expectedName: "Unknown (0x42)",
+		},
+		{
+			deviceType:   device.BlimDeviceType(0xFF),
+			expectedName: "Unknown (0xFF)",
+		},
+	}
+
+	for _, tt := range tests {
+		suite.Run(tt.expectedName, func() {
+			result := tt.deviceType.String()
+			suite.Assert().Equal(tt.expectedName, result, "device type name MUST match")
+		})
+	}
+}
+
 func TestDeviceBasicTestSuite(t *testing.T) {
-	suite.Run(t, new(DeviceBasicTestSuite))
+	depend.RunSuite(t, new(DeviceBasicTestSuite))
 }

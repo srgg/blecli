@@ -123,6 +123,7 @@ type DeviceInfo interface {
 	IsConnectable() bool
 	AdvertisedServices() []string
 	ManufacturerData() []byte
+	ParsedManufacturerData() interface{} // Parsed manufacturer data (e.g., *BlimManufacturerData) or nil
 	ServiceData() map[string][]byte
 }
 

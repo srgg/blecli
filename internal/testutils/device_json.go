@@ -37,6 +37,70 @@ type DescriptorJSON struct {
 	UUID string `json:"uuid"`
 }
 
+// AdvertisementToJSON converts a device.Advertisement to JSON string
+func AdvertisementToJSON(adv device.Advertisement) string {
+	// Convert manufacturer data from []byte to hex string
+	var manufDataStr string
+	if adv.ManufacturerData() != nil {
+		manufDataStr = bytesToHex(adv.ManufacturerData())
+	}
+
+	// Convert service data
+	var serviceDataMap map[string]string
+	if adv.ServiceData() != nil && len(adv.ServiceData()) > 0 {
+		serviceDataMap = make(map[string]string)
+		for _, sd := range adv.ServiceData() {
+			serviceDataMap[sd.UUID] = bytesToHex(sd.Data)
+		}
+	}
+
+	// Convert TxPowerLevel to pointer for omitempty
+	var txPower *int
+	if adv.TxPowerLevel() != 0 {
+		val := adv.TxPowerLevel()
+		txPower = &val
+	}
+
+	jsonStruct := struct {
+		Address          string            `json:"address"`
+		Name             string            `json:"name"`
+		RSSI             int               `json:"rssi"`
+		Connectable      bool              `json:"connectable"`
+		ManufacturerData string            `json:"manufacturer_data,omitempty"`
+		ServiceData      map[string]string `json:"service_data,omitempty"`
+		TxPower          *int              `json:"tx_power,omitempty"`
+		Services         []string          `json:"services,omitempty"`
+	}{
+		Address:          adv.Addr(),
+		Name:             adv.LocalName(),
+		RSSI:             adv.RSSI(),
+		Connectable:      adv.Connectable(),
+		ManufacturerData: manufDataStr,
+		ServiceData:      serviceDataMap,
+		TxPower:          txPower,
+		Services:         adv.Services(),
+	}
+
+	b, err := json.Marshal(jsonStruct)
+	if err != nil {
+		panic(err)
+	}
+
+	return string(b)
+}
+
+// bytesToHex converts []byte to lowercase hex string
+func bytesToHex(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	hexStr := ""
+	for _, b := range data {
+		hexStr += string("0123456789abcdef"[b>>4]) + string("0123456789abcdef"[b&0x0f])
+	}
+	return hexStr
+}
+
 // DeviceToJSON converts a device. Device to JSON string
 func DeviceToJSON(d device.Device) string {
 	// Map Services - advertised services are now just UUIDs (no characteristics until connected)

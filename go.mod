@@ -1,6 +1,6 @@
 module github.com/srg/blim
 
-go 1.24.0
+go 1.24.2
 
 require (
 	github.com/aarzilli/golua v0.0.0-20250217091409-248753f411c4
@@ -19,7 +19,7 @@ require (
 require (
 	github.com/hedzr/go-ringbuf/v2 v2.2.2
 	github.com/smallnest/ringbuffer v0.0.0-20250317021400-0da97b586904
-	github.com/srgg/testify v0.0.0-20251031192711-c4afda2f4a67
+	github.com/srgg/testify v0.1.1
 	github.com/wk8/go-ordered-map/v2 v2.1.8
 	github.com/yudai/gojsondiff v1.0.0
 	golang.org/x/sys v0.37.0
@@ -56,5 +56,6 @@ require (
 
 replace github.com/go-ble/ble => github.com/srgg/go-ble v0.0.0-20251019021511-162008c817dc
 
-//tool github.com/srgg/testify/depend/cmd/dependgen
-tool github.com/srgg/testify/depend
+tool github.com/srgg/testify/depend/cmd/dependgen
+
+//replace github.com/srgg/testify => /Users/srg/src/testify

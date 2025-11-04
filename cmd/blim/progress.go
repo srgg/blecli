@@ -179,3 +179,9 @@ func (p *ProgressPrinter) Stop() {
 
 	fmt.Print(clearLineSequence)
 }
+
+// NoOpProgressCallback returns a no-op progress callback function.
+// Use this when progress output is not desired (e.g., for JSON output).
+func NoOpProgressCallback() func(string) {
+	return func(phase string) {}
+}

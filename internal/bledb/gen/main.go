@@ -212,6 +212,51 @@ func run() error {
 
 	vendors = append(vendors, bsigVendors...)
 
+	// BLIMCo Test Vendor ID (0xFFFE) Safety Check
+	// Check if 0xFFFE is already assigned to another vendor
+	const blimcoVendorID = "65534" // 0xFFFE in decimal
+	const blimcoName = "BLIMCo"
+
+	existingVendor := ""
+	for _, v := range vendors {
+		if v.UUID == blimcoVendorID {
+			existingVendor = v.Name
+			break
+		}
+	}
+
+	if existingVendor != "" && existingVendor != blimcoName {
+		return fmt.Errorf(`
+╔═════════════════════════════════════════════════════════════════════════════╗
+║ ERROR: BLIMCo Test Vendor ID (0xFFFE) is now officially assigned!          ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+Vendor ID 0xFFFE (65534) is now registered in the Bluetooth SIG database as:
+
+    Company ID: 0xFFFE
+    Vendor:     %s
+
+ACTION REQUIRED:
+  1. Update BLIMCo test vendor ID in:
+       - internal/device/known_manufacturer_data.go (BLIMCO_COMPANY_ID)
+       - firmware/imu-streamer/src/ble/manufacturer_data.hpp
+  2. Choose a new unassigned company ID (e.g., 0xFFFD)
+  3. Update all test data to use the new ID
+
+The build will succeed once 0xFFFE is no longer used by BLIMCo.
+`, existingVendor)
+	}
+
+	// If 0xFFFE is not assigned or already BLIMCo, ensure BLIMCo is in the list
+	if existingVendor == "" {
+		vendors = append(vendors, rawEntry{
+			UUID: blimcoVendorID,
+			Name: blimcoName,
+			Type: Vendor,
+		})
+		fmt.Printf("✓ Added BLIMCo test vendor (0xFFFE) to vendor list\n")
+	}
+
 	// BSIG Units
 	bsigUnitsPath, err := ensureCached("units.yaml", bsigUnitURL)
 	if err != nil {

@@ -25,6 +25,8 @@ import (
 //   - stdout: Writer for standard output (if nil, output is discarded)
 //   - stderr: Writer for error output (if nil, errors are discarded)
 //   - drainTimeout: How long to wait for output after script completes (e.g., 50ms)
+//   - characteristicReadTimeout: Timeout for characteristic read operations (0 = use default)
+//   - characteristicWriteTimeout: Timeout for characteristic write operations (0 = use default)
 //
 // Returns an error if script execution fails.
 func ExecuteDeviceScriptWithOutput(
@@ -36,12 +38,22 @@ func ExecuteDeviceScriptWithOutput(
 	args map[string]string,
 	stdout, stderr io.Writer,
 	drainTimeout time.Duration,
+	characteristicReadTimeout time.Duration,
+	characteristicWriteTimeout time.Duration,
 ) error {
 
 	if luaAPI == nil {
 		// Create a Lua API with the connected device
 		luaAPI = NewBLEAPI2(dev, logger)
 		defer luaAPI.Close()
+
+		// Configure timeouts if provided (0 = use defaults from LuaAPI)
+		if characteristicReadTimeout > 0 {
+			luaAPI.characteristicReadTimeout = characteristicReadTimeout
+		}
+		if characteristicWriteTimeout > 0 {
+			luaAPI.characteristicWriteTimeout = characteristicWriteTimeout
+		}
 	}
 
 	logger.WithField("script_size", len(script)).Debug("Starting Lua script execution")

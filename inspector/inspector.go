@@ -14,8 +14,9 @@ type ProgressCallback func(phase string)
 
 // InspectOptions defines options for inspecting a BLE device profile
 type InspectOptions struct {
-	ConnectTimeout        time.Duration
-	DescriptorReadTimeout time.Duration // Timeout for reading descriptor values (0 = skip reads)
+	ConnectTimeout            time.Duration
+	DescriptorReadTimeout     time.Duration // Timeout for reading descriptor values (0 = skip reads)
+	CharacteristicReadTimeout time.Duration // Timeout for reading characteristic values
 }
 
 // InspectCallback processes a connected device and produces output of type R

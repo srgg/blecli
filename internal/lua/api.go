@@ -16,6 +16,15 @@ import (
 	"github.com/srg/blim/internal/device"
 )
 
+const (
+	// DefaultCharacteristicReadTimeout is the default timeout for characteristic read operations
+	DefaultCharacteristicReadTimeout = 5 * time.Second
+	// DefaultCharacteristicWriteTimeout is the default timeout for characteristic write operations
+	DefaultCharacteristicWriteTimeout = 5 * time.Second
+	// DefaultDescriptorReadTimeout is the default timeout for descriptor read operations
+	DefaultDescriptorReadTimeout = 2 * time.Second
+)
+
 // BridgeInfo bridge information exposed to Lua
 type BridgeInfo interface {
 	GetTTYName() string                 // TTY device name if created
@@ -35,18 +44,22 @@ type LuaSubscriptionTable struct {
 // LuaAPI represents the new BLE API that supports Lua subscriptions
 // This replaces the old TTY-based bridge with direct subscription support
 type LuaAPI struct {
-	device    device.Device
-	LuaEngine *LuaEngine
-	logger    *logrus.Logger
-	bridge    BridgeInfo // Optional bridge information
+	device                     device.Device
+	LuaEngine                  *LuaEngine
+	logger                     *logrus.Logger
+	bridge                     BridgeInfo    // Optional bridge information
+	characteristicReadTimeout  time.Duration // Default timeout for characteristic read operations
+	characteristicWriteTimeout time.Duration // Default timeout for characteristic write operations
 }
 
 // NewBLEAPI2 creates a new BLE API instance with subscription support
 func NewBLEAPI2(device device.Device, logger *logrus.Logger) *LuaAPI {
 	r := &LuaAPI{
-		device:    device,
-		logger:    logger,
-		LuaEngine: NewLuaEngine(logger),
+		device:                     device,
+		logger:                     logger,
+		LuaEngine:                  NewLuaEngine(logger),
+		characteristicReadTimeout:  DefaultCharacteristicReadTimeout,
+		characteristicWriteTimeout: DefaultCharacteristicWriteTimeout,
 	}
 
 	r.Reset()
@@ -413,7 +426,7 @@ func (api *LuaAPI) registerListFunction(L *lua.State) {
 				L.SetTable(-3)
 			}
 
-			// Add characteristics array
+			// Add a characteristic array
 			L.PushString("characteristics")
 			L.NewTable()
 			charIndex := 1
@@ -497,15 +510,30 @@ func (api *LuaAPI) registerDeviceInfo(L *lua.State) {
 		}
 		L.SetTable(-3)
 
-		// Manufacturer Data
+		// Manufacturer Data (table with value and optional parsed_value, or nil if no data)
 		manufData := dev.ManufacturerData()
 		L.PushString("manufacturer_data")
 		if len(manufData) > 0 {
+			L.NewTable()
+
+			// Raw value field
+			L.PushString("value")
 			L.PushString(fmt.Sprintf("%X", manufData))
+			L.SetTable(-3)
+
+			// Parsed value field (optional, includes vendor if parser implements VendorInfo)
+			parsedManufData := dev.ParsedManufacturerData()
+			if parsedManufData != nil {
+				L.PushString("parsed_value")
+				api.pushManufacturerParsedData(L, parsedManufData)
+				L.SetTable(-3)
+			}
+
+			L.SetTable(-3)
 		} else {
-			L.PushString("")
+			L.PushNil()
+			L.SetTable(-3)
 		}
-		L.SetTable(-3)
 
 		// Service Data
 		L.PushString("service_data")
@@ -1002,7 +1030,7 @@ func (api *LuaAPI) registerCharacteristicFunction(L *lua.State) {
 		// Method: read() - reads the characteristic value from the device
 		// Returns (value, nil) on success or (nil, error_message) on failure
 		api.SafePushGoFunction(L, "read", func(L *lua.State) int {
-			value, err := char.Read(5 * time.Second)
+			value, err := char.Read(api.characteristicReadTimeout)
 			if err != nil {
 				L.PushNil()
 				L.PushString(fmt.Sprintf("read() failed: %s", stripWrappedGoErrorSuffix(err.Error())))
@@ -1042,7 +1070,7 @@ func (api *LuaAPI) registerCharacteristicFunction(L *lua.State) {
 			}
 
 			// Use the abstracted CharacteristicWriter interface with timeout
-			err := char.Write(data, withResponse, 5*time.Second) // Use 5s default timeout for Lua
+			err := char.Write(data, withResponse, api.characteristicWriteTimeout)
 			if err != nil {
 				// Return (nil, error_message) for expected errors
 				// Strip wrapped Go error suffix for cleaner Lua messages
@@ -1078,7 +1106,7 @@ func (api *LuaAPI) registerCharacteristicFunction(L *lua.State) {
 					return 1
 				}
 
-				// Return parsed value (currently only string type is supported for Appearance)
+				// Return parsed value (currently only a string type is supported for Appearance)
 				if str, ok := parsed.(string); ok {
 					L.PushString(str)
 				} else {
@@ -1247,6 +1275,49 @@ func (api *LuaAPI) pushDescriptorParsedValue(L *lua.State, parsedValue interface
 	default:
 		// Fallback for unexpected types - push nil
 		L.PushNil()
+	}
+}
+
+// pushManufacturerParsedData pushes parsed manufacturer data onto the Lua stack as a table.
+// Handles all known manufacturer data types (BlimManufacturerData, etc.).
+// If parsedData implements the VendorInfo interface, vendor info is included first.
+// Stack effect: pushes one value (table)
+func (api *LuaAPI) pushManufacturerParsedData(L *lua.State, parsedData interface{}) {
+	L.NewTable()
+
+	// Add vendor info first if parsedData implements VendorInfo
+	if vendorInfo, ok := parsedData.(device.VendorInfo); ok {
+		L.PushString("vendor")
+		L.NewTable()
+
+		L.PushString("id")
+		L.PushInteger(int64(vendorInfo.VendorID()))
+		L.SetTable(-3)
+
+		if vendorName := vendorInfo.VendorName(); vendorName != "" {
+			L.PushString("name")
+			L.PushString(vendorName)
+			L.SetTable(-3)
+		}
+
+		L.SetTable(-3) // Set vendor table
+	}
+
+	// Add manufacturer-specific fields
+	switch v := parsedData.(type) {
+	case *device.BlimManufacturerData:
+		L.PushString("device_type")
+		L.PushString(v.DeviceType.String())
+		L.SetTable(-3)
+		L.PushString("hardware_version")
+		L.PushString(v.HardwareVersion)
+		L.SetTable(-3)
+		L.PushString("firmware_version")
+		L.PushString(v.FirmwareVersion)
+		L.SetTable(-3)
+
+	default:
+		// Unknown manufacturer data type - table already created with vendor if available
 	}
 }
 

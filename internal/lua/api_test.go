@@ -10,6 +10,7 @@ import (
 
 	_ "embed"
 
+	"github.com/srg/blim/internal/device"
 	"github.com/srg/blim/internal/testutils"
 	suitelib "github.com/stretchr/testify/suite"
 )
@@ -2056,6 +2057,147 @@ func (suite *LuaApiTestSuite) Test000_CharacteristicParserAPI_Prerequisite() {
 
 	// All subtests passed - set flag so dependent tests can run
 	suite.parserAPITestPassed = true
+}
+
+// TestManufacturerData tests manufacturer_data field exposure and parsing via Lua API
+func (suite *LuaApiTestSuite) TestManufacturerData() {
+	// GOAL: Verify manufacturer_data field exposure and parsing for various scenarios
+	//
+	// TEST SCENARIO: Test multiple manufacturer data scenarios → verify field structure → verify parsing → verify graceful degradation
+
+	// Local helper: create test advertisement with manufacturer data
+	createTestAd := func(manufData []byte) device.Advertisement {
+		return testutils.NewAdvertisementBuilder().
+			WithAddress("00:00:00:00:00:01").
+			WithName("TestDevice").
+			WithRSSI(-50).
+			WithConnectable(true).
+			WithManufacturerData(manufData).
+			WithServices().
+			WithNoServiceData().
+			WithTxPower(0).
+			Build()
+	}
+
+	tests := []struct {
+		name         string
+		manufData    []byte
+		testScript   string
+		testGoal     string
+		testScenario string
+	}{
+		{
+			name:         "NoData",
+			manufData:    nil,
+			testGoal:     "Verify manufacturer_data is nil when device has no manufacturer data",
+			testScenario: "Device without manufacturer data → blim.device.manufacturer_data is nil → verified",
+			testScript: `
+				assert(blim.device ~= nil, "blim.device MUST exist")
+				assert(blim.device.manufacturer_data == nil, "manufacturer_data MUST be nil when absent")
+			`,
+		},
+		{
+			name:         "WithValue",
+			manufData:    []byte{0xFE, 0xFF, 0x01, 0x10, 0x02, 0x01, 0x03},
+			testGoal:     "Verify manufacturer_data contains a value field with raw hex data",
+			testScenario: "Device with raw manufacturer data → manufacturer_data.value contains hex string → verified",
+			testScript: `
+				assert(blim.device.manufacturer_data ~= nil, "manufacturer_data MUST be present")
+				assert(type(blim.device.manufacturer_data) == "table", "manufacturer_data MUST be table")
+
+				assert(blim.device.manufacturer_data.value ~= nil, "value field MUST exist")
+				assert(type(blim.device.manufacturer_data.value) == "string", "value MUST be string")
+				assert(blim.device.manufacturer_data.value == "FEFF01100201" .. "03", "value MUST match hex data")
+			`,
+		},
+		{
+			name:         "BLIMCoIMU",
+			manufData:    []byte{0xFE, 0xFF, 0x01, 0x10, 0x02, 0x01, 0x03},
+			testGoal:     "Verify parsed_value contains vendor info and BLIMCo IMU Streamer fields",
+			testScenario: "BLIMCo IMU device with manufacturer data → parsed_value populated → vendor and device fields verified",
+			testScript: `
+				assert(blim.device.manufacturer_data ~= nil, "manufacturer_data MUST be present")
+				assert(blim.device.manufacturer_data.parsed_value ~= nil, "parsed_value MUST exist for BLIMCo")
+
+				local parsed = blim.device.manufacturer_data.parsed_value
+				assert(type(parsed) == "table", "parsed_value MUST be table")
+
+				-- Verify vendor info
+				assert(parsed.vendor ~= nil, "vendor field MUST exist")
+				assert(type(parsed.vendor) == "table", "vendor MUST be table")
+				assert(parsed.vendor.id == 0xFFFE, "vendor.id MUST be 0xFFFE")
+				assert(parsed.vendor.name == "BLIMCo", "vendor.name MUST be BLIMCo")
+
+				-- Verify BLIMCo-specific fields
+				assert(parsed.device_type == "IMU Streamer", "device_type MUST be IMU Streamer")
+				assert(parsed.hardware_version == "1.0", "hardware_version MUST be 1.0")
+				assert(parsed.firmware_version == "2.1.3", "firmware_version MUST be 2.1.3")
+			`,
+		},
+		{
+			name:         "BLIMCoTestDevice",
+			manufData:    []byte{0xFE, 0xFF, 0x00, 0x20, 0x01, 0x00, 0x00},
+			testGoal:     "Verify parsed_value correctly identifies BLIMCo BLE Test Device",
+			testScenario: "BLE Test Device manufacturer data → device_type field shows correct type → verified",
+			testScript: `
+				assert(blim.device.manufacturer_data ~= nil, "manufacturer_data MUST be present")
+				assert(blim.device.manufacturer_data.parsed_value ~= nil, "parsed_value MUST exist")
+
+				local parsed = blim.device.manufacturer_data.parsed_value
+
+				-- Verify vendor
+				assert(parsed.vendor.id == 0xFFFE, "vendor.id MUST be 0xFFFE")
+				assert(parsed.vendor.name == "BLIMCo", "vendor.name MUST be BLIMCo")
+
+				-- Verify different device type and versions
+				assert(parsed.device_type == "BLE Test Device", "device_type MUST be BLE Test Device")
+				assert(parsed.hardware_version == "2.0", "hardware_version MUST be 2.0")
+				assert(parsed.firmware_version == "1.0.0", "firmware_version MUST be 1.0.0")
+			`,
+		},
+		{
+			name:         "Unknown",
+			manufData:    []byte{0x34, 0x12, 0xAA, 0xBB, 0xCC},
+			testGoal:     "Verify unknown manufacturer data has value but no parsed_value",
+			testScenario: "Unknown manufacturer data → value field exists → parsed_value is nil → verified",
+			testScript: `
+				assert(blim.device.manufacturer_data ~= nil, "manufacturer_data MUST be present")
+				assert(blim.device.manufacturer_data.value == "3412AABBCC", "value MUST contain raw hex")
+				assert(blim.device.manufacturer_data.parsed_value == nil, "parsed_value MUST be nil for unknown manufacturer")
+			`,
+		},
+	}
+
+	for _, tt := range tests {
+		suite.Run(tt.name, func() {
+			// Rebuild peripheral with manufacturer data if needed
+			if tt.manufData != nil {
+				// Create advertisement with manufacturer data
+				adv := createTestAd(tt.manufData)
+
+				// Rebuild peripheral with manufacturer data
+				suite.PeripheralBuilder = testutils.NewPeripheralDeviceBuilder(suite.T())
+				suite.WithPeripheral().
+					WithScanAdvertisements().
+					WithAdvertisements(adv).
+					Build().
+					Build()
+
+				// Call SetupTest to apply a new peripheral configuration
+				suite.MockBLEPeripheralSuite.SetupTest()
+
+				// Update the device with advertisement data BEFORE creating the LuaAPI
+				suite.LuaApi.GetDevice().Update(adv)
+
+				// Reset LuaAPI to rebuild blim.device table with updated advertisement
+				suite.LuaApi.Reset()
+			}
+
+			// Execute test script
+			err := suite.ExecuteScript(tt.testScript)
+			suite.NoError(err, "Lua script MUST execute without errors")
+		})
+	}
 }
 
 // TestLuaAPITestSuite runs the test suite using testify/suite

@@ -1,6 +1,8 @@
 package goble
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -15,6 +17,15 @@ func NormalizeError(err error) error {
 		return nil
 	}
 
+	// Check context errors first (these are common across all operations)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %v", device.ErrTimeout, err)
+	case errors.Is(err, context.Canceled):
+		return err // Don't wrap - cancellation is explicit user action
+	}
+
+	// Check platform-specific error messages
 	msg := err.Error()
 	switch {
 	case msg == "central manager has invalid state: have=4 want=5: is Bluetooth turned on?":

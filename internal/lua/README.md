@@ -66,7 +66,18 @@ Read-only table containing device information.
 - `tx_power` (number, optional) - Transmit power in dBm
 - `last_seen` (string) - ISO 8601 timestamp
 - `advertised_services` (array) - Service UUIDs from advertisements
-- `manufacturer_data` (string) - Hex-encoded manufacturer data
+- `manufacturer_data` (table or nil) - Manufacturer data object (nil if no manufacturer data), with:
+  - `value` (string) - Hex-encoded raw manufacturer data
+  - `parsed_value` (table, optional) - Parsed manufacturer data structure (only if parser registered for this manufacturer)
+    - `vendor` (table, optional) - Vendor information (present if parser implements VendorInfo interface)
+      - `id` (number) - Bluetooth SIG Company Identifier
+      - `name` (string, optional) - Human-readable vendor name (nil if vendor unknown in database)
+    - **Note:** Format of additional fields varies by manufacturer and device type
+    - Example for BLIMCo devices (vendor ID 0xFFFE):
+      - `vendor` (table) - `{id = 0xFFFE, name = "BLIMCo"}`
+      - `device_type` (string) - Device type name (e.g., "BLE Test Device", "IMU Streamer")
+      - `hardware_version` (string) - Hardware version (e.g., "1.0")
+      - `firmware_version` (string) - Firmware version (e.g., "2.1.3")
 - `service_data` (table) - Map of service UUID to hex-encoded data
 
 **Example:**

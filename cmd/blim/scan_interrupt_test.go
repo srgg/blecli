@@ -1,3 +1,5 @@
+//go:build test
+
 package main
 
 import (
@@ -78,46 +80,24 @@ func (s *ScanInterruptSuite) SetupTest() {
 		WithTxPower(0).
 		Build()
 
-	s.WithAdvertisements().
-		WithAdvertisements(adv1, adv2).
+	// Use WithBlockingScan() to make a scan block after emitting advertisements
+	// This simulates real BLE scanning for interrupt testing
+	s.WithPeripheral().
+		WithScanAdvertisements().
+		WithBlockingScan().WithAdvertisements(adv1, adv2).Build().
 		Build()
 
 	// Call parent to apply mock configuration
 	s.MockBLEPeripheralSuite.SetupTest()
 
-	// The PeripheralDeviceBuilder creates a mock device, but we need to customize it
-	// to add blocking Scan behavior for interrupt testing
+	// Wrap the device in a scanner adapter
 	bleDevice := s.PeripheralBuilder.Build()
+	scanningDevice := &bleScanningDeviceMock{Device: bleDevice}
 
-	// Wrap in a custom mock that blocks until context is canceled
-	blockingDevice := &blockingScanDevice{
-		Device: bleDevice,
-		adv1:   adv1,
-		adv2:   adv2,
-	}
-
-	// Update the device factory with the blocking device
+	// Update the device factory
 	devicefactory.DeviceFactory = func() (device.Scanner, error) {
-		return blockingDevice, nil
+		return scanningDevice, nil
 	}
-}
-
-// blockingScanDevice wraps a BLE device to make a Scan block until the context is canceled
-// This is needed for interrupt testing
-type blockingScanDevice struct {
-	blelib.Device
-	adv1, adv2 device.Advertisement
-}
-
-// Scan sends advertisements, then blocks until context is canceled
-func (b *blockingScanDevice) Scan(ctx context.Context, allowDup bool, handler func(device.Advertisement)) error {
-	// Send the advertisements first
-	handler(b.adv1)
-	handler(b.adv2)
-
-	// Then block until context is canceled (simulating ongoing scan)
-	<-ctx.Done()
-	return ctx.Err()
 }
 
 // hangingScanDevice simulates Bluetooth being disabled mid-scan by emitting one ad then hanging
@@ -125,7 +105,7 @@ type hangingScanDevice struct {
 	adv device.Advertisement
 }
 
-// Scan emits one advertisement then returns Bluetooth error (simulating Bluetooth disabled)
+// Scan emits one advertisement, then returns Bluetooth error (simulating Bluetooth disabled)
 func (h *hangingScanDevice) Scan(ctx context.Context, allowDup bool, handler func(device.Advertisement)) error {
 	// Emit one advertisement (scan starts working)
 	handler(h.adv)
@@ -137,7 +117,7 @@ func (h *hangingScanDevice) Scan(ctx context.Context, allowDup bool, handler fun
 
 // TestSingleScanInterrupt tests that a single scan with duration responds to SIGINT
 func (s *ScanInterruptSuite) TestSingleScanInterrupt() {
-	// GOAL: Verify single scan with duration exits cleanly on SIGINT
+	// GOAL: Verify a single scan with duration exists cleanly on SIGINT
 	//
 	// TEST SCENARIO: Start timed scan → send SIGINT after 100ms → scan completes within 5s
 
@@ -162,7 +142,9 @@ func (s *ScanInterruptSuite) TestSingleScanInterrupt() {
 	time.Sleep(100 * time.Millisecond)
 
 	process, _ := os.FindProcess(os.Getpid())
-	process.Signal(syscall.SIGINT)
+	if err := process.Signal(syscall.SIGINT); err != nil {
+		s.Require().NoError(err)
+	}
 
 	select {
 	case <-done:
@@ -199,7 +181,9 @@ func (s *ScanInterruptSuite) TestWatchModeInterrupt() {
 	time.Sleep(100 * time.Millisecond)
 
 	process, _ := os.FindProcess(os.Getpid())
-	process.Signal(syscall.SIGINT)
+	if err := process.Signal(syscall.SIGINT); err != nil {
+		s.Require().NoError(err)
+	}
 
 	select {
 	case <-done:
@@ -242,7 +226,9 @@ func (s *ScanInterruptSuite) TestWatchModeHangAfterScanFinishes() {
 	}
 
 	process, _ := os.FindProcess(os.Getpid())
-	process.Signal(syscall.SIGINT)
+	if err := process.Signal(syscall.SIGINT); err != nil {
+		s.Require().NoError(err)
+	}
 
 	select {
 	case <-done:
@@ -254,7 +240,7 @@ func (s *ScanInterruptSuite) TestWatchModeHangAfterScanFinishes() {
 
 // TestWatchModeBluetoothDisabled verifies watch mode detects stalled scans when Bluetooth is disabled
 func (s *ScanInterruptSuite) TestWatchModeBluetoothDisabled() {
-	// GOAL: Verify watch mode exits with error when Bluetooth disabled mid-scan
+	// GOAL: Verify watch mode exits with an error when Bluetooth is disabled mid-scan
 	//
 	// TEST SCENARIO: Bluetooth disabled during scan → returns ErrBluetoothOff → watch mode exits with error
 

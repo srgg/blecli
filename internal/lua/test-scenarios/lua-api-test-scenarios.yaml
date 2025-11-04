@@ -286,7 +286,7 @@ test_cases:
           rssi: 0
           connectable: false
           advertised_services: []
-          manufacturer_data: ""
+          manufacturer_data: null
           service_data: []
         services:
           - uuid: "1234"
