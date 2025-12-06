@@ -374,8 +374,8 @@ func (suite *LuaEngineTestSuite) TestExecuteScript_BlockedFunctions() {
 		"os.exit":    `os.exit(0)`,
 		"os.remove":  `os.remove("file.txt")`,
 		"os.rename":  `os.rename("old.txt", "new.txt")`,
-		"io.read":    `io.read()`,
-		"io.lines":   `io.lines("file.txt")`,
+		// "io.read" is allowed for interactive bridge scripts
+		"io.lines": `io.lines("file.txt")`,
 		//"require":    `require("module")`,
 		"dofile":   `dofile("script.lua")`,
 		"loadfile": `loadfile("script.lua")`,

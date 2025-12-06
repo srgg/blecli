@@ -12,11 +12,9 @@ import (
 	"time"
 
 	"github.com/srg/blim/internal/device"
-	goble "github.com/srg/blim/internal/device/go-ble"
 	"github.com/srg/blim/internal/devicefactory"
 	"github.com/srg/blim/internal/testutils"
 	"github.com/stretchr/testify/require"
-	orderedmap "github.com/wk8/go-ordered-map/v2"
 
 	"gopkg.in/yaml.v3"
 )
@@ -341,6 +339,15 @@ type LuaApiSuite struct {
 	luaOutputCapture *LuaOutputCollector
 	Executor         ScriptExecutor
 	templateData     map[string]interface{} // Template data for dynamic test assertions
+}
+
+// NewPeripheralDataSimulator creates a builder with automatic connection access via LuaApi.
+// Overrides the embedded MockBLEPeripheralSuite method to provide connection provider.
+func (suite *LuaApiSuite) NewPeripheralDataSimulator() *testutils.PeripheralDataSimulatorBuilder {
+	return suite.MockBLEPeripheralSuite.NewPeripheralDataSimulator().
+		WithConnectionProvider(func() device.Connection {
+			return suite.LuaApi.GetDevice().GetConnection()
+		})
 }
 
 // ExecuteScript loads and executes a Lua script for testing
@@ -1518,255 +1525,4 @@ func convertToBytes(v interface{}) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unsupported type %T for byte conversion (expected string or array)", v)
 	}
-}
-
-// PeripheralDataSimulatorBuilder builds multiservice peripheral data simulations.
-// It provides a fluent API for configuring multiple BLE services and their characteristics
-// with data, then simulating all notifications at once.
-//
-// The builder supports configuring multiple services, each with multiple characteristics,
-// and executes all configured data simulations when Simulate() is called.
-//
-// # Multi-Value Mode
-//
-// By default, calling WithCharacteristic() multiple times with the same characteristic UUID
-// will overwrite the previous value (only the last value is kept). To send multiple notifications
-// to the same characteristic, enable multi-value mode using AllowMultiValue():
-//
-//	suite.NewPeripheralDataSimulator().
-//	    AllowMultiValue().  // Enable multiple values for the same characteristic
-//	    WithService("1234").
-//	        WithCharacteristic("5678", []byte{0x01, 0x02}).  // First notification
-//	        WithCharacteristic("5678", []byte{0x03, 0x04}).  // Second notification
-//	        WithCharacteristic("5678", []byte{0x05, 0x06}).  // Third notification
-//	    Simulate()
-//
-// # Round-Robin Simulation
-//
-// When Simulate() is called, notifications are sent in a round-robin fashion across all
-// characteristics, index-by-index. This ensures that notifications are interleaved naturally
-// as they would be in real BLE communication:
-//
-//	suite.NewPeripheralDataSimulator().
-//	    AllowMultiValue().
-//	    WithService("180D").
-//	        WithCharacteristic("2A37", []byte{60}).   // Heart rate - index 0
-//	        WithCharacteristic("2A37", []byte{62}).   // Heart rate - index 1
-//	        WithCharacteristic("2A38", []byte{1}).    // Control point - index 0
-//	    Simulate()
-//	// Sends: 2A37[60] → 2A38[1] → 2A37[62]
-//
-// If a characteristic has fewer values than others, it's skipped in subsequent rounds.
-//
-// # Basic Usage
-//
-// Single value per characteristic (default behavior):
-//
-//	suite.NewPeripheralDataSimulator().
-//	    WithService("180D").
-//	        WithCharacteristic("2A37", []byte{60}).  // Heart rate
-//	        WithCharacteristic("2A38", []byte{1}).   // Control point
-//	    Simulate()
-//
-// Multiple services with different characteristics:
-//
-//	suite.NewPeripheralDataSimulator().
-//	    WithService("1234").
-//	        WithCharacteristic("5678", []byte("XYZ")).
-//	    WithService("180D").
-//	        WithCharacteristic("2A37", []byte{60}).
-//	        WithCharacteristic("2A38", []byte{1}).
-//	    WithService("180F").
-//	        WithCharacteristic("2A19", []byte{85}).  // Battery level
-//	    Simulate()
-//
-// Alternative: Call Simulate() from service level (simulates all configured services):
-//
-//	suite.NewPeripheralDataSimulator().
-//	    WithService("180D").
-//	        WithCharacteristic("2A37", []byte{62}).
-//	        WithCharacteristic("2A38", []byte{2}).
-//	        Simulate() // Executes all services, not just the current one
-type PeripheralDataSimulatorBuilder struct {
-	suite           *LuaApiSuite
-	allowMultiValue bool                                                                     // Allow multiple values for the same characteristic
-	serviceData     *orderedmap.OrderedMap[string, *orderedmap.OrderedMap[string, [][]byte]] // Maintains insertion order: serviceUUID -> (charUUID -> []data)
-	logf            func(format string, args ...any)
-}
-
-// ServiceDataSimulatorBuilder builds data simulation for a specific service.
-// Returned by PeripheralDataSimulatorBuilder.WithService() to configure characteristics
-// for a single service. Use Build() to return to the parent builder, or call WithService()
-// again to add another service.
-//
-// See PeripheralDataSimulatorBuilder for detailed usage examples and multi-value behavior.
-type ServiceDataSimulatorBuilder struct {
-	parent      *PeripheralDataSimulatorBuilder
-	serviceUUID string
-}
-
-// NewPeripheralDataSimulator creates a new builder for multi-service data simulation
-func (suite *LuaApiSuite) NewPeripheralDataSimulator() *PeripheralDataSimulatorBuilder {
-	return &PeripheralDataSimulatorBuilder{
-		suite:           suite,
-		serviceData:     orderedmap.New[string, *orderedmap.OrderedMap[string, [][]byte]](),
-		allowMultiValue: false,
-		logf:            suite.T().Logf,
-	}
-}
-
-// AllowMultiValue enables sending multiple values to the same characteristic
-func (b *PeripheralDataSimulatorBuilder) AllowMultiValue() *PeripheralDataSimulatorBuilder {
-	b.allowMultiValue = true
-	return b
-}
-
-// WithService adds a service to the simulation and returns a service-specific builder
-func (b *PeripheralDataSimulatorBuilder) WithService(serviceUUID string) *ServiceDataSimulatorBuilder {
-	_, exists := b.serviceData.Get(serviceUUID)
-	if !exists {
-		b.serviceData.Set(serviceUUID, orderedmap.New[string, [][]byte]())
-	}
-
-	return &ServiceDataSimulatorBuilder{
-		parent:      b,
-		serviceUUID: serviceUUID,
-	}
-}
-
-// WithCharacteristic adds a characteristic with data to this service
-func (s *ServiceDataSimulatorBuilder) WithCharacteristic(charUUID string, data []byte) *ServiceDataSimulatorBuilder {
-	charMap, exists := s.parent.serviceData.Get(s.serviceUUID)
-	if !exists {
-		panic(fmt.Sprintf("WithCharacteristic: must call WithService() before adding characteristics (attempted to add characteristic %q to service %q)", charUUID, s.serviceUUID))
-	}
-
-	if s.parent.allowMultiValue {
-		// Append to existing values
-		existing, _ := charMap.Get(charUUID)
-		charMap.Set(charUUID, append(existing, data))
-	} else {
-		// Overwrite: keep only the last value at index 0
-		existing, hasExisting := charMap.Get(charUUID)
-		if !hasExisting || len(existing) == 0 {
-			charMap.Set(charUUID, [][]byte{data})
-		} else {
-			existing[0] = data
-			charMap.Set(charUUID, existing)
-		}
-	}
-	return s
-}
-
-// WithService adds another service to the simulation and returns a service-specific builder
-func (s *ServiceDataSimulatorBuilder) WithService(serviceUUID string) *ServiceDataSimulatorBuilder {
-	return s.parent.WithService(serviceUUID)
-}
-
-// Build returns the parent PeripheralDataSimulatorBuilder for continued chaining
-func (s *ServiceDataSimulatorBuilder) Build() *PeripheralDataSimulatorBuilder {
-	if s.parent == nil {
-		panic("BUG: ServiceDataSimulatorBuilder.parent is nil - builder was not properly initialized")
-	}
-	return s.parent
-}
-
-// Simulate executes all configured characteristic data simulations for this service and all others
-func (s *ServiceDataSimulatorBuilder) Simulate(verbose bool) *ServiceDataSimulatorBuilder {
-	if _, err := s.parent.Simulate(verbose); err != nil {
-		panic(fmt.Sprintf("ServiceDataSimulatorBuilder.Simulate: %v", err))
-	}
-	return s
-}
-
-// Simulate executes all configured characteristic data simulations
-// It sends notifications index-by-index across all characteristics (round-robin style) in insertion order
-func (b *PeripheralDataSimulatorBuilder) Simulate(verbose bool) (*PeripheralDataSimulatorBuilder, error) {
-	conn := b.suite.LuaApi.GetDevice().GetConnection()
-	return b.SimulateFor(conn, verbose)
-}
-
-// SimulateFor executes all configured characteristic data simulations using the provided connection.
-// This is a stateless variant of Simulate() that doesn't depend on suite state.
-// It sends notifications index-by-index across all characteristics (round-robin style) in insertion order.
-func (b *PeripheralDataSimulatorBuilder) SimulateFor(conn device.Connection, verbose bool) (*PeripheralDataSimulatorBuilder, error) {
-	b.suite.NotNil(conn, "Connection should be available")
-
-	bleConn, ok := conn.(*goble.BLEConnection)
-	if !ok {
-		return nil, fmt.Errorf("connection is not a *goble.BLEConnection (got %T)", conn)
-	}
-
-	// Find maximum number of values across all characteristics
-	maxIndex := 0
-	serviceCount := 0
-	charCount := 0
-
-	for servicePair := b.serviceData.Oldest(); servicePair != nil; servicePair = servicePair.Next() {
-		serviceCount++
-		charMap := servicePair.Value
-		for charPair := charMap.Oldest(); charPair != nil; charPair = charPair.Next() {
-			charCount++
-			dataList := charPair.Value
-			if len(dataList) > maxIndex {
-				maxIndex = len(dataList)
-			}
-		}
-	}
-
-	// Always log simulation starts with a summary
-	b.logf("DEBUG: Starting BLE simulation - services=%d characteristics=%d max_notifications_per_char=%d",
-		serviceCount, charCount, maxIndex)
-
-	// Iterate index-by-index across all characteristics IN INSERTION ORDER
-	notificationCount := 0
-	errorCount := 0
-	for idx := 0; idx < maxIndex; idx++ {
-		for servicePair := b.serviceData.Oldest(); servicePair != nil; servicePair = servicePair.Next() {
-			serviceUUID := servicePair.Key
-			charMap := servicePair.Value
-
-			for charPair := charMap.Oldest(); charPair != nil; charPair = charPair.Next() {
-				charUUID := charPair.Key
-				dataList := charPair.Value
-
-				// Skip if this characteristic doesn't have a value at this index
-				if idx >= len(dataList) {
-					continue
-				}
-
-				testChar, err := conn.GetCharacteristic(serviceUUID, charUUID)
-				if err != nil {
-					errorCount++
-					b.logf("ERROR: Failed to get characteristic %s:%s - %v", serviceUUID, charUUID, err)
-					if !b.suite.NoError(err, "Should be able to get characteristic %s:%s", serviceUUID, charUUID) {
-						continue
-					}
-				}
-
-				data := dataList[idx]
-				notificationCount++
-
-				if verbose {
-					b.logf("DEBUG: Sending notification #%d: service=%s char=%s data=%q (len=%d)",
-						notificationCount, serviceUUID, charUUID, data, len(data))
-				}
-
-				// Type-assert to *goble.BLECharacteristic for ProcessCharacteristicNotification
-				bleChar, ok := testChar.(*goble.BLECharacteristic)
-				if !ok {
-					errorCount++
-					b.logf("ERROR: Characteristic %s:%s is not a *goble.BLECharacteristic (got %T)", serviceUUID, charUUID, testChar)
-					continue
-				}
-
-				bleConn.ProcessCharacteristicNotification(bleChar, data)
-			}
-		}
-	}
-
-	// Always log completion summary
-	b.logf("INFO: BLE simulation completed - sent=%d notifications, errors=%d", notificationCount, errorCount)
-
-	return b, nil
 }

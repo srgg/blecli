@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"unicode"
@@ -41,6 +43,10 @@ Ideal for firmware development, automated testing, and BLE protocols exploration
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
+		// Ctrl+C is a normal exit, not an error - exit silently
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		// Print user-friendly error message
 		fmt.Fprintf(os.Stderr, "ERROR: %s\n", FormatUserError(err))
 		os.Exit(1)
@@ -57,6 +63,7 @@ func init() {
 	rootCmd.AddCommand(inspectCmd)
 	rootCmd.AddCommand(readCmd)
 	rootCmd.AddCommand(writeCmd)
+	rootCmd.AddCommand(subscribeCmd)
 
 	// Global flags
 	rootCmd.PersistentFlags().String("log-level", "", "Log level (debug, info, warn, error)")

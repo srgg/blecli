@@ -159,7 +159,7 @@ func (e *LuaEngine) registerBlockedLuaFunctions() {
 		"os.exit",
 		"os.remove",
 		"os.rename",
-		"io.read",
+		//"io.read", // allowed for interactive bridge scripts
 		"io.lines",
 		"file:read",
 		//"require",

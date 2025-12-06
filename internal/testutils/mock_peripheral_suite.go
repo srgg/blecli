@@ -3,6 +3,7 @@
 package testutils
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/srg/blim/internal/device"
 	goble "github.com/srg/blim/internal/device/go-ble"
 	"github.com/stretchr/testify/suite"
+	orderedmap "github.com/wk8/go-ordered-map/v2"
 )
 
 // MockBLEPeripheralSuite provides a reusable test suite with mock BLE peripheral support.
@@ -188,4 +190,229 @@ func createDefaultPeripheralBuilder(t *testing.T) *PeripheralDeviceBuilder {
 				}
 			]
 		}`)
+}
+
+// PeripheralDataSimulatorBuilder provides a fluent API for simulating BLE characteristic notifications.
+// It maintains insertion order for services and characteristics, sending notifications round-robin
+// style when multiple values are configured.
+//
+// # Basic Usage (explicit connection)
+//
+//	suite.NewPeripheralDataSimulator().
+//	    WithService("180d").
+//	        WithCharacteristic("2a37", []byte{0x01}).
+//	        WithCharacteristic("2a38", []byte{0x02}).
+//	    Build().
+//	    SimulateFor(conn, false)
+//
+// # Connection Provider Pattern
+//
+// For test suites that have a known connection source (e.g., LuaApiSuite),
+// use WithConnectionProvider to enable the simpler Simulate(verbose) API:
+//
+//	// In your suite's factory method override:
+//	func (suite *MySuite) NewPeripheralDataSimulator() *testutils.PeripheralDataSimulatorBuilder {
+//	    return suite.MockBLEPeripheralSuite.NewPeripheralDataSimulator().
+//	        WithConnectionProvider(func() device.Connection {
+//	            return suite.GetConnection()
+//	        })
+//	}
+//
+//	// Then in tests:
+//	suite.NewPeripheralDataSimulator().
+//	    WithService("180d").
+//	        WithCharacteristic("2a37", []byte{0x01}).
+//	    Simulate(false)  // No connection parameter needed
+//
+// # Multi-Value Mode
+//
+// By default, calling WithCharacteristic() multiple times with the same UUID
+// overwrites the previous value. Enable AllowMultiValue() to queue multiple
+// notifications per characteristic (sent round-robin across all characteristics):
+//
+//	suite.NewPeripheralDataSimulator().
+//	    AllowMultiValue().
+//	    WithService("180d").
+//	        WithCharacteristic("2a37", []byte{60}).  // First notification
+//	        WithCharacteristic("2a37", []byte{62}).  // Second notification
+//	    Simulate(true)
+type PeripheralDataSimulatorBuilder struct {
+	suite           *suite.Suite
+	allowMultiValue bool
+	serviceData     *orderedmap.OrderedMap[string, *orderedmap.OrderedMap[string, [][]byte]]
+	logf            func(format string, args ...any)
+	connProvider    func() device.Connection // Optional: enables Simulate(verbose) without explicit conn
+}
+
+// ServiceDataSimulatorBuilder builds notification simulation for a specific service.
+type ServiceDataSimulatorBuilder struct {
+	parent      *PeripheralDataSimulatorBuilder
+	serviceUUID string
+}
+
+// NewPeripheralDataSimulator creates a new builder for multi-service notification simulation.
+func (s *MockBLEPeripheralSuite) NewPeripheralDataSimulator() *PeripheralDataSimulatorBuilder {
+	return &PeripheralDataSimulatorBuilder{
+		suite:           &s.Suite,
+		serviceData:     orderedmap.New[string, *orderedmap.OrderedMap[string, [][]byte]](),
+		allowMultiValue: false,
+		logf:            s.T().Logf,
+	}
+}
+
+// AllowMultiValue enables sending multiple values to the same characteristic.
+func (b *PeripheralDataSimulatorBuilder) AllowMultiValue() *PeripheralDataSimulatorBuilder {
+	b.allowMultiValue = true
+	return b
+}
+
+// WithConnectionProvider sets a function that provides the connection for Simulate().
+// This enables Simulate(verbose) without passing connection explicitly.
+func (b *PeripheralDataSimulatorBuilder) WithConnectionProvider(fn func() device.Connection) *PeripheralDataSimulatorBuilder {
+	b.connProvider = fn
+	return b
+}
+
+// WithService adds a service to the simulation and returns a service-specific builder.
+func (b *PeripheralDataSimulatorBuilder) WithService(serviceUUID string) *ServiceDataSimulatorBuilder {
+	_, exists := b.serviceData.Get(serviceUUID)
+	if !exists {
+		b.serviceData.Set(serviceUUID, orderedmap.New[string, [][]byte]())
+	}
+	return &ServiceDataSimulatorBuilder{
+		parent:      b,
+		serviceUUID: serviceUUID,
+	}
+}
+
+// WithCharacteristic adds a characteristic with data to this service.
+func (s *ServiceDataSimulatorBuilder) WithCharacteristic(charUUID string, data []byte) *ServiceDataSimulatorBuilder {
+	charMap, exists := s.parent.serviceData.Get(s.serviceUUID)
+	if !exists {
+		panic(fmt.Sprintf("WithCharacteristic: must call WithService() before adding characteristics (attempted to add characteristic %q to service %q)", charUUID, s.serviceUUID))
+	}
+
+	if s.parent.allowMultiValue {
+		existing, _ := charMap.Get(charUUID)
+		charMap.Set(charUUID, append(existing, data))
+	} else {
+		existing, hasExisting := charMap.Get(charUUID)
+		if !hasExisting || len(existing) == 0 {
+			charMap.Set(charUUID, [][]byte{data})
+		} else {
+			existing[0] = data
+			charMap.Set(charUUID, existing)
+		}
+	}
+	return s
+}
+
+// WithService adds another service to the simulation.
+func (s *ServiceDataSimulatorBuilder) WithService(serviceUUID string) *ServiceDataSimulatorBuilder {
+	return s.parent.WithService(serviceUUID)
+}
+
+// Build returns the parent PeripheralDataSimulatorBuilder for continued chaining.
+func (s *ServiceDataSimulatorBuilder) Build() *PeripheralDataSimulatorBuilder {
+	if s.parent == nil {
+		panic("BUG: ServiceDataSimulatorBuilder.parent is nil - builder was not properly initialized")
+	}
+	return s.parent
+}
+
+// Simulate executes all configured characteristic data simulations.
+// Requires WithConnectionProvider() to be called first, otherwise panics.
+func (s *ServiceDataSimulatorBuilder) Simulate(verbose bool) *ServiceDataSimulatorBuilder {
+	if s.parent.connProvider == nil {
+		panic("Simulate: no connection provider set - call WithConnectionProvider() or use SimulateFor(conn, verbose)")
+	}
+	conn := s.parent.connProvider()
+	if _, err := s.parent.SimulateFor(conn, verbose); err != nil {
+		panic(fmt.Sprintf("ServiceDataSimulatorBuilder.Simulate: %v", err))
+	}
+	return s
+}
+
+// SimulateFor executes all configured characteristic data simulations using the provided connection.
+// It sends notifications index-by-index across all characteristics (round-robin style) in insertion order.
+func (b *PeripheralDataSimulatorBuilder) SimulateFor(conn device.Connection, verbose bool) (*PeripheralDataSimulatorBuilder, error) {
+	b.suite.NotNil(conn, "Connection should be available")
+
+	bleConn, ok := conn.(*goble.BLEConnection)
+	if !ok {
+		return nil, fmt.Errorf("connection is not a *goble.BLEConnection (got %T)", conn)
+	}
+
+	// Find maximum number of values across all characteristics
+	maxIndex := 0
+	serviceCount := 0
+	charCount := 0
+
+	for servicePair := b.serviceData.Oldest(); servicePair != nil; servicePair = servicePair.Next() {
+		serviceCount++
+		charMap := servicePair.Value
+		for charPair := charMap.Oldest(); charPair != nil; charPair = charPair.Next() {
+			charCount++
+			dataList := charPair.Value
+			if len(dataList) > maxIndex {
+				maxIndex = len(dataList)
+			}
+		}
+	}
+
+	if verbose {
+		b.logf("Starting BLE simulation - services=%d characteristics=%d max_notifications_per_char=%d",
+			serviceCount, charCount, maxIndex)
+	}
+
+	// Iterate index-by-index across all characteristics in insertion order
+	notificationCount := 0
+	errorCount := 0
+	for idx := 0; idx < maxIndex; idx++ {
+		for servicePair := b.serviceData.Oldest(); servicePair != nil; servicePair = servicePair.Next() {
+			serviceUUID := servicePair.Key
+			charMap := servicePair.Value
+
+			for charPair := charMap.Oldest(); charPair != nil; charPair = charPair.Next() {
+				charUUID := charPair.Key
+				dataList := charPair.Value
+
+				if idx >= len(dataList) {
+					continue
+				}
+
+				testChar, err := conn.GetCharacteristic(serviceUUID, charUUID)
+				if err != nil {
+					errorCount++
+					b.logf("ERROR: Failed to get characteristic %s:%s - %v", serviceUUID, charUUID, err)
+					if !b.suite.NoError(err, "Should be able to get characteristic %s:%s", serviceUUID, charUUID) {
+						continue
+					}
+				}
+
+				data := dataList[idx]
+				notificationCount++
+
+				if verbose {
+					b.logf("Sending notification #%d: service=%s char=%s data=%q (len=%d)",
+						notificationCount, serviceUUID, charUUID, data, len(data))
+				}
+
+				bleChar, ok := testChar.(*goble.BLECharacteristic)
+				if !ok {
+					errorCount++
+					b.logf("ERROR: Characteristic %s:%s is not a *goble.BLECharacteristic (got %T)", serviceUUID, charUUID, testChar)
+					continue
+				}
+
+				bleConn.ProcessCharacteristicNotification(bleChar, data)
+			}
+		}
+	}
+
+	if verbose {
+		b.logf("BLE simulation completed - sent=%d notifications, errors=%d", notificationCount, errorCount)
+	}
+
+	return b, nil
 }

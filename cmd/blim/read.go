@@ -127,7 +127,7 @@ func runRead(cmd *cobra.Command, args []string) error {
 		}
 
 		// Resolve target characteristic/descriptor
-		char, desc, err := resolveTarget(conn, targetUUID, readServiceUUID, readCharUUID, readDescUUID)
+		char, desc, _, err := resolveTarget(conn, targetUUID, readServiceUUID, readCharUUID, readDescUUID)
 		if err != nil {
 			return nil, err
 		}
@@ -144,8 +144,8 @@ func runRead(cmd *cobra.Command, args []string) error {
 	return err
 }
 
-// resolveTarget resolves the target characteristic and optional descriptor from UUIDs
-func resolveTarget(conn device.Connection, targetUUID, serviceUUID, charUUID, descUUID string) (device.Characteristic, device.Descriptor, error) {
+// resolveTarget resolves the target characteristic and optional descriptor from UUIDs.
+func resolveTarget(conn device.Connection, targetUUID, serviceUUID, charUUID, descUUID string) (char device.Characteristic, desc device.Descriptor, svcUUID string, err error) {
 	// Normalize UUIDs
 	normalizedTarget := device.NormalizeUUID(targetUUID)
 	normalizedService := device.NormalizeUUID(serviceUUID)
@@ -161,7 +161,7 @@ func resolveTarget(conn device.Connection, targetUUID, serviceUUID, charUUID, de
 
 		char, err := conn.GetCharacteristic(normalizedService, charToFind)
 		if err != nil {
-			return nil, nil, fmt.Errorf("characteristic %s not found in service %s: %w", charToFind, serviceUUID, err)
+			return nil, nil, "", fmt.Errorf("characteristic %s not found in service %s: %w", charToFind, serviceUUID, err)
 		}
 
 		// If descriptor requested, find it
@@ -172,30 +172,37 @@ func resolveTarget(conn device.Connection, targetUUID, serviceUUID, charUUID, de
 			}
 			desc := findDescriptor(char, descToFind)
 			if desc == nil {
-				return nil, nil, fmt.Errorf("descriptor %s not found in characteristic %s", descToFind, charToFind)
+				return nil, nil, "", fmt.Errorf("descriptor %s not found in characteristic %s", descToFind, charToFind)
 			}
-			return char, desc, nil
+			return char, desc, normalizedService, nil
 		}
 
-		return char, nil, nil
+		return char, nil, normalizedService, nil
 	}
 
 	// Case 2: Auto-resolve from target UUID
 	return autoResolveTarget(conn, normalizedTarget, descUUID != "")
 }
 
-// autoResolveTarget attempts to automatically resolve a UUID to a characteristic or descriptor
-func autoResolveTarget(conn device.Connection, targetUUID string, isDescriptor bool) (device.Characteristic, device.Descriptor, error) {
-	var foundChars []device.Characteristic
+// autoResolveTarget attempts to automatically resolve a UUID to a characteristic or descriptor.
+// Returns: characteristic, descriptor (or nil), service UUID, error
+func autoResolveTarget(conn device.Connection, targetUUID string, isDescriptor bool) (device.Characteristic, device.Descriptor, string, error) {
+	type charWithService struct {
+		char        device.Characteristic
+		serviceUUID string
+	}
+	var foundChars []charWithService
 	var foundDescs []device.Descriptor
 	var foundCharForDesc device.Characteristic
+	var foundServiceForDesc string
 
 	// Search all services
 	for _, svc := range conn.Services() {
+		svcUUID := svc.UUID()
 		for _, char := range svc.GetCharacteristics() {
 			// Check if this is the target characteristic
 			if device.NormalizeUUID(char.UUID()) == targetUUID {
-				foundChars = append(foundChars, char)
+				foundChars = append(foundChars, charWithService{char: char, serviceUUID: svcUUID})
 			}
 
 			// If looking for descriptor, search within this characteristic
@@ -204,6 +211,7 @@ func autoResolveTarget(conn device.Connection, targetUUID string, isDescriptor b
 					if device.NormalizeUUID(desc.UUID()) == targetUUID {
 						foundDescs = append(foundDescs, desc)
 						foundCharForDesc = char
+						foundServiceForDesc = svcUUID
 					}
 				}
 			}
@@ -213,22 +221,22 @@ func autoResolveTarget(conn device.Connection, targetUUID string, isDescriptor b
 	// Handle results
 	if isDescriptor {
 		if len(foundDescs) == 0 {
-			return nil, nil, fmt.Errorf("descriptor %s not found", targetUUID)
+			return nil, nil, "", fmt.Errorf("descriptor %s not found", targetUUID)
 		}
 		if len(foundDescs) > 1 {
-			return nil, nil, fmt.Errorf("descriptor %s found in multiple characteristics, specify --service and --char", targetUUID)
+			return nil, nil, "", fmt.Errorf("descriptor %s found in multiple characteristics, specify --service and --char", targetUUID)
 		}
-		return foundCharForDesc, foundDescs[0], nil
+		return foundCharForDesc, foundDescs[0], foundServiceForDesc, nil
 	}
 
 	if len(foundChars) == 0 {
-		return nil, nil, fmt.Errorf("characteristic %s not found", targetUUID)
+		return nil, nil, "", fmt.Errorf("characteristic %s not found", targetUUID)
 	}
 	if len(foundChars) > 1 {
-		return nil, nil, fmt.Errorf("characteristic %s found in multiple services, specify --service", targetUUID)
+		return nil, nil, "", fmt.Errorf("characteristic %s found in multiple services, specify --service", targetUUID)
 	}
 
-	return foundChars[0], nil, nil
+	return foundChars[0].char, nil, foundChars[0].serviceUUID, nil
 }
 
 // findDescriptor searches for a descriptor by UUID in a characteristic
