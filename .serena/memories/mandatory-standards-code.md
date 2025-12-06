@@ -5,7 +5,7 @@
 **CRITICAL:** ALWAYS validate documentation matches implementation before modifications.
 **CRITICAL:** Writing comments is an essential part of code development. Comments must be written as a seasoned senior engineer would — concise, clear, and informative, providing meaningful context without stating the obvious or including trivial details.
 
-### Validation Process
+### CRITICAL Validation Process
 
 1. **Analyze for mismatches** - Compare documentation to actual code/test behavior
 2. **STOP if mismatch found** - DO NOT proceed with changes
@@ -15,6 +15,25 @@
     - Skip validation for this case
 4. **NEVER assume** documentation is correct without verification
 5. **NEVER modify** either without explicit user approval when mismatched
+
+## **CRITICAL**: A Enforcement
+
+If you see these in your response, STOP:**
+- "// " (plain comment in .hpp/.h file)
+- Writing comments without @brief
+- Documenting function without @param
+
+**BEFORE submitting changes to ANY .hpp or .h file:**
+1. Search your edits for plain `//` comments
+2. Replace ALL with `///` (single line) or `/** */` (block)
+3. Verify @brief exists on all classes/functions/files
+4. Verify @param/@tparam on all functions/templates
+
+**MANDATORY CHECK:**
+After Edit tool on .hpp/.h: mentally grep for "^\s*//[^/]" in your changes.
+If match found: IMMEDIATELY fix before proceeding.
+
+
 
 **Applies to:**
 - Test GOAL/TEST SCENARIO comments

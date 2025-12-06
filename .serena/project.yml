@@ -1,8 +1,8 @@
 # language of the project (csharp, python, rust, java, typescript, go, cpp, or ruby)
 #  * For C, use cpp
-#  * For JavaScript, use typescript
+#  * For JavaScript, use TypeScript
 # Special requirements:
-#  * csharp: Requires the presence of a .sln file in the project folder.
+#  * csharp: Requires the presence of xa .sln file in the project folder.
 language: go
 
 # whether to use the project's gitignore file to ignore files

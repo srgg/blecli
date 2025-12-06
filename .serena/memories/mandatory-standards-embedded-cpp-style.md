@@ -9,7 +9,10 @@
 - **Globals:** `g_` prefix (`g_state`)
 - **Static:** `s_` prefix (`s_buffer`)
 
-## Section Comments
+## Comments
+**CRITICAL:** Use doxygen style comments to ensure that documentation can be generated automatically.
+
+### Section Comments
 
 **CRITICAL:** Do not confuse or replace section comments with class, function, or method definitions.
 **Format:** `// Section Name` (plain text, no decorative characters)
