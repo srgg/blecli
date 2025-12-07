@@ -146,6 +146,7 @@ type ringPTY struct {
 	logger         *logrus.Logger
 	tty            *os.File      // slave
 	pty            *os.File      // master
+	ptyFd          int           // cached at construction; avoids race between Fd() and Close()
 	onError        ErrorCallback // optional callback for critical errors
 	writeErrorOnce sync.Once     // ensures the write error callback is called at most once
 	readErrorOnce  sync.Once     // ensures read error callback is called at most once
@@ -267,6 +268,7 @@ func NewPtyWithOptions(opts *PTYOptions) (PTY, error) {
 	p := &ringPTY{
 		logger:        logger,
 		pty:           master,
+		ptyFd:         int(master.Fd()),
 		tty:           slave, // keep slave open for PTY state
 		ttyName:       slaveName,
 		writeBuf:      ringbuffer.New(opts.WriteCap),
@@ -305,11 +307,9 @@ func (p *ringPTY) ttyWriteLoop() {
 		p.wg.Done()
 	}()
 
-	// CRITICAL: Capture *os.File reference to prevent nil pointer dereference
-	// Close() sets p.pty = nil, so we must not dereference p.pty after goroutine starts
+	// Capture *os.File reference to prevent nil pointer dereference after Close()
 	master := p.pty
-	fd := int(master.Fd())
-	pollFd := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLOUT}}
+	pollFd := []unix.PollFd{{Fd: int32(p.ptyFd), Events: unix.POLLOUT}}
 	buf := make([]byte, 4096) // Write buffer for batching bytes from a ring
 
 	for {
@@ -391,11 +391,9 @@ func (p *ringPTY) ttyReadLoop() {
 
 	p.logger.Infof("[TTY Read Loop] STARTING for slave %s", p.ttyName)
 
-	// CRITICAL: Capture *os.File reference to prevent nil pointer dereference
-	// Close() sets p.pty = nil, so we must not dereference p.pty after goroutine starts
+	// Capture *os.File reference to prevent nil pointer dereference after Close()
 	master := p.pty
-	fd := int(master.Fd())
-	pollFd := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	pollFd := []unix.PollFd{{Fd: int32(p.ptyFd), Events: unix.POLLIN}}
 	buf := make([]byte, 4096) // Read buffer for PTY reads
 
 	for {

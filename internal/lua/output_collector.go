@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -66,6 +67,7 @@ func (m *LuaOutputCollectorMetrics) Reset() {
 type LuaOutputCollector struct {
 	outputChan <-chan LuaOutputRecord
 	buffer     mpmc.RichOverlappedRingBuffer[LuaOutputRecord]
+	chanMu     sync.Mutex // protects stop/done channel access during Start/Stop race
 	stop       chan struct{}
 	done       chan struct{}             // signals when goroutine has stopped
 	onError    func(error)               // error handler, defaults to panic if nil
@@ -135,8 +137,11 @@ func (c *LuaOutputCollector) Start() error {
 	}
 
 	// Create fresh channels for this start cycle to prevent "close of closed channel" panics
+	// Protected by mutex to prevent race with concurrent Stop() accessing old channels
+	c.chanMu.Lock()
 	c.stop = make(chan struct{})
 	c.done = make(chan struct{})
+	c.chanMu.Unlock()
 
 	// Buffered channel for startup signaling. Buffered (not context.Context) because:
 	// - Simple one-time signal doesn't need context's propagation semantics
@@ -211,17 +216,26 @@ func (c *LuaOutputCollector) Stop() error {
 		}
 	} else {
 		// Successfully transitioned to stopping, close the stop channel
-		close(c.stop)
+		// Protected by mutex to ensure we see channels created by Start()
+		c.chanMu.Lock()
+		stop := c.stop
+		c.chanMu.Unlock()
+		close(stop)
 	}
+
+	// Copy done channel under mutex, then wait outside mutex to avoid deadlock
+	c.chanMu.Lock()
+	done := c.done
+	c.chanMu.Unlock()
 
 	// Wait for the goroutine to finish (symmetric with Start's timeout handling)
 	select {
-	case <-c.done:
+	case <-done:
 		return nil
 	case <-time.After(5 * time.Second):
 		// Timeout: goroutine is slow but we must wait for clean shutdown
 		// We already signaled stop (closed c.stop), now ensure goroutine actually exits
-		<-c.done // Block indefinitely until goroutine exits (ensures state consistency)
+		<-done // Block indefinitely until goroutine exits (ensures state consistency)
 		return fmt.Errorf("stop completed but exceeded 5s timeout (possible slow shutdown or deadlock)")
 	}
 }
