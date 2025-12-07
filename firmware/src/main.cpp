@@ -11,6 +11,8 @@
  * Use this device to test BLE CLI tools against real-world patterns.
  */
 
+#include <atomic>
+
 #include "blex.hpp"
 #include "services.hpp"
 
@@ -61,7 +63,10 @@ using Control = ControlService<blexDefault>;
 // State
 // ============================================================================
 
-static bool connected = false;
+// Cross-core shared state (BLE callbacks run on core 0, loop() on core 1)
+static std::atomic<bool> connected{false};
+
+// Loop-only state (no synchronization needed)
 static unsigned long lastSampleTime = 0;
 static unsigned long lastAlertCheck = 0;
 static uint8_t simulatedBattery = 100;
@@ -117,6 +122,11 @@ static void simulateSensors() {
             }
         }
         Sensor::setBatteryLevel(simulatedBattery);
+    }
+
+    // Notify summary if subscribed (aggregated reading)
+    if (Sensor::isSummarySubscribed()) {
+        Sensor::notifySummary();
     }
 }
 

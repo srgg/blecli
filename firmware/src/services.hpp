@@ -52,7 +52,7 @@
  *   0x04 - Set alert thresholds (param: int16 temp_high, int16 temp_low)
  *   0x05 - Request diagnostic dump
  *   0x06 - Clear diagnostic log
- *   0xFF - Reset device
+ *   0xFF - Reset device (reboots)
  *
  * Response format (Notify):
  *   [0]: Command ID (echo)
@@ -69,8 +69,10 @@
 #ifndef SERVICES_HPP_
 #define SERVICES_HPP_
 
-#include "blex.hpp"
-#include "blex/binary_command.hpp"
+#include <atomic>
+
+#include <blex.hpp>
+#include <blex/binary_command.hpp>
 
 // ============================================================================
 // SensorService (0x181A) - Environmental Sensing + Battery
@@ -93,10 +95,10 @@ struct SensorServiceImpl {
     inline static uint16_t humidity = 5500;     // 55.00% (hundredths)
     inline static uint8_t battery_level = 100;  // percentage
 
-    // Subscription tracking
-    inline static bool temp_subscribed = false;
-    inline static bool humidity_subscribed = false;
-    inline static bool battery_subscribed = false;
+    // Subscription tracking (cross-core: BLE callbacks on core 0, loop() on core 1)
+    inline static std::atomic<bool> temp_subscribed{false};
+    inline static std::atomic<bool> humidity_subscribed{false};
+    inline static std::atomic<bool> battery_subscribed{false};
 
     // --- Temperature Characteristic (0x2A6E) ---
     // Presentation Format: sint16, exponent -2, unit Celsius
@@ -181,6 +183,54 @@ struct SensorServiceImpl {
         BatteryFormat,
         BatteryUserDesc
     >;
+
+    // --- Environment Summary Characteristic (custom UUID) ---
+    // Aggregated reading: all sensor values in one characteristic
+    // Tests: Aggregate Format descriptor (0x2905), multi-value parsing
+#pragma pack(push, 1)
+    struct EnvironmentSummary {
+        int16_t temperature;   ///< hundredths of °C
+        uint16_t humidity;     ///< hundredths of %
+        uint8_t battery;       ///< percentage
+    };
+#pragma pack(pop)
+
+    inline static std::atomic<bool> summary_subscribed{false};
+
+    static void onSummaryRead(EnvironmentSummary& value) {
+        value.temperature = temperature;
+        value.humidity = humidity;
+        value.battery = battery_level;
+    }
+
+    static void onSummarySubscribe(const uint16_t value) {
+        summary_subscribed = value != 0;
+        Serial.printf("[Sensor] Summary notify: %s\n", summary_subscribed ? "ON" : "OFF");
+    }
+
+    static constexpr char summary_desc[] = "Environment Summary";
+    using SummaryUserDesc = blex_standard::descriptors::UserDescription<summary_desc>;
+
+    // Aggregate Format references individual Presentation Format descriptors
+    using SummaryAggregateFormat = blex_standard::descriptors::AggregateFormat<
+        TempFormat,
+        HumidityFormat,
+        BatteryFormat
+    >;
+
+    // Custom vendor UUID for aggregated characteristic (0x2A1F is reserved)
+    static constexpr char SUMMARY_UUID[] = "E5710001-7BAC-429A-B4CE-57FF900F479D";
+
+    using SummaryChar = Blex::template Characteristic<
+        EnvironmentSummary,
+        SUMMARY_UUID,
+        typename Blex::template Permissions<>::AllowRead::AllowNotify,
+        typename Blex::template CharacteristicCallbacks<>
+            ::template WithOnRead<onSummaryRead>
+            ::template WithOnSubscribe<onSummarySubscribe>,
+        SummaryAggregateFormat,
+        SummaryUserDesc
+    >;
 };
 
 } // namespace detail
@@ -196,7 +246,8 @@ struct SensorService : C, Blex::template Service<
     static_cast<uint16_t>(0x181A),
     typename C::TemperatureChar,
     typename C::HumidityChar,
-    typename C::BatteryLevelChar
+    typename C::BatteryLevelChar,
+    typename C::SummaryChar
 > {
     // --- Setters (called by firmware to update values and notify) ---
     static void setTemperature(int16_t hundredths) {
@@ -223,6 +274,17 @@ struct SensorService : C, Blex::template Service<
     static bool isTempSubscribed() { return C::temp_subscribed; }
     static bool isHumiditySubscribed() { return C::humidity_subscribed; }
     static bool isBatterySubscribed() { return C::battery_subscribed; }
+    static bool isSummarySubscribed() { return C::summary_subscribed; }
+
+    /// @brief Notify summary characteristic with current values
+    static void notifySummary() {
+        typename C::EnvironmentSummary summary = {
+            .temperature = C::temperature,
+            .humidity = C::humidity,
+            .battery = C::battery_level
+        };
+        C::SummaryChar::setValue(summary);
+    }
 };
 
 // ============================================================================
@@ -317,10 +379,10 @@ struct ConfigData {
 
 template<typename Blex>
 struct ControlServiceImpl {
-    // State
-    inline static bool sampling_enabled = false;
-    inline static bool response_subscribed = false;
-    inline static bool alert_subscribed = false;
+    // State (cross-core: BLE callbacks on core 0, loop() on core 1)
+    inline static std::atomic<bool> sampling_enabled{false};
+    inline static std::atomic<bool> response_subscribed{false};
+    inline static std::atomic<bool> alert_subscribed{false};
 
     // Configuration (protected by encryption)
     inline static ConfigData config = {
@@ -344,6 +406,21 @@ struct ControlServiceImpl {
     // Command Handlers (typed, dispatched by blex binary command)
     // =========================================================================
 
+    /// @brief Appends formatted command result to diagnostic log
+    /// @param cmd_name Command name for log entry
+    /// @param status Execution result status
+    static void logCommandResult(const char* cmd_name, Status status) {
+        char entry[64];
+        const char* status_str = (status == Status::OK) ? "OK" :
+                                 (status == Status::InvalidParam) ? "INVALID_PARAM" :
+                                 (status == Status::InvalidCmd) ? "INVALID_CMD" : "ERROR";
+        int len = snprintf(entry, sizeof(entry), "[CMD] %s: %s\n", cmd_name, status_str);
+        if (len > 0 && diag_log_len + len < sizeof(diag_log)) {
+            memcpy(diag_log + diag_log_len, entry, len);
+            diag_log_len += len;
+        }
+    }
+
     /// @brief Sends response via Notify characteristic
     static void sendResponse() {
         ResponsePacket resp = {
@@ -359,6 +436,7 @@ struct ControlServiceImpl {
         sampling_enabled = true;
         Serial.println("[Control] Sampling started");
         pending_status = Status::OK;
+        logCommandResult("StartSampling", pending_status);
         sendResponse();
     }
 
@@ -367,6 +445,7 @@ struct ControlServiceImpl {
         sampling_enabled = false;
         Serial.println("[Control] Sampling stopped");
         pending_status = Status::OK;
+        logCommandResult("StopSampling", pending_status);
         sendResponse();
     }
 
@@ -379,6 +458,7 @@ struct ControlServiceImpl {
         } else {
             pending_status = Status::InvalidParam;
         }
+        logCommandResult("SetInterval", pending_status);
         sendResponse();
     }
 
@@ -393,6 +473,7 @@ struct ControlServiceImpl {
         } else {
             pending_status = Status::InvalidParam;
         }
+        logCommandResult("SetAlertThresh", pending_status);
         sendResponse();
     }
 
@@ -401,6 +482,7 @@ struct ControlServiceImpl {
         initDiagLog();
         Serial.println("[Control] Diagnostic dump requested");
         pending_status = Status::OK;
+        logCommandResult("RequestDiagDump", pending_status);
         sendResponse();
     }
 
@@ -410,14 +492,19 @@ struct ControlServiceImpl {
         memset(diag_log, 0, sizeof(diag_log));
         Serial.println("[Control] Diagnostic log cleared");
         pending_status = Status::OK;
+        logCommandResult("ClearDiagLog", pending_status);
         sendResponse();
     }
 
     /// @brief Handler for Reset (0xFF) - no payload
+    /// @note Reboots the device after sending response
     static void onReset() {
-        Serial.println("[Control] Reset requested (simulated)");
+        Serial.println("[Control] Reset requested - rebooting...");
         pending_status = Status::OK;
+        logCommandResult("Reset", pending_status);
         sendResponse();
+        delay(100);  // Allow response to be sent before reboot
+        ESP.restart();
     }
 
     /// @brief Fallback handler for unknown opcodes or payload errors
@@ -444,6 +531,10 @@ struct ControlServiceImpl {
                 pending_status = Status::Error;
                 break;
         }
+        // Log with opcode as hex string for unknown commands
+        char cmd_name[16];
+        snprintf(cmd_name, sizeof(cmd_name), "0x%02X", opcode);
+        logCommandResult(cmd_name, pending_status);
         sendResponse();
     }
 
