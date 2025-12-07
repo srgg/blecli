@@ -3,24 +3,27 @@
 package main
 
 import (
-	"context"
-	"io"
-	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/srg/blim/internal/device"
-	goble "github.com/srg/blim/internal/device/go-ble"
 	"github.com/srg/blim/internal/testutils"
 	"github.com/stretchr/testify/suite"
 )
 
-// testDeviceAddress is the mock BLE device address used throughout subscribe tests
-const testDeviceAddress = "00:00:00:00:00:01"
+// Test constants for mock BLE device configuration
+const (
+	// testCustomServiceUUID is a full 128-bit UUID for testing long UUID handling
+	testCustomServiceUUID = "12345678-1234-5678-1234-567812345678"
+
+	// testCustomCharUUID is a full 128-bit characteristic UUID (prefix "abcdef01" used in output)
+	testCustomCharUUID = "abcdef01-1234-5678-1234-567812345678"
+)
 
 // SubscribeTestSuite tests subscribe command with mock BLE peripheral
 type SubscribeTestSuite struct {
-	testutils.MockBLEPeripheralSuite
+	CommandTestSuite
 	originalFlags struct {
 		subscribeServiceUUID string
 		subscribeCharUUIDs   string
@@ -33,7 +36,7 @@ type SubscribeTestSuite struct {
 
 // SetupSuite runs once before all tests in the suite
 func (suite *SubscribeTestSuite) SetupSuite() {
-	suite.MockBLEPeripheralSuite.SetupSuite()
+	suite.CommandTestSuite.SetupSuite()
 
 	// Save original flag values
 	suite.originalFlags.subscribeServiceUUID = subscribeServiceUUID
@@ -57,34 +60,13 @@ func (suite *SubscribeTestSuite) TearDownSuite() {
 
 // SetupTest runs before each test in the suite
 func (suite *SubscribeTestSuite) SetupTest() {
-	// Create peripheral with notifiable characteristics
+	// Create peripheral with notifiable characteristics including 128-bit UUID service.
+	// Note: Custom UUIDs in fixture must match testCustomServiceUUID and testCustomCharUUID constants.
 	suite.WithPeripheral().
-		FromJSON(`{
-			"services": [
-				{
-					"uuid": "180d",
-					"characteristics": [
-						{"uuid": "2a37", "properties": "read,notify", "value": [0, 90]},
-						{"uuid": "2a38", "properties": "read,notify", "value": [1]}
-					]
-				},
-				{
-					"uuid": "180f",
-					"characteristics": [
-						{"uuid": "2a19", "properties": "read,notify", "value": [100]}
-					]
-				},
-				{
-					"uuid": "12345678-1234-5678-1234-567812345678",
-					"characteristics": [
-						{"uuid": "abcdef01-1234-5678-1234-567812345678", "properties": "read,notify", "value": [0]}
-					]
-				}
-			]
-		}`).
+		FromJSON(testutils.NotifiablePeripheral).
 		Build()
 
-	suite.MockBLEPeripheralSuite.SetupTest()
+	suite.CommandTestSuite.SetupTest()
 
 	// Reset flags to defaults
 	subscribeServiceUUID = ""
@@ -211,51 +193,10 @@ func (suite *SubscribeTestSuite) TestSubscribeCmd() {
 	})
 }
 
-func (suite *SubscribeTestSuite) TestParseCharUUIDs() {
-	// GOAL: Verify comma-separated UUID parsing handles user input formats
-	//
-	// TEST SCENARIO: Parse various comma-separated formats → correct UUIDs extracted → whitespace handled
-
-	tests := []struct {
-		name     string
-		input    string
-		expected []string
-	}{
-		{name: "single UUID", input: "2a37", expected: []string{"2a37"}},
-		{name: "two UUIDs", input: "2a37,2a38", expected: []string{"2a37", "2a38"}},
-		{name: "three UUIDs", input: "2a6e,2a6f,2a19", expected: []string{"2a6e", "2a6f", "2a19"}},
-		{name: "UUIDs with spaces", input: "2a37, 2a38, 2a19", expected: []string{"2a37", "2a38", "2a19"}},
-		{name: "UUIDs with extra spaces", input: "  2a37 ,  2a38  ", expected: []string{"2a37", "2a38"}},
-		{name: "empty elements filtered", input: "2a37,,2a38", expected: []string{"2a37", "2a38"}},
-		{name: "mixed case preserved", input: "2A37,2a38,2A6E", expected: []string{"2A37", "2a38", "2A6E"}},
-		{name: "empty input", input: "", expected: nil},
-		{name: "only commas", input: ",,,", expected: nil},
-		{name: "only spaces", input: "   ", expected: nil},
-	}
-
-	for _, tt := range tests {
-		suite.Run(tt.name, func() {
-			result := parseCharUUIDs(tt.input)
-			suite.Assert().Equal(tt.expected, result, "parsed UUIDs MUST match expected")
-		})
-	}
-}
-
 func (suite *SubscribeTestSuite) TestNotificationFlow() {
 	// GOAL: Verify full notification lifecycle for various subscription configurations
 	//
 	// TEST SCENARIO: Connect → subscribe → inject notifications → verify output
-
-	// Local helper: connect to mock device
-	connectDevice := func(address string) (device.Device, func()) {
-		dev := goble.NewBLEDeviceWithAddress(address, suite.Logger)
-		ctx := context.Background()
-		err := dev.Connect(ctx, &device.ConnectOptions{
-			ConnectTimeout: 5 * time.Second,
-		})
-		suite.Require().NoError(err, "connection MUST succeed")
-		return dev, func() { _ = dev.Disconnect() }
-	}
 
 	type notification struct {
 		service string
@@ -338,12 +279,12 @@ func (suite *SubscribeTestSuite) TestNotificationFlow() {
 		{
 			name: "long UUID truncated in prefix",
 			subscribeOpts: []*device.SubscribeOptions{
-				{Service: "12345678-1234-5678-1234-567812345678", Characteristics: []string{"abcdef01-1234-5678-1234-567812345678"}},
+				{Service: testCustomServiceUUID, Characteristics: []string{testCustomCharUUID}},
 				{Service: "180d", Characteristics: []string{"2a37"}},
 			},
 			hexMode: true,
 			notifications: []notification{
-				{service: "12345678-1234-5678-1234-567812345678", char: "abcdef01-1234-5678-1234-567812345678", data: []byte{0xFF}},
+				{service: testCustomServiceUUID, char: testCustomCharUUID, data: []byte{0xFF}},
 			},
 			expectedOutputs: []string{"abcdef01: ff"},
 		},
@@ -351,14 +292,12 @@ func (suite *SubscribeTestSuite) TestNotificationFlow() {
 
 	for _, tt := range tests {
 		suite.Run(tt.name, func() {
-			address := testDeviceAddress
-
 			oldHex := subscribeHex
 			subscribeHex = tt.hexMode
 			defer func() { subscribeHex = oldHex }()
 
-			// Connect to a mock device
-			dev, cleanup := connectDevice(address)
+			// Connect to mock device using inherited helper
+			dev, cleanup := suite.ConnectDevice("")
 			defer cleanup()
 
 			conn := dev.GetConnection()
@@ -371,52 +310,48 @@ func (suite *SubscribeTestSuite) TestNotificationFlow() {
 			}
 			multiChar := totalChars > 1
 
-			notificationCount := 0
-			expectedCount := len(tt.notifications)
+			var notificationCount atomic.Int32
+			expectedCount := int32(len(tt.notifications))
 			allReceived := make(chan struct{})
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, pipeErr := os.Pipe()
-			suite.Require().NoError(pipeErr, "pipe creation MUST succeed")
-			os.Stdout = w
+			// Capture stdout for entire notification flow (subscribe → simulate → wait)
+			var subscribeErr, simErr error
+			capturedOutput := suite.CaptureStdout(func() {
+				subscribeErr = conn.Subscribe(
+					tt.subscribeOpts,
+					device.StreamEveryUpdate,
+					0,
+					func(record *device.Record) {
+						outputSubscribeRecord(record, multiChar)
+						if notificationCount.Add(1) >= expectedCount {
+							close(allReceived)
+						}
+					},
+				)
+				if subscribeErr != nil {
+					return
+				}
 
-			err := conn.Subscribe(
-				tt.subscribeOpts,
-				device.StreamEveryUpdate,
-				0,
-				func(record *device.Record) {
-					outputSubscribeRecord(record, multiChar)
-					notificationCount++
-					if notificationCount >= expectedCount {
-						close(allReceived)
-					}
-				},
-			)
-			suite.Require().NoError(err, "subscribe MUST succeed")
+				// Inject all notifications using simulator
+				simulator := suite.NewPeripheralDataSimulator().AllowMultiValue()
+				for _, n := range tt.notifications {
+					simulator.WithService(n.service).WithCharacteristic(n.char, n.data)
+				}
+				_, simErr = simulator.SimulateFor(conn, false)
+				if simErr != nil {
+					return
+				}
 
-			// Inject all notifications using simulator
-			simulator := suite.NewPeripheralDataSimulator().AllowMultiValue()
-			for _, n := range tt.notifications {
-				simulator.WithService(n.service).WithCharacteristic(n.char, n.data)
-			}
-			_, simErr := simulator.SimulateFor(conn, false)
+				// Wait for all callbacks
+				select {
+				case <-allReceived:
+				case <-time.After(2 * time.Second):
+					// Will be checked after CaptureStdout returns
+				}
+			})
+
+			suite.Require().NoError(subscribeErr, "subscribe MUST succeed")
 			suite.Require().NoError(simErr, "notification simulation MUST succeed")
-
-			// Wait for all callbacks
-			select {
-			case <-allReceived:
-			case <-time.After(2 * time.Second):
-				suite.Fail("all notification callbacks MUST be invoked")
-			}
-
-			// Restore stdout and read output
-			err = w.Close()
-			suite.Require().NoError(err, "pipe close MUST succeed")
-			os.Stdout = oldStdout
-			out, err := io.ReadAll(r)
-			suite.Require().NoError(err, "pipe read MUST succeed")
-			capturedOutput := string(out)
 
 			// Verify expected outputs
 			for _, expected := range tt.expectedOutputs {

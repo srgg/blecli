@@ -1,3 +1,5 @@
+//go:build test
+
 package main
 
 import (
@@ -9,7 +11,7 @@ import (
 
 // WriteTestSuite provides testify/suite for proper test isolation
 type WriteTestSuite struct {
-	suite.Suite
+	CommandTestSuite
 	originalFlags struct {
 		writeServiceUUID string
 		writeCharUUID    string
@@ -23,6 +25,8 @@ type WriteTestSuite struct {
 
 // SetupSuite runs once before all tests in the suite
 func (suite *WriteTestSuite) SetupSuite() {
+	suite.CommandTestSuite.SetupSuite()
+
 	// Save original flag values
 	suite.originalFlags.writeServiceUUID = writeServiceUUID
 	suite.originalFlags.writeCharUUID = writeCharUUID
@@ -43,6 +47,8 @@ func (suite *WriteTestSuite) TearDownSuite() {
 	writeNoResponse = suite.originalFlags.writeNoResponse
 	writeChunkSize = suite.originalFlags.writeChunkSize
 	writeTimeout = suite.originalFlags.writeTimeout
+
+	suite.CommandTestSuite.TearDownSuite()
 }
 
 // SetupTest runs before each test in the suite

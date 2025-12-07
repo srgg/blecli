@@ -32,7 +32,7 @@ var manufacturerDataParsers = map[uint16]ManufacturerDataParser{
 //
 // Parameters:
 //   - companyID: The Bluetooth SIG assigned company identifier. If UnknownCompanyID (0),
-//     the company ID will be extracted from the first 2 bytes of rawData (little-endian).
+//     the company ID will be extracted from the first 2 bytes of rawData (in little-endian order).
 //     This is useful when the manufacturer is not known in advance.
 //   - rawData: The raw manufacturer-specific data bytes
 //
@@ -89,7 +89,7 @@ const (
 	BlimDeviceTypeIMU     BlimDeviceType = 0x01 // IMU Streamer
 )
 
-// String returns human-readable device type name
+// String returns a human-readable device type name
 func (t BlimDeviceType) String() string {
 	switch t {
 	case BlimDeviceTypeBLETest:

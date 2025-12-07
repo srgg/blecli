@@ -4,8 +4,6 @@ package main
 
 import (
 	"context"
-	"io"
-	"os"
 	"testing"
 	"time"
 
@@ -17,7 +15,7 @@ import (
 
 // InspectTestSuite tests the inspect command functionality
 type InspectTestSuite struct {
-	testutils.MockBLEPeripheralSuite
+	CommandTestSuite
 	originalFlags struct {
 		connectTimeout            time.Duration
 		descriptorReadTimeout     time.Duration
@@ -30,7 +28,7 @@ type InspectTestSuite struct {
 // SetupSuite saves original flags before all tests
 func (suite *InspectTestSuite) SetupSuite() {
 	// Call parent SetupSuite first to initialize Logger and other fields
-	suite.MockBLEPeripheralSuite.SetupSuite()
+	suite.CommandTestSuite.SetupSuite()
 
 	// Then save our flags
 	suite.originalFlags.connectTimeout = inspectConnectTimeout
@@ -91,7 +89,7 @@ func (suite *InspectTestSuite) SetupTest() {
 		Build()
 
 	// Call parent to apply mock configuration
-	suite.MockBLEPeripheralSuite.SetupTest()
+	suite.CommandTestSuite.SetupTest()
 
 	// Reset flags to defaults
 	inspectConnectTimeout = defaultConnectTimeout
@@ -216,7 +214,7 @@ func (suite *InspectTestSuite) TestPreScanForAdvertisement() {
 			Build()
 
 		// Apply mock configuration with the new peripheral builder
-		suite.MockBLEPeripheralSuite.SetupTest()
+		suite.CommandTestSuite.SetupTest()
 
 		// Search for a DIFFERENT address so mock never finds a match and waits full timeout
 		nonExistentAddress := "00:00:00:00:00:00"
@@ -255,7 +253,7 @@ func (suite *InspectTestSuite) TestPreScanForAdvertisement() {
 			Build()
 
 		// Apply mock configuration
-		suite.MockBLEPeripheralSuite.SetupTest()
+		suite.CommandTestSuite.SetupTest()
 
 		ctx, cancel := context.WithCancel(context.Background())
 
@@ -373,7 +371,7 @@ func (suite *InspectTestSuite) TestInspectDevice() {
 					Build()
 
 				// Apply mock configuration
-				suite.MockBLEPeripheralSuite.SetupTest()
+				suite.CommandTestSuite.SetupTest()
 			}
 
 			// Configure flags
@@ -381,25 +379,11 @@ func (suite *InspectTestSuite) TestInspectDevice() {
 			inspectConnectTimeout = 5 * time.Second
 			inspectJSON = true
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			// Run inspect command
-			err := runInspect(inspectCmd, []string{address})
-
-			// Restore stdout
-			if err := w.Close(); err != nil {
-				suite.T().Fatal(err)
-			}
-
-			os.Stdout = oldStdout
-
-			// Read captured output
-			output, readErr := io.ReadAll(r)
-			suite.Assert().NoError(readErr, "MUST read output")
-			outputStr := string(output)
+			// Capture stdout and run inspect command
+			var err error
+			outputStr := suite.CaptureStdout(func() {
+				err = runInspect(inspectCmd, []string{address})
+			})
 
 			// Verify error expectation
 			if tt.expectError != nil {

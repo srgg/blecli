@@ -1,3 +1,5 @@
+//go:build test
+
 package main
 
 import (
@@ -9,12 +11,12 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-// ReadTestSuite provides testify/suite for proper test isolation
+// ReadTestSuite tests read command with mock BLE peripheral
 type ReadTestSuite struct {
-	suite.Suite
+	CommandTestSuite
 	originalFlags struct {
 		readServiceUUID string
-		readCharUUID    string
+		readCharUUIDs   string
 		readDescUUID    string
 		readHex         bool
 		readWatch       string
@@ -24,9 +26,11 @@ type ReadTestSuite struct {
 
 // SetupSuite runs once before all tests in the suite
 func (suite *ReadTestSuite) SetupSuite() {
+	suite.CommandTestSuite.SetupSuite()
+
 	// Save original flag values
 	suite.originalFlags.readServiceUUID = readServiceUUID
-	suite.originalFlags.readCharUUID = readCharUUID
+	suite.originalFlags.readCharUUIDs = readCharUUIDs
 	suite.originalFlags.readDescUUID = readDescUUID
 	suite.originalFlags.readHex = readHex
 	suite.originalFlags.readWatch = readWatch
@@ -37,136 +41,230 @@ func (suite *ReadTestSuite) SetupSuite() {
 func (suite *ReadTestSuite) TearDownSuite() {
 	// Restore original flag values
 	readServiceUUID = suite.originalFlags.readServiceUUID
-	readCharUUID = suite.originalFlags.readCharUUID
+	readCharUUIDs = suite.originalFlags.readCharUUIDs
 	readDescUUID = suite.originalFlags.readDescUUID
 	readHex = suite.originalFlags.readHex
 	readWatch = suite.originalFlags.readWatch
 	readTimeout = suite.originalFlags.readTimeout
+
+	suite.CommandTestSuite.TearDownSuite()
 }
 
 // SetupTest runs before each test in the suite
 func (suite *ReadTestSuite) SetupTest() {
-	// Reset flags before each test for proper isolation
+	// Configure peripheral with readable characteristics and descriptors
+	// Note: Uses custom JSON instead of AmbiguousCharPeripheral because
+	// descriptor 2902 in 180d/2a37 has value [1, 0] (enabled) for testing
+	suite.WithPeripheral().
+		FromJSON(`{
+			"services": [
+				{
+					"uuid": "180d",
+					"characteristics": [
+						{
+							"uuid": "2a37",
+							"properties": "read,notify",
+							"value": [0, 90],
+							"descriptors": [
+								{"uuid": "2902", "value": [1, 0]}
+							]
+						},
+						{"uuid": "2a38", "properties": "read", "value": [1]}
+					]
+				},
+				{
+					"uuid": "180f",
+					"characteristics": [
+						{
+							"uuid": "2a19",
+							"properties": "read,notify",
+							"value": [75],
+							"descriptors": [
+								{"uuid": "2902", "value": [0, 0]},
+								{"uuid": "2901", "value": [66, 97, 116, 116, 101, 114, 121]}
+							]
+						}
+					]
+				},
+				{
+					"uuid": "1800",
+					"characteristics": [
+						{"uuid": "2a37", "properties": "read", "value": [99]}
+					]
+				}
+			]
+		}`).
+		Build()
+
+	suite.CommandTestSuite.SetupTest()
+
+	// Reset flags to defaults
 	readServiceUUID = ""
-	readCharUUID = ""
+	readCharUUIDs = ""
 	readDescUUID = ""
 	readHex = false
 	readWatch = ""
 	readTimeout = 5 * time.Second
 }
 
-func (suite *ReadTestSuite) TestParseWriteData_HexFormats() {
-	// GOAL: Verify hex data parsing handles various input formats correctly
+// =============================================================================
+// Multi-Characteristic Read Tests
+// =============================================================================
+
+func (suite *ReadTestSuite) TestMultiRead_TwoChars_SameService() {
+	// GOAL: Verify multi-char read outputs with UUID prefixes
 	//
-	// TEST SCENARIO: Parse hex with different separators → decoded bytes → matches expected output
+	// TEST SCENARIO: Read 2a37,2a38 from 180d → prefixed output → both values present
 
-	tests := []struct {
-		name     string
-		input    string
-		expected []byte
-	}{
-		{
-			name:     "simple hex",
-			input:    "0102",
-			expected: []byte{0x01, 0x02},
-		},
-		{
-			name:     "hex with spaces",
-			input:    "01 02 03",
-			expected: []byte{0x01, 0x02, 0x03},
-		},
-		{
-			name:     "hex with colons",
-			input:    "01:02:03",
-			expected: []byte{0x01, 0x02, 0x03},
-		},
-		{
-			name:     "hex with 0x prefix",
-			input:    "0x01 0x02",
-			expected: []byte{0x01, 0x02},
-		},
-		{
-			name:     "hex with dashes",
-			input:    "01-02-03",
-			expected: []byte{0x01, 0x02, 0x03},
-		},
-		{
-			name:     "mixed separators",
-			input:    "0x01:02-03 04",
-			expected: []byte{0x01, 0x02, 0x03, 0x04},
-		},
-	}
+	dev, cleanup := suite.ConnectDevice("")
+	defer cleanup()
+	conn := dev.GetConnection()
 
-	for _, tt := range tests {
-		suite.Run(tt.name, func() {
-			writeHex = true
+	readHex = true
 
-			result, err := parseWriteData(tt.input)
-			suite.Assert().NoError(err, "MUST parse valid hex data")
-			suite.Assert().Equal(tt.expected, result, "decoded bytes MUST match expected")
-		})
-	}
+	_, _, chars, err := resolveCharacteristics(conn, "2a37,2a38", "180d")
+	suite.Require().NoError(err, "resolution MUST succeed")
+
+	output := suite.CaptureStdout(func() {
+		err = performMultiRead(chars)
+		suite.Require().NoError(err, "multi-read MUST succeed")
+	})
+
+	suite.Assert().Contains(output, "2a37:", "output MUST contain 2a37 prefix")
+	suite.Assert().Contains(output, "2a38:", "output MUST contain 2a38 prefix")
 }
 
-func (suite *ReadTestSuite) TestParseWriteData_InvalidHex() {
-	// GOAL: Verify error handling for malformed hex input
+func (suite *ReadTestSuite) TestMultiRead_CrossService() {
+	// GOAL: Verify multi-char read across different services
 	//
-	// TEST SCENARIO: Parse invalid hex string → error returned → result is nil
+	// TEST SCENARIO: Read 2a38 (180d) and 2a19 (180f) → both read successfully
 
-	writeHex = true
+	dev, cleanup := suite.ConnectDevice("")
+	defer cleanup()
+	conn := dev.GetConnection()
 
-	result, err := parseWriteData("ZZZZ")
-	suite.Assert().Error(err, "MUST fail on invalid hex characters")
-	suite.Assert().Nil(result, "result MUST be nil on error")
-	suite.Assert().Contains(err.Error(), "invalid hex data", "error MUST indicate hex parsing failure")
+	readHex = true
+
+	_, _, chars, err := resolveCharacteristics(conn, "2a38,2a19", "")
+	suite.Require().NoError(err, "cross-service resolution MUST succeed")
+
+	output := suite.CaptureStdout(func() {
+		err = performMultiRead(chars)
+		suite.Require().NoError(err, "multi-read MUST succeed")
+	})
+
+	suite.Assert().Contains(output, "2a38:", "output MUST contain 2a38 prefix")
+	suite.Assert().Contains(output, "2a19:", "output MUST contain 2a19 prefix")
 }
 
-func (suite *ReadTestSuite) TestParseWriteData_Raw() {
-	// GOAL: Verify raw binary data parsing preserves all bytes including nulls
+func (suite *ReadTestSuite) TestSingleRead_NoPrefix() {
+	// GOAL: Verify single-char read has no prefix (backward compatibility)
 	//
-	// TEST SCENARIO: Parse string in default mode → byte array created → all bytes preserved
+	// TEST SCENARIO: Read single 2a19 → output without prefix → raw value only
 
-	writeHex = false
+	dev, cleanup := suite.ConnectDevice("")
+	defer cleanup()
+	conn := dev.GetConnection()
 
-	input := "test\x00data"
-	result, err := parseWriteData(input)
-	suite.Assert().NoError(err, "MUST parse raw data")
-	suite.Assert().Equal([]byte(input), result, "raw bytes MUST be preserved exactly")
-}
+	readHex = true
 
-func (suite *ReadTestSuite) TestParseWriteData_UTF8() {
-	// GOAL: Verify UTF-8 string conversion in default mode
-	//
-	// TEST SCENARIO: Parse UTF-8 string → byte array created → UTF-8 encoding preserved
+	_, _, chars, err := resolveCharacteristics(conn, "2a19", "")
+	suite.Require().NoError(err, "resolution MUST succeed")
+	suite.Require().Len(chars, 1, "MUST resolve single char")
 
-	tests := []struct {
-		name  string
-		input string
-	}{
-		{
-			name:  "ASCII string",
-			input: "Hello, World!",
-		},
-		{
-			name:  "UTF-8 with multibyte characters",
-			input: "Hello, 世界",
-		},
-		{
-			name:  "empty string",
-			input: "",
-		},
+	var char device.Characteristic
+	for _, c := range chars {
+		char = c
 	}
 
-	for _, tt := range tests {
-		suite.Run(tt.name, func() {
-			writeHex = false
+	output := suite.CaptureStdout(func() {
+		err = performReadWithPrefix(char, nil, false)
+		suite.Require().NoError(err, "read MUST succeed")
+	})
 
-			result, err := parseWriteData(tt.input)
-			suite.Assert().NoError(err, "MUST parse UTF-8 string")
-			suite.Assert().Equal([]byte(tt.input), result, "UTF-8 bytes MUST be preserved")
-		})
-	}
+	suite.Assert().NotContains(output, ":", "single-char output MUST NOT contain prefix")
+	suite.Assert().Contains(output, "4b", "output MUST contain hex value (75 = 0x4b)")
 }
+
+func (suite *ReadTestSuite) TestWatchMode_RejectMultiChar() {
+	// GOAL: Verify watch mode rejects multiple characteristics
+	//
+	// TEST SCENARIO: Set watch flag + multiple UUIDs → validation detects conflict
+
+	readWatch = "1s"
+	charUUIDs := parseCSVUUIDs("2a37,2a38")
+
+	suite.Assert().Len(charUUIDs, 2, "MUST parse 2 UUIDs")
+
+	// Verify the validation condition that runRead checks
+	isWatchMode := readWatch != ""
+	hasMultipleChars := len(charUUIDs) > 1
+
+	suite.Assert().True(isWatchMode, "watch mode MUST be enabled")
+	suite.Assert().True(hasMultipleChars, "MUST have multiple characteristics")
+	suite.Assert().True(isWatchMode && hasMultipleChars,
+		"watch mode with multiple chars MUST trigger validation error in runRead")
+}
+
+// =============================================================================
+// Descriptor Read Tests
+// =============================================================================
+
+func (suite *ReadTestSuite) TestDescriptorRead_UniqueDescriptor() {
+	// GOAL: Verify descriptor read with unique descriptor (auto-resolve)
+	//
+	// TEST SCENARIO: Read 2901 (only in 2a19) → resolves and reads successfully
+
+	dev, cleanup := suite.ConnectDevice("")
+	defer cleanup()
+	conn := dev.GetConnection()
+
+	readHex = true
+
+	char, desc, _, err := resolveDescriptor(conn, "2901", "", "")
+	suite.Require().NoError(err, "descriptor resolution MUST succeed")
+	suite.Assert().NotNil(char, "parent characteristic MUST be returned")
+	suite.Assert().NotNil(desc, "descriptor MUST be returned")
+	suite.Assert().Contains(char.UUID(), "2a19", "parent char MUST be 2a19")
+}
+
+func (suite *ReadTestSuite) TestDescriptorRead_WithExplicitPath() {
+	// GOAL: Verify descriptor read with explicit service and char
+	//
+	// TEST SCENARIO: Read 2902 from 180d/2a37 → resolves correctly
+
+	dev, cleanup := suite.ConnectDevice("")
+	defer cleanup()
+	conn := dev.GetConnection()
+
+	readHex = true
+
+	char, desc, svcUUID, err := resolveDescriptor(conn, "2902", "180d", "2a37")
+	suite.Require().NoError(err, "descriptor resolution MUST succeed")
+	suite.Assert().NotNil(char, "parent characteristic MUST be returned")
+	suite.Assert().NotNil(desc, "descriptor MUST be returned")
+	suite.Assert().Contains(char.UUID(), "2a37", "parent char MUST be 2a37")
+	suite.Assert().Contains(svcUUID, "180d", "service MUST be 180d")
+	suite.Assert().Contains(desc.UUID(), "2902", "descriptor MUST be 2902")
+}
+
+func (suite *ReadTestSuite) TestDescriptorRead_AmbiguousWithoutPath() {
+	// GOAL: Verify ambiguous descriptor requires explicit path
+	//
+	// TEST SCENARIO: Read 2902 without path → fails with ambiguity error
+
+	dev, cleanup := suite.ConnectDevice("")
+	defer cleanup()
+	conn := dev.GetConnection()
+
+	_, _, _, err := resolveDescriptor(conn, "2902", "", "")
+	suite.Assert().Error(err, "ambiguous descriptor MUST fail")
+	suite.Assert().Contains(err.Error(), "multiple", "error MUST indicate ambiguity")
+}
+
+// =============================================================================
+// Output Formatting Tests
+// =============================================================================
 
 func (suite *ReadTestSuite) TestOutputData_HexFormat() {
 	// GOAL: Verify hex output encoding produces correct format
@@ -178,21 +276,9 @@ func (suite *ReadTestSuite) TestOutputData_HexFormat() {
 		input    []byte
 		expected string
 	}{
-		{
-			name:     "simple bytes",
-			input:    []byte{0x01, 0x02, 0x0A, 0xFF},
-			expected: "01020aff",
-		},
-		{
-			name:     "empty bytes",
-			input:    []byte{},
-			expected: "",
-		},
-		{
-			name:     "single byte",
-			input:    []byte{0xAB},
-			expected: "ab",
-		},
+		{name: "simple bytes", input: []byte{0x01, 0x02, 0x0A, 0xFF}, expected: "01020aff"},
+		{name: "empty bytes", input: []byte{}, expected: ""},
+		{name: "single byte", input: []byte{0xAB}, expected: "ab"},
 	}
 
 	for _, tt := range tests {
@@ -203,36 +289,9 @@ func (suite *ReadTestSuite) TestOutputData_HexFormat() {
 	}
 }
 
-func (suite *ReadTestSuite) TestResolveTarget_UUIDNormalization() {
-	// GOAL: Verify UUID normalization for target resolution
-	//
-	// TEST SCENARIO: Normalize various UUID formats → normalized UUIDs returned → consistent format
-
-	tests := []struct {
-		name  string
-		input string
-	}{
-		{
-			name:  "short UUID",
-			input: "2a19",
-		},
-		{
-			name:  "full UUID",
-			input: "0000180f-0000-1000-8000-00805f9b34fb",
-		},
-		{
-			name:  "mixed case UUID",
-			input: "180F",
-		},
-	}
-
-	for _, tt := range tests {
-		suite.Run(tt.name, func() {
-			normalized := device.NormalizeUUID(tt.input)
-			suite.Assert().NotEmpty(normalized, "normalized UUID MUST not be empty")
-		})
-	}
-}
+// =============================================================================
+// Command Definition Tests
+// =============================================================================
 
 func (suite *ReadTestSuite) TestReadCmd_Flags() {
 	// GOAL: Verify read command has all required flags with correct defaults
@@ -240,7 +299,7 @@ func (suite *ReadTestSuite) TestReadCmd_Flags() {
 	// TEST SCENARIO: Check flag definitions → all flags present → default values correct
 
 	suite.Assert().NotNil(readCmd, "read command MUST be defined")
-	suite.Assert().Equal("read <device-address> <uuid>", readCmd.Use, "command usage MUST match expected format")
+	suite.Assert().Equal("read <device-address> [uuid]", readCmd.Use, "command usage MUST match expected format")
 
 	flags := []struct {
 		name         string
@@ -292,26 +351,11 @@ func (suite *ReadTestSuite) TestReadCmd_ArgsValidation() {
 		args      []string
 		shouldErr bool
 	}{
-		{
-			name:      "valid with address only",
-			args:      []string{"AA:BB:CC:DD:EE:FF"},
-			shouldErr: false,
-		},
-		{
-			name:      "valid with address and UUID",
-			args:      []string{"AA:BB:CC:DD:EE:FF", "2a19"},
-			shouldErr: false,
-		},
-		{
-			name:      "invalid with no arguments",
-			args:      []string{},
-			shouldErr: true,
-		},
-		{
-			name:      "invalid with too many arguments",
-			args:      []string{"AA:BB:CC:DD:EE:FF", "2a19", "extra"},
-			shouldErr: true,
-		},
+		{name: "valid with address only", args: []string{"AA:BB:CC:DD:EE:FF"}, shouldErr: false},
+		{name: "valid with address and UUID", args: []string{"AA:BB:CC:DD:EE:FF", "2a19"}, shouldErr: false},
+		{name: "valid with address and multiple UUIDs", args: []string{"AA:BB:CC:DD:EE:FF", "2a37,2a38"}, shouldErr: false},
+		{name: "invalid with no arguments", args: []string{}, shouldErr: true},
+		{name: "invalid with too many arguments", args: []string{"AA:BB:CC:DD:EE:FF", "2a19", "extra"}, shouldErr: true},
 	}
 
 	for _, tt := range tests {

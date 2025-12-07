@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -16,16 +17,22 @@ import (
 
 // readCmd represents the read command
 var readCmd = &cobra.Command{
-	Use:   "read <device-address> <uuid>",
+	Use:   "read <device-address> [uuid]",
 	Short: "Read a characteristic or descriptor value",
-	Long: fmt.Sprintf(`Reads data from a BLE characteristic or descriptor.
+	Long: fmt.Sprintf(`Reads data from BLE characteristic(s) or a descriptor.
 
 Examples:
   # Read Battery Level characteristic
   blim read %s 2a19
 
+  # Read multiple characteristics (comma-separated)
+  blim read %s 2a37,2a38,2a19 --hex
+
   # Read with service disambiguation
   blim read %s --service 180f --char 2a19
+
+  # Read multiple characteristics from a specific service
+  blim read %s --service 180d --char 2a37,2a38
 
   # Read descriptor (Client Characteristic Configuration)
   blim read %s --service 180d --char 2a37 --desc 2902
@@ -39,14 +46,14 @@ Examples:
   # Watch with custom interval
   blim read %s 2a37 --watch 500ms
 
-%s`, exampleDeviceAddress, exampleDeviceAddress, exampleDeviceAddress, exampleDeviceAddress, exampleDeviceAddress, exampleDeviceAddress, deviceAddressNote),
+%s`, exampleDeviceAddress, exampleDeviceAddress, exampleDeviceAddress, exampleDeviceAddress, exampleDeviceAddress, exampleDeviceAddress, exampleDeviceAddress, exampleDeviceAddress, deviceAddressNote),
 	Args: cobra.RangeArgs(1, 2),
 	RunE: runRead,
 }
 
 var (
 	readServiceUUID string
-	readCharUUID    string
+	readCharUUIDs   string // supports comma-separated UUIDs
 	readDescUUID    string
 	readHex         bool
 	readTimeout     time.Duration
@@ -55,7 +62,7 @@ var (
 
 func init() {
 	readCmd.Flags().StringVar(&readServiceUUID, "service", "", "Service UUID (required if characteristic UUID is ambiguous)")
-	readCmd.Flags().StringVar(&readCharUUID, "char", "", "Characteristic UUID")
+	readCmd.Flags().StringVar(&readCharUUIDs, "char", "", "Characteristic UUID(s), comma-separated for multiple")
 	readCmd.Flags().StringVar(&readDescUUID, "desc", "", "Descriptor UUID (reads descriptor instead of characteristic)")
 	readCmd.Flags().BoolVar(&readHex, "hex", false, "Output as hex string (e.g., 'FF01'); raw bytes by default")
 	readCmd.Flags().DurationVar(&readTimeout, "timeout", 5*time.Second, "Read timeout")
@@ -66,21 +73,31 @@ func init() {
 func runRead(cmd *cobra.Command, args []string) error {
 	address := args[0]
 
-	// Parse UUID from positional arg or flags
-	var targetUUID string
+	// Determine UUID source (raw CSV string for later parsing)
+	var uuidInput string
 	if len(args) == 2 {
-		targetUUID = args[1]
-	} else if readCharUUID != "" {
-		targetUUID = readCharUUID
+		uuidInput = args[1]
+	} else if readCharUUIDs != "" {
+		uuidInput = readCharUUIDs
 	} else if readDescUUID != "" {
-		targetUUID = readDescUUID
+		uuidInput = readDescUUID
 	} else {
 		return fmt.Errorf("UUID required: provide as second argument or via --char/--desc flag")
 	}
 
-	// Parse watch interval if a watch flag is set
+	// Parse for validation and routing
+	charUUIDs := parseCSVUUIDs(uuidInput)
+	if len(charUUIDs) == 0 {
+		return fmt.Errorf("no valid UUIDs provided")
+	}
+
+	// Parse watch interval if watch flag is set
 	var watchInterval time.Duration
 	if readWatch != "" {
+		// Watch mode: single characteristic only
+		if len(charUUIDs) > 1 {
+			return fmt.Errorf("watch mode requires a single characteristic, got %d", len(charUUIDs))
+		}
 		var err error
 		watchInterval, err = time.ParseDuration(readWatch)
 		if err != nil {
@@ -97,12 +114,19 @@ func runRead(cmd *cobra.Command, args []string) error {
 	// All arguments validated - don't show usage on runtime errors
 	cmd.SilenceUsage = true
 
-	// Setup progress printer
+	// Setup progress description
+	var progressDesc string
 	operation := "Reading"
 	if readWatch != "" {
 		operation = "Watching"
 	}
-	progress := NewProgressPrinter(fmt.Sprintf("%s %s from %s", operation, targetUUID, address), "Connecting", "Processing")
+	if len(charUUIDs) == 1 {
+		progressDesc = fmt.Sprintf("%s %s from %s", operation, charUUIDs[0], address)
+	} else {
+		progressDesc = fmt.Sprintf("%s %d characteristics from %s", operation, len(charUUIDs), address)
+	}
+
+	progress := NewProgressPrinter(progressDesc, "Connecting", "Processing")
 	progress.Start()
 	defer progress.Stop()
 
@@ -126,131 +150,66 @@ func runRead(cmd *cobra.Command, args []string) error {
 			return nil, fmt.Errorf("device not connected")
 		}
 
-		// Resolve target characteristic/descriptor
-		char, desc, _, err := resolveTarget(conn, targetUUID, readServiceUUID, readCharUUID, readDescUUID)
+		// Descriptor path
+		if readDescUUID != "" {
+			char, desc, _, err := resolveDescriptor(conn, readDescUUID, readServiceUUID, readCharUUIDs)
+			if err != nil {
+				return nil, err
+			}
+			return nil, performReadWithPrefix(char, desc, false)
+		}
+
+		// Characteristic path
+		_, _, chars, err := resolveCharacteristics(conn, uuidInput, readServiceUUID)
 		if err != nil {
 			return nil, err
 		}
 
-		// Perform read or watch
-		if readWatch != "" {
-			return nil, watchChar(ctx, dev, char, desc, watchInterval, logger)
+		// Single characteristic
+		if len(chars) == 1 {
+			for _, char := range chars {
+				if readWatch != "" {
+					return nil, watchChar(ctx, dev, char, nil, watchInterval, logger)
+				}
+				return nil, performReadWithPrefix(char, nil, false)
+			}
 		}
 
-		return nil, performRead(char, desc)
+		// Multi-characteristic
+		return nil, performMultiRead(chars)
 	}
 
 	_, err = inspector.InspectDevice(ctx, address, opts, logger, progress.Callback(), readOperation)
 	return err
 }
 
-// resolveTarget resolves the target characteristic and optional descriptor from UUIDs.
-func resolveTarget(conn device.Connection, targetUUID, serviceUUID, charUUID, descUUID string) (char device.Characteristic, desc device.Descriptor, svcUUID string, err error) {
-	// Normalize UUIDs
-	normalizedTarget := device.NormalizeUUID(targetUUID)
-	normalizedService := device.NormalizeUUID(serviceUUID)
-	normalizedChar := device.NormalizeUUID(charUUID)
-	normalizedDesc := device.NormalizeUUID(descUUID)
+// performMultiRead reads multiple characteristics and outputs with prefixes.
+// UUIDs are sorted for deterministic output order.
+func performMultiRead(chars map[string]device.Characteristic) error {
+	// Sort UUIDs for deterministic output
+	charUUIDs := make([]string, 0, len(chars))
+	for uuid := range chars {
+		charUUIDs = append(charUUIDs, uuid)
+	}
+	sort.Strings(charUUIDs)
 
-	// Case 1: Explicit service + char + optional desc
-	if serviceUUID != "" && (charUUID != "" || normalizedTarget != "") {
-		charToFind := normalizedChar
-		if charToFind == "" {
-			charToFind = normalizedTarget
-		}
-
-		char, err := conn.GetCharacteristic(normalizedService, charToFind)
+	for _, uuid := range charUUIDs {
+		char := chars[uuid]
+		data, err := char.Read(readTimeout)
 		if err != nil {
-			return nil, nil, "", fmt.Errorf("characteristic %s not found in service %s: %w", charToFind, serviceUUID, err)
+			// Report error but continue with other characteristics
+			fmt.Fprintf(os.Stderr, "%s: error: %v\n", device.ShortenUUID(uuid), err)
+			continue
 		}
 
-		// If descriptor requested, find it
-		if descUUID != "" || normalizedDesc != "" {
-			descToFind := normalizedDesc
-			if descToFind == "" {
-				descToFind = normalizedTarget
-			}
-			desc := findDescriptor(char, descToFind)
-			if desc == nil {
-				return nil, nil, "", fmt.Errorf("descriptor %s not found in characteristic %s", descToFind, charToFind)
-			}
-			return char, desc, normalizedService, nil
-		}
-
-		return char, nil, normalizedService, nil
+		outputDataWithPrefix(uuid, data, true)
 	}
 
-	// Case 2: Auto-resolve from target UUID
-	return autoResolveTarget(conn, normalizedTarget, descUUID != "")
-}
-
-// autoResolveTarget attempts to automatically resolve a UUID to a characteristic or descriptor.
-// Returns: characteristic, descriptor (or nil), service UUID, error
-func autoResolveTarget(conn device.Connection, targetUUID string, isDescriptor bool) (device.Characteristic, device.Descriptor, string, error) {
-	type charWithService struct {
-		char        device.Characteristic
-		serviceUUID string
-	}
-	var foundChars []charWithService
-	var foundDescs []device.Descriptor
-	var foundCharForDesc device.Characteristic
-	var foundServiceForDesc string
-
-	// Search all services
-	for _, svc := range conn.Services() {
-		svcUUID := svc.UUID()
-		for _, char := range svc.GetCharacteristics() {
-			// Check if this is the target characteristic
-			if device.NormalizeUUID(char.UUID()) == targetUUID {
-				foundChars = append(foundChars, charWithService{char: char, serviceUUID: svcUUID})
-			}
-
-			// If looking for descriptor, search within this characteristic
-			if isDescriptor {
-				for _, desc := range char.GetDescriptors() {
-					if device.NormalizeUUID(desc.UUID()) == targetUUID {
-						foundDescs = append(foundDescs, desc)
-						foundCharForDesc = char
-						foundServiceForDesc = svcUUID
-					}
-				}
-			}
-		}
-	}
-
-	// Handle results
-	if isDescriptor {
-		if len(foundDescs) == 0 {
-			return nil, nil, "", fmt.Errorf("descriptor %s not found", targetUUID)
-		}
-		if len(foundDescs) > 1 {
-			return nil, nil, "", fmt.Errorf("descriptor %s found in multiple characteristics, specify --service and --char", targetUUID)
-		}
-		return foundCharForDesc, foundDescs[0], foundServiceForDesc, nil
-	}
-
-	if len(foundChars) == 0 {
-		return nil, nil, "", fmt.Errorf("characteristic %s not found", targetUUID)
-	}
-	if len(foundChars) > 1 {
-		return nil, nil, "", fmt.Errorf("characteristic %s found in multiple services, specify --service", targetUUID)
-	}
-
-	return foundChars[0].char, nil, foundChars[0].serviceUUID, nil
-}
-
-// findDescriptor searches for a descriptor by UUID in a characteristic
-func findDescriptor(char device.Characteristic, descUUID string) device.Descriptor {
-	for _, desc := range char.GetDescriptors() {
-		if device.NormalizeUUID(desc.UUID()) == descUUID {
-			return desc
-		}
-	}
 	return nil
 }
 
-// performRead executes a read operation on a characteristic or descriptor
-func performRead(char device.Characteristic, desc device.Descriptor) error {
+// performReadWithPrefix reads a single characteristic or descriptor with an optional UUID prefix.
+func performReadWithPrefix(char device.Characteristic, desc device.Descriptor, multiChar bool) error {
 	var data []byte
 	var err error
 
@@ -352,4 +311,24 @@ func outputData(data []byte) error {
 	// Default: Raw binary output to stdout
 	_, err := os.Stdout.Write(data)
 	return err
+}
+
+// outputDataWithPrefix outputs data with an optional UUID prefix for multi-char reads.
+func outputDataWithPrefix(uuid string, data []byte, multiChar bool) {
+	var prefix string
+	if multiChar {
+		prefix = device.ShortenUUID(uuid) + ": "
+	}
+
+	if readHex {
+		fmt.Printf("%s%s\n", prefix, hex.EncodeToString(data))
+		return
+	}
+
+	// Raw binary output
+	if prefix != "" {
+		fmt.Print(prefix)
+	}
+	_, _ = os.Stdout.Write(data)
+	fmt.Println()
 }

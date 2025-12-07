@@ -1,0 +1,66 @@
+Please localize the requested scope and conduct a comprehensive code quality assessment for it, to analyze the areas listed below.
+
+The scope must be deducted from arguments if provided as folows: if #$ARGUMENTS is not empty figure out what is provided: file or ;anguge construct and set it as a scope.
+If #$ARGUMENTS are not provided and IDE integration setedup, check selection in ide integration if somethign selected treat it as a scope.
+If #$ARGUMENTS are not provided and no IDE integration setedup or nothign selected in IDE, use current File opened in IDE as a scope.
+
+If scope is ot determined ask to clarify teh scope and rerun the command.
+
+As oosn as =scope is determined pritn user friendly promt sharing teh loclized scope and ask confirmation to proceed: Yes, NO.
+
+If it is confiemre than conduct a comprehensive code quality assessment for it, to analyze the areas listed below:
+
+## **Code Quality & Standards**
+- Go idioms and best practices adherence
+- Code clarity, readability, and maintainability
+- Naming conventions (types, functions, variables, packages)
+- Error handling patterns and robustness
+- Documentation quality (comments, godoc)
+- Test coverage and testing patterns
+
+## **Architecture & Design**
+- Overall architecture patterns and design principles
+- Separation of concerns and modularity
+- Interface design and abstractions
+- Dependency management and coupling
+- Package structure and organization
+- Design patterns usage (appropriate/inappropriate)
+
+## **Production Readiness**
+- Error handling and recovery mechanisms
+- Logging and observability considerations
+- Configuration management
+- Resource management (goroutines, channels, memory)
+- Concurrency safety and race condition risks
+- Performance considerations and bottlenecks
+
+## **Go-Specific Analysis**
+- Effective use of Go's concurrency primitives
+- Channel usage patterns and best practices
+- Interface usage and composition
+- Memory allocation patterns
+- Garbage collection considerations
+- Standard library usage vs external dependencies
+
+## **Security & Reliability**
+- Input validation and sanitization
+- Potential security vulnerabilities
+- Resource leaks (goroutines, file handles, connections)
+- Panic prevention and recovery
+- Data race detection needs
+
+## **Framework & Utilities Assessment**
+- Third-party dependencies evaluation
+- Framework choices appropriateness
+- Custom utilities vs standard library
+- Testing frameworks and tools usage
+
+## **Recommendations**
+Provide specific, actionable recommendations for:
+- **Immediate improvements** needed
+- **Long-term architectural** enhancements
+- **Performance optimizations**
+- **Production deployment** considerations
+- **Code organization** improvements
+
+**Please be specific with examples and suggest concrete improvements where applicable.**

@@ -66,18 +66,6 @@ func init() {
 	subscribeCmd.Flags().DurationVar(&subscribeRate, "rate", 1*time.Second, "Rate limit interval for batched/latest modes")
 }
 
-// parseCharUUIDs parses comma-separated UUID input, trimming whitespace and filtering empty values.
-func parseCharUUIDs(input string) []string {
-	var result []string
-	for _, u := range strings.Split(input, ",") {
-		u = strings.TrimSpace(u)
-		if u != "" {
-			result = append(result, u)
-		}
-	}
-	return result
-}
-
 // parseStreamMode converts CLI mode string to device.StreamMode
 func parseStreamMode(mode string) (device.StreamMode, error) {
 	switch strings.ToLower(mode) {
@@ -93,64 +81,38 @@ func parseStreamMode(mode string) (device.StreamMode, error) {
 }
 
 // buildSubscribeOptions resolves characteristics and groups them by service.
+// charUUIDsCSV is a comma-separated string of characteristic UUIDs (parsed internally).
+// If charUUIDsCSV is empty and serviceUUID is provided, returns all notifiable chars in that service.
 // Returns a map of service UUID to characteristic UUIDs, and total characteristic count.
-func buildSubscribeOptions(conn device.Connection, charUUIDs []string, serviceUUID string) (map[string][]string, int, error) {
-	serviceChars := make(map[string][]string)
-	var totalChars int
+func buildSubscribeOptions(conn device.Connection, charUUIDsCSV, serviceUUID string) (map[string][]string, int, error) {
+	serviceChars, _, chars, err := resolveCharacteristics(conn, charUUIDsCSV, serviceUUID)
+	if err != nil {
+		return nil, 0, err
+	}
 
-	if serviceUUID != "" {
-		// Service specified explicitly
-		svcUUID := device.NormalizeUUID(serviceUUID)
+	// Filter to only notifiable characteristics
+	filteredServiceChars := make(map[string][]string)
+	filteredCount := 0
 
-		if len(charUUIDs) == 0 {
-			// Subscribe to all notifiable characteristics in service
-			svc, err := conn.GetService(svcUUID)
-			if err != nil {
-				return nil, 0, fmt.Errorf("service %s not found", serviceUUID)
-			}
-
-			for _, char := range svc.GetCharacteristics() {
-				if supportsNotifications(char) {
-					serviceChars[svcUUID] = append(serviceChars[svcUUID], char.UUID())
-				}
-			}
-
-			if len(serviceChars[svcUUID]) == 0 {
-				return nil, 0, fmt.Errorf("no notifiable characteristics found in service %s", serviceUUID)
-			}
-		} else {
-			// Verify each specified characteristic in the given service
-			for _, charUUID := range charUUIDs {
-				char, err := conn.GetCharacteristic(svcUUID, charUUID)
-				if err != nil {
-					return nil, 0, fmt.Errorf("characteristic %s not found in service %s", charUUID, serviceUUID)
-				}
-				if !supportsNotifications(char) {
-					return nil, 0, fmt.Errorf("characteristic %s does not support notifications", charUUID)
-				}
-				serviceChars[svcUUID] = append(serviceChars[svcUUID], char.UUID())
-			}
-		}
-	} else {
-		// No service specified - auto-resolve each characteristic
+	for svcUUID, charUUIDs := range serviceChars {
 		for _, charUUID := range charUUIDs {
-			char, _, svcUUID, err := resolveTarget(conn, charUUID, "", "", "")
-			if err != nil {
-				return nil, 0, err
+			char := chars[charUUID]
+			if supportsNotifications(char) {
+				filteredServiceChars[svcUUID] = append(filteredServiceChars[svcUUID], charUUID)
+				filteredCount++
+			} else if charUUIDsCSV != "" {
+				// Explicit char requested but doesn't support notifications
+				return nil, 0, fmt.Errorf("characteristic %s does not support notifications", device.ShortenUUID(charUUID))
 			}
-			if !supportsNotifications(char) {
-				return nil, 0, fmt.Errorf("characteristic %s does not support notifications", charUUID)
-			}
-			serviceChars[svcUUID] = append(serviceChars[svcUUID], char.UUID())
+			// If charUUIDsCSV == "" (all-in-service mode), silently skip non-notifiable
 		}
 	}
 
-	// Count total characteristics
-	for _, chars := range serviceChars {
-		totalChars += len(chars)
+	if filteredCount == 0 {
+		return nil, 0, fmt.Errorf("no notifiable characteristics found")
 	}
 
-	return serviceChars, totalChars, nil
+	return filteredServiceChars, filteredCount, nil
 }
 
 func runSubscribe(cmd *cobra.Command, args []string) error {
@@ -162,17 +124,17 @@ func runSubscribe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Determine characteristics to subscribe
-	var charUUIDs []string
+	// Determine characteristics to subscribe (raw CSV string for later parsing)
+	var charUUIDsCSV string
 	if len(args) == 2 {
-		charUUIDs = parseCharUUIDs(args[1])
+		charUUIDsCSV = args[1]
 	} else if subscribeCharUUIDs != "" {
-		charUUIDs = parseCharUUIDs(subscribeCharUUIDs)
+		charUUIDsCSV = subscribeCharUUIDs
 	}
 	// If no chars specified, we'll subscribe to all in service (requires --service)
 
 	// Validate: either chars specified or service specified (for all-in-service mode)
-	if len(charUUIDs) == 0 && subscribeServiceUUID == "" {
+	if charUUIDsCSV == "" && subscribeServiceUUID == "" {
 		return fmt.Errorf("specify characteristic UUID(s) via argument or --char flag, or use --service for all characteristics")
 	}
 
@@ -197,17 +159,8 @@ func runSubscribe(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
-	// Setup progress description
-	var progressDesc string
-	if len(charUUIDs) == 0 {
-		progressDesc = fmt.Sprintf("Subscribing to service %s on %s", subscribeServiceUUID, address)
-	} else if len(charUUIDs) == 1 {
-		progressDesc = fmt.Sprintf("Subscribing to %s on %s", charUUIDs[0], address)
-	} else {
-		progressDesc = fmt.Sprintf("Subscribing to %d characteristics on %s", len(charUUIDs), address)
-	}
-
-	progress := NewProgressPrinter(progressDesc, "Connecting", "Subscribed")
+	// Setup progress (detailed description comes after resolution)
+	progress := NewProgressPrinter(fmt.Sprintf("Subscribing to %s", address), "Connecting", "Subscribed")
 	progress.Start()
 	defer progress.Stop()
 
@@ -228,7 +181,7 @@ func runSubscribe(cmd *cobra.Command, args []string) error {
 		}
 
 		// Build subscription options - group characteristics by service
-		serviceChars, totalChars, err := buildSubscribeOptions(conn, charUUIDs, subscribeServiceUUID)
+		serviceChars, totalChars, err := buildSubscribeOptions(conn, charUUIDsCSV, subscribeServiceUUID)
 		if err != nil {
 			return nil, err
 		}
@@ -303,11 +256,7 @@ func outputSubscribeRecord(record *device.Record, multiChar bool) {
 	printValue := func(charUUID string, data []byte) {
 		var prefix string
 		if multiChar {
-			shortUUID := charUUID
-			if len(charUUID) > 8 {
-				shortUUID = charUUID[:8]
-			}
-			prefix = shortUUID + ": "
+			prefix = device.ShortenUUID(charUUID) + ": "
 		}
 
 		if subscribeHex {

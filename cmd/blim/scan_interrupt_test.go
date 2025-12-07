@@ -34,7 +34,7 @@ func (s *bleScanningDeviceMock) Scan(ctx context.Context, allowDup bool, handler
 
 // ScanInterruptSuite tests scan interrupt behavior with proper mock setup
 type ScanInterruptSuite struct {
-	testutils.MockBLEPeripheralSuite
+	CommandTestSuite
 }
 
 // createTestLogger creates a configured logger for tests
@@ -57,18 +57,8 @@ func (s *ScanInterruptSuite) createTestScanner() *scanner.Scanner {
 
 // SetupTest configures mock advertisements for scan tests
 func (s *ScanInterruptSuite) SetupTest() {
-	// Configure mock advertisements for scanning with all required fields
-	adv1 := testutils.NewAdvertisementBuilder().
-		WithAddress("AA:BB:CC:DD:EE:FF").
-		WithName("TestDevice1").
-		WithRSSI(-50).
-		WithConnectable(true).
-		WithManufacturerData([]byte{}).
-		WithNoServiceData().
-		WithServices().
-		WithTxPower(0).
-		Build()
-
+	// Configure mock advertisements for scanning
+	adv1 := testutils.StandardAdvertisement("AA:BB:CC:DD:EE:FF")
 	adv2 := testutils.NewAdvertisementBuilder().
 		WithAddress("11:22:33:44:55:66").
 		WithName("TestDevice2").
@@ -88,7 +78,7 @@ func (s *ScanInterruptSuite) SetupTest() {
 		Build()
 
 	// Call parent to apply mock configuration
-	s.MockBLEPeripheralSuite.SetupTest()
+	s.CommandTestSuite.SetupTest()
 
 	// Wrap the device in a scanner adapter
 	bleDevice := s.PeripheralBuilder.Build()
@@ -244,17 +234,7 @@ func (s *ScanInterruptSuite) TestWatchModeBluetoothDisabled() {
 	//
 	// TEST SCENARIO: Bluetooth disabled during scan → returns ErrBluetoothOff → watch mode exits with error
 
-	adv := testutils.NewAdvertisementBuilder().
-		WithAddress("AA:BB:CC:DD:EE:FF").
-		WithName("TestDevice").
-		WithRSSI(-50).
-		WithConnectable(true).
-		WithManufacturerData([]byte{}).
-		WithNoServiceData().
-		WithServices().
-		WithTxPower(0).
-		Build()
-
+	adv := testutils.StandardAdvertisement("AA:BB:CC:DD:EE:FF")
 	hangingDev := &hangingScanDevice{adv: adv}
 
 	devicefactory.DeviceFactory = func() (device.Scanner, error) {

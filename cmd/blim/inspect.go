@@ -151,7 +151,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	}
 
 	// Use a Lua script for output generation
-	processDevice := func(dev device.Device) (error, error) {
+	processDevice := func(dev device.Device) (any, error) {
 		// Update the device with advertisement data if we have it
 		if adv != nil {
 			dev.Update(adv)

@@ -1,0 +1,129 @@
+# Go Code Quality Assessment Command
+
+Perform a comprehensive code quality assessment for Go code, analyzing multiple dimensions of code health and production readiness.
+
+## Scope Determination
+
+**Step 1: Identify the scope using this priority order:**
+
+1. **If arguments are provided** (`#$ARGUMENTS` is not empty):
+    - Parse the arguments to identify if they specify a file path, function, struct, or other language construct
+    - Set the identified element as the assessment scope
+
+2. **If no arguments are provided and IDE integration is available**:
+    - Check for any selected code in the IDE
+    - If code is selected, use the selection as the scope
+
+3. **If no arguments and no IDE selection available**:
+    - Use the currently opened file in the IDE as the scope
+
+4. **If scope cannot be determined**:
+    - Ask the user to clarify the intended scope and request that they rerun the command
+
+**Step 2: Confirm scope with user**
+
+Once the scope is determined, display:
+```
+📋 **Code Quality Assessment Scope**
+Target: [specific scope details]
+
+Do you want to proceed with the assessment? (Yes/No)
+```
+
+Wait for confirmation before proceeding.
+
+## Assessment Areas
+
+**Step 3: If confirmed, conduct a comprehensive analysis covering:**
+
+### **Code Quality & Standards**
+- Go idioms and best practices adherence
+- Code clarity, readability, and maintainability
+- Naming conventions (types, functions, variables, packages)
+- Error handling patterns and robustness
+- Documentation quality (comments, godoc)
+- Test coverage and testing patterns
+
+### **Architecture & Design**
+- Overall architecture patterns and design principles
+- Separation of concerns and modularity
+- Interface design and abstractions
+- Dependency management and coupling
+- Package structure and organization
+- Design patterns usage (appropriate/inappropriate)
+
+### **Production Readiness**
+- Error handling and recovery mechanisms
+- Logging and observability considerations
+- Configuration management
+- Resource management (goroutines, channels, memory)
+- Concurrency safety and race condition risks
+- Performance considerations and bottlenecks
+
+### **Go-Specific Analysis**
+- Effective use of Go's concurrency primitives
+- Channel usage patterns and best practices
+- Interface usage and composition
+- Memory allocation patterns
+- Garbage collection considerations
+- Standard library usage vs external dependencies
+
+### **Security & Reliability**
+- Input validation and sanitization
+- Potential security vulnerabilities
+- Resource leaks (goroutines, file handles, connections)
+- Panic prevention and recovery
+- Data race detection needs
+
+### **Framework & Dependencies**
+- Third-party dependencies evaluation
+- Framework choices appropriateness
+- Custom utilities vs standard library usage
+- Testing frameworks and tools assessment
+
+## Deliverables
+
+Provide a structured report with:
+
+### **Executive Summary**
+- Overall code health score/rating
+- Top 3 strengths identified
+- Top 3 areas requiring attention
+
+### **Detailed Findings**
+For each assessment area, provide:
+- Current state analysis
+- Specific issues found (with line numbers when applicable)
+- Code examples demonstrating problems
+- Severity rating (Critical/High/Medium/Low)
+
+### **Actionable Recommendations**
+
+**Immediate Improvements** (can be implemented quickly):
+- Specific code changes needed
+- Quick wins for code quality
+
+**Long-term Architectural Enhancements**:
+- Structural improvements for maintainability
+- Scalability considerations
+
+**Performance Optimizations**:
+- Bottleneck identification and solutions
+- Memory and CPU efficiency improvements
+
+**Production Deployment Readiness**:
+- Missing production safeguards
+- Monitoring and logging enhancements
+- Configuration and environment considerations
+
+**Code Organization Improvements**:
+- Package restructuring suggestions
+- Separation of concerns enhancements
+
+### **Implementation Guidance**
+- Priority order for addressing issues
+- Estimated effort for each recommendation
+- Potential risks of proposed changes
+- Testing strategies for validation
+
+**Format all findings with specific examples, code snippets, and concrete next steps where applicable.**

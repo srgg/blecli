@@ -22,6 +22,15 @@ func NormalizeUUIDs(uuids []string) []string {
 	return bledb.NormalizeUUIDs(uuids)
 }
 
+// ShortenUUID returns a truncated version of a UUID for display purposes.
+// Returns the first eight characters for long UUIDs and short UUIDs by themselves.
+func ShortenUUID(uuid string) string {
+	if len(uuid) > 8 {
+		return uuid[:8]
+	}
+	return uuid
+}
+
 // ValidateUUID validates that UUID strings are non-empty and well-formed.
 // Returns normalized UUID strings or an error.
 // Accepts one or more UUIDs as variadic arguments.

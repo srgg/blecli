@@ -118,7 +118,7 @@ func runWrite(cmd *cobra.Command, args []string) error {
 		}
 
 		// Resolve target characteristic/descriptor
-		char, desc, _, err := resolveTarget(conn, targetUUID, writeServiceUUID, writeCharUUID, writeDescUUID)
+		char, desc, _, err := doResolveTarget(conn, targetUUID, writeServiceUUID, writeCharUUID, writeDescUUID)
 		if err != nil {
 			return nil, err
 		}

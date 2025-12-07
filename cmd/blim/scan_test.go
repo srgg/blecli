@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"testing"
 	"time"
 
@@ -21,7 +20,7 @@ import (
 
 // ScanTestSuite provides testify/suite for proper test isolation
 type ScanTestSuite struct {
-	suite.Suite
+	CommandTestSuite
 	originalDeviceFactory func() (device.Scanner, error)
 	originalFlags         struct {
 		scanDuration    time.Duration
@@ -97,7 +96,7 @@ func (suite *ScanTestSuite) TestScanCmd_Help() {
 	cmd := &cobra.Command{}
 	cmd.AddCommand(scanCmd)
 
-	output, err := executeCommand(cmd, "scan", "--help")
+	output, err := suite.ExecuteCommand(cmd, "scan", "--help")
 	suite.Require().NoError(err, "help command MUST succeed")
 
 	suite.Assert().Contains(output, "Scan for and display Bluetooth Low Energy devices", "help MUST contain command description")
@@ -115,7 +114,7 @@ func (suite *ScanTestSuite) TestScanCmd_InvalidFormat() {
 	cmd := &cobra.Command{}
 	cmd.AddCommand(scanCmd)
 
-	_, err := executeCommand(cmd, "scan", "--format=invalid")
+	_, err := suite.ExecuteCommand(cmd, "scan", "--format=invalid")
 
 	suite.Require().Error(err, "invalid format MUST return error")
 	suite.Assert().Contains(err.Error(), "invalid format 'invalid': must be one of [table json]", "error MUST list valid formats")
@@ -212,7 +211,7 @@ func (suite *ScanTestSuite) TestScanCmd_WatchMode() {
 	done := make(chan error)
 
 	go func() {
-		_, err := executeCommand(cmd, "scan", "--watch")
+		_, err := suite.ExecuteCommand(cmd, "scan", "--watch")
 		done <- err
 	}()
 
@@ -361,16 +360,6 @@ func resetScanFlags() {
 	scanBlockList = nil
 	scanNoDuplicate = true
 	scanWatch = false
-}
-
-func executeCommand(root *cobra.Command, args ...string) (string, error) {
-	buf := new(bytes.Buffer)
-	root.SetOut(buf)
-	root.SetErr(buf)
-	root.SetArgs(args)
-
-	err := root.Execute()
-	return buf.String(), err
 }
 
 // TestScanCommandSuite runs the test suite

@@ -154,9 +154,13 @@ func runSingleScan(scanner *scanner.Scanner, opts *scanner.ScanOptions, cfg *sca
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 	go func() {
-		<-sigCh
-		fmt.Println("\nCtrl+C pressed, cancelling scan...")
-		cancel()
+		select {
+		case <-sigCh:
+			fmt.Println("\nCtrl+C pressed, cancelling scan...")
+			cancel()
+		case <-ctx.Done():
+			// Scan completed or timed out - exit cleanly
+		}
 	}()
 
 	// Setup progress printer
@@ -185,10 +189,13 @@ func runWatchMode(s *scanner.Scanner, opts *scanner.ScanOptions, cfg *scanConfig
 	defer signal.Stop(sigCh)
 
 	go func() {
-		<-sigCh
-
-		fmt.Println("\nCtrl+C pressed, cancelling scan...")
-		cancel()
+		select {
+		case <-sigCh:
+			fmt.Println("\nCtrl+C pressed, cancelling scan...")
+			cancel()
+		case <-ctx.Done():
+			// Context cancelled (error path) - exit cleanly
+		}
 	}()
 
 	// Start collecting events immediately BEFORE starting the scan
@@ -222,14 +229,33 @@ func runWatchMode(s *scanner.Scanner, opts *scanner.ScanOptions, cfg *scanConfig
 	defer ticker.Stop()
 	tickCount := 0
 
+	// Select cases ordered HOTTEST → COLDEST per project standards
 	for {
 		select {
-		case <-ctx.Done():
-			return printDeviceTable(ctx.Err())
+		// HOT: Main data channel - events arrive frequently during active scanning
+		case ev := <-s.Events():
+			devicesMap[ev.DeviceInfo.Address()] = scanner.DeviceEntry{
+				Device:   ev.DeviceInfo,
+				LastSeen: ev.Timestamp,
+			}
 
+		// WARM: Periodic UI updates every 100ms
+		case <-ticker.C:
+			// Nested check ensures ctx.Done() gets processed even under high event load
+			select {
+			case <-ctx.Done():
+				return printDeviceTable(nil)
+			default:
+			}
+
+			tickCount++
+			if tickCount == 10 {
+				_ = printDeviceTable(nil)
+				tickCount = 0
+			}
+
+		// COLD: One-time scan completion
 		case result := <-scanResultCh:
-			// Scan completed
-
 			// Only update devicesMap if the scan succeeded (no error or just cancellation)
 			if result.err == nil || errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded) {
 				if result.devices != nil {
@@ -240,29 +266,10 @@ func runWatchMode(s *scanner.Scanner, opts *scanner.ScanOptions, cfg *scanConfig
 				// Real error occurred (e.g., Bluetooth disabled) - exit watch mode
 				return printDeviceTable(result.err)
 			}
-		case <-ticker.C:
-			// Periodic check to ensure ctx.Done() gets a chance to be processed
-			// This prevents channel starvation from the busy events channel
-			select {
-			case <-ctx.Done():
-				return printDeviceTable(nil)
-			default:
-				// Continue processing events
-			}
 
-			// Periodic print of device table
-			tickCount++
-
-			if tickCount == 10 {
-				_ = printDeviceTable(nil)
-				tickCount = 0
-			}
-
-		case ev := <-s.Events():
-			devicesMap[ev.DeviceInfo.Address()] = scanner.DeviceEntry{
-				Device:   ev.DeviceInfo,
-				LastSeen: ev.Timestamp,
-			}
+		// COLDEST: Shutdown signal
+		case <-ctx.Done():
+			return printDeviceTable(ctx.Err())
 		}
 	}
 }
@@ -272,15 +279,15 @@ type deviceWithTime struct {
 	lastSeen time.Time
 }
 
-func displayDevicesTableFromMap(enties map[string]scanner.DeviceEntry, cfg *scanConfig) error {
-	if len(enties) == 0 {
+func displayDevicesTableFromMap(entries map[string]scanner.DeviceEntry, cfg *scanConfig) error {
+	if len(entries) == 0 {
 		fmt.Println("No devices discovered")
 		return nil
 	}
 
 	// Track last seen time for scan display
-	devList := make([]scanner.DeviceEntry, 0, len(enties))
-	for _, e := range enties {
+	devList := make([]scanner.DeviceEntry, 0, len(entries))
+	for _, e := range entries {
 		devList = append(devList, e)
 	}
 
