@@ -337,4 +337,161 @@ test_cases:
                     name: "Notify"
                 descriptors: []
 
+# =============================================================================
+# Subscription Mode Tests (Indicate vs Notify)
+# =============================================================================
+# GOAL: Verify subscription mode validation correctly enforces characteristic capabilities
+#
+# BLE characteristics can support Notify, Indicate, both, or neither.
+# The subscription mode (Indicate=true/false) MUST match the characteristic's capabilities.
+
+  - name: "Subscription Mode: Indicate Success with Indicate-only Char"
+    # GOAL: Verify Indicate subscription succeeds when characteristic supports Indicate
+    #
+    # TEST SCENARIO: Subscribe with Indicate=true to indicate-supporting char → subscription succeeds → receive notification
+    peripheral:
+      - service: "ff30"
+        characteristics:
+          - uuid: "ff31"
+            properties: "read,indicate"
+            value: [0x00]
+    subscription:
+      mode: EveryUpdate
+      max_rate: 0ms
+      services:
+        - service: "ff30"
+          characteristics: ["ff31"]
+          indicate: true
+    steps:
+      - services:
+          - service: "ff30"
+            values:
+              - char: "ff31"
+                value: [0x01, 0x00]
+    expected_json_output:
+      - record:
+          Values:
+            "ff31": [0x01, 0x00]
+
+  - name: "Subscription Mode: Indicate Fails on Notify-only Char"
+    # GOAL: Verify Indicate subscription fails when characteristic only supports Notify
+    #
+    # TEST SCENARIO: Subscribe with Indicate=true to notify-only char → error "does not support indicate"
+    peripheral:
+      - service: "ff30"
+        characteristics:
+          - uuid: "ff32"
+            properties: "read,notify"
+            value: [0x00]
+    subscription:
+      mode: EveryUpdate
+      max_rate: 0ms
+      services:
+        - service: "ff30"
+          characteristics: ["ff32"]
+          indicate: true
+    expect_error_message: "does not support indicate"
+
+  - name: "Subscription Mode: Notify Fails on Indicate-only Char"
+    # GOAL: Verify Notify subscription (default) fails when characteristic only supports Indicate
+    #
+    # TEST SCENARIO: Subscribe without Indicate flag to indicate-only char → error "does not support notify"
+    peripheral:
+      - service: "ff30"
+        characteristics:
+          - uuid: "ff31"
+            properties: "read,indicate"
+            value: [0x00]
+    subscription:
+      mode: EveryUpdate
+      max_rate: 0ms
+      services:
+        - service: "ff30"
+          characteristics: ["ff31"]
+          # indicate: false (default - uses Notify)
+    expect_error_message: "does not support notify"
+
+  - name: "Subscription Mode: Notify Success with Notify-only Char"
+    # GOAL: Verify Notify subscription (default) succeeds when characteristic supports Notify
+    #
+    # TEST SCENARIO: Subscribe without Indicate flag to notify-supporting char → subscription succeeds → receive notification
+    peripheral:
+      - service: "ff30"
+        characteristics:
+          - uuid: "ff32"
+            properties: "read,notify"
+            value: [0x00]
+    subscription:
+      mode: EveryUpdate
+      max_rate: 0ms
+      services:
+        - service: "ff30"
+          characteristics: ["ff32"]
+          # indicate: false (default - uses Notify)
+    steps:
+      - services:
+          - service: "ff30"
+            values:
+              - char: "ff32"
+                value: [0x01, 0x02]
+    expected_json_output:
+      - record:
+          Values:
+            "ff32": [0x01, 0x02]
+
+  - name: "Subscription Mode: Char Supports Both - Indicate Selected"
+    # GOAL: Verify Indicate subscription works when characteristic supports both modes
+    #
+    # TEST SCENARIO: Subscribe with Indicate=true to char supporting both → subscription succeeds → receive notification
+    peripheral:
+      - service: "ff30"
+        characteristics:
+          - uuid: "ff33"
+            properties: "read,notify,indicate"
+            value: [0x00]
+    subscription:
+      mode: EveryUpdate
+      max_rate: 0ms
+      services:
+        - service: "ff30"
+          characteristics: ["ff33"]
+          indicate: true
+    steps:
+      - services:
+          - service: "ff30"
+            values:
+              - char: "ff33"
+                value: [0x42]
+    expected_json_output:
+      - record:
+          Values:
+            "ff33": [0x42]
+
+  - name: "Subscription Mode: Char Supports Both - Notify Selected"
+    # GOAL: Verify Notify subscription (default) works when characteristic supports both modes
+    #
+    # TEST SCENARIO: Subscribe without Indicate flag to char supporting both → subscription succeeds → receive notification
+    peripheral:
+      - service: "ff30"
+        characteristics:
+          - uuid: "ff33"
+            properties: "read,notify,indicate"
+            value: [0x00]
+    subscription:
+      mode: EveryUpdate
+      max_rate: 0ms
+      services:
+        - service: "ff30"
+          characteristics: ["ff33"]
+          # indicate: false (default - uses Notify)
+    steps:
+      - services:
+          - service: "ff30"
+            values:
+              - char: "ff33"
+                value: [0x43]
+    expected_json_output:
+      - record:
+          Values:
+            "ff33": [0x43]
 

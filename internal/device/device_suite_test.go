@@ -60,6 +60,8 @@ func (suite *DeviceTestSuite) SetupTest() {
 		WithCharacteristic("2A37", "notify", []byte{0, 75}).                                    // Heart Rate Measurement (mandatory, notify)
 		WithCharacteristic("2A38", "read", []byte{1}).                                          // Body Sensor Location (optional, read)
 		WithCharacteristic("2A39", "write", []byte{}).                                          // Heart Rate Control Point (optional, write)
+		WithCharacteristic("2A3A", "indicate", []byte{0x00}).                                   // Indicate-only characteristic (for subscription mode tests)
+		WithCharacteristic("2A3B", "notify,indicate", []byte{0x00}).                            // Both notify and indicate (for subscription mode tests)
 		WithCharacteristic("2A40", "read,write", []byte{0x00}).                                 // Test characteristic (read, write)
 		WithCharacteristic("2A41", "read", []byte{42}, testutils.WithReadDelay(1*time.Second)). // Test characteristic with read delay
 		WithCharacteristic("2A42", "write", []byte{}, testutils.WithWriteDelay(1*time.Second)). // Test characteristic with write delay

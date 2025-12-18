@@ -282,7 +282,7 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 							c.logger.WithFields(map[string]interface{}{
 								"char": char.UUID(),
 								"len":  len(val.Data),
-							}).Debug("BLE notification received, calling Lua callback")
+							}).Debug("[subscription] BLE notification received, calling callback")
 						}
 						record := newRecord(device.StreamEveryUpdate)
 						record.Values[char.UUID()] = val.Data
@@ -292,7 +292,7 @@ func (c *BLEConnection) runSubscription(sub *Subscription) {
 						}
 						sub.Callback(record)
 						if c.logger != nil {
-							c.logger.Debug("Lua callback returned")
+							c.logger.Debug("[subscription] callback returned")
 						}
 						releaseBLEValue(val)
 					default:

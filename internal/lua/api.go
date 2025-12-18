@@ -641,6 +641,14 @@ func (api *LuaAPI) parseServicesArray(L *lua.State, tableIndex int) ([]device.Su
 			}
 			L.Pop(1)
 
+			// Parse indicate flag (per-service)
+			L.PushString("indicate")
+			L.GetTable(-2)
+			if L.IsBoolean(-1) {
+				service.Indicate = L.ToBoolean(-1)
+			}
+			L.Pop(1)
+
 			services = append(services, service)
 		}
 		L.Pop(1) // Pop value, keep key for next iteration
@@ -684,6 +692,7 @@ func (api *LuaAPI) executeSubscription(config *LuaSubscriptionTable) error {
 		opt := &device.SubscribeOptions{
 			Service:         serviceConfig.Service,
 			Characteristics: serviceConfig.Characteristics,
+			Indicate:        serviceConfig.Indicate, // Use per-service Indicate flag
 		}
 		opts = append(opts, opt)
 	}
@@ -784,7 +793,9 @@ func (api *LuaAPI) callPTYDataCallback(callbackRef int, data []byte) error {
 
 // callLuaCallback calls the Lua callback function with the record data
 func (api *LuaAPI) callLuaCallback(callbackRef int, record *device.Record) error {
+	api.logger.Debugf("[callLuaCallback] entry, callbackRef=%d", callbackRef)
 	if callbackRef == lua.LUA_NOREF {
+		api.logger.Debug("[callLuaCallback] LUA_NOREF, returning")
 		return nil
 	}
 
@@ -1126,7 +1137,9 @@ func (api *LuaAPI) registerCharacteristicFunction(L *lua.State) {
 
 // registerSleepFunction registers the blim.sleep() utility function
 // Usage: blim.sleep(milliseconds)
-// Sleeps for the specified number of milliseconds
+// Sleeps for the specified number of milliseconds.
+// IMPORTANT: sleep releases the Lua state mutex during sleep to allow subscription
+// callbacks to execute. This enables polling loops to receive BLE notifications.
 func (api *LuaAPI) registerSleepFunction(L *lua.State) {
 	api.SafePushGoFunction(L, "sleep", func(L *lua.State) int {
 		// Validate argument
@@ -1141,8 +1154,14 @@ func (api *LuaAPI) registerSleepFunction(L *lua.State) {
 			return 0
 		}
 
+		// Release mutex to allow callbacks to execute during sleep
+		api.LuaEngine.stateMutex.Unlock()
+
 		// Sleep for the specified duration
 		time.Sleep(time.Duration(ms) * time.Millisecond)
+
+		// Reacquire mutex before returning to Lua
+		api.LuaEngine.stateMutex.Lock()
 
 		return 0
 	})

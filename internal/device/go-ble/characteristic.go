@@ -146,6 +146,13 @@ func (c *BLECharacteristic) EnqueueValue(v *BLEValue) {
 		return
 	}
 
+	if c.connection != nil && c.connection.logger != nil {
+		c.connection.logger.WithFields(map[string]interface{}{
+			"char": c.uuid,
+			"len":  len(v.Data),
+		}).Debug("[EnqueueValue] BLE notification arrived, enqueueing")
+	}
+
 	select {
 	case c.updates <- v:
 	default:

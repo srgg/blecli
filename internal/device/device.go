@@ -183,6 +183,11 @@ type CharacteristicWriter interface {
 	Write(data []byte, withResponse bool, timeout time.Duration) error
 }
 
+// DescriptorReader provides on-demand read operations for descriptors
+type DescriptorReader interface {
+	Read(timeout time.Duration) ([]byte, error)
+}
+
 // Characteristic combines info + operations
 type Characteristic interface {
 	CharacteristicInfo
@@ -193,9 +198,10 @@ type Characteristic interface {
 	ParseValue(value []byte) (interface{}, error) // Parses value using registered parser
 }
 
-// Descriptor combines descriptor information (writes deferred to future implementation)
+// Descriptor combines descriptor information with read operations
 type Descriptor interface {
 	DescriptorInfo
+	DescriptorReader
 }
 
 // Property represents a single BLE characteristic property
@@ -220,6 +226,7 @@ type Properties interface {
 type SubscribeOptions struct {
 	Service         string
 	Characteristics []string // can be empty
+	Indicate        bool     // true = Indicate, false = Notify (default)
 }
 
 // ConnectOptions defines BLE connection options

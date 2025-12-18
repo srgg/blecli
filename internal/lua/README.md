@@ -345,7 +345,10 @@ Subscribes to BLE characteristic notifications/indications.
 
 **Config fields:**
 - `services` (array) - List of service/characteristic subscriptions
-  - Each entry: `{service="UUID", chars={"UUID", ...}}`
+  - Each entry: `{service="UUID", chars={"UUID", ...}, indicate=bool}`
+  - `indicate` (boolean, optional) - Subscription mode per service (default: false)
+    - `false` - Subscribe to Notify (default). Fails if characteristic doesn't support Notify.
+    - `true` - Subscribe to Indicate. Fails if characteristic doesn't support Indicate.
 - `Mode` (string, optional) - Streaming mode (default: "EveryUpdate")
   - `"EveryUpdate"` - Every characteristic update triggers callback
   - `"Batched"` - Multiple updates batched together
@@ -420,6 +423,53 @@ blim.subscribe{
         for uuid, data in pairs(record.Values) do
             local value = string.byte(data, 1)
             print("Latest " .. uuid .. ":", value)
+        end
+    end
+}
+```
+
+**Example: Subscribe to Indicate (instead of Notify)**
+```lua
+-- For characteristics that use Indicate (requires client acknowledgment)
+-- Common for command/control characteristics that need reliable delivery
+blim.subscribe{
+    services = {
+        {service="ff30", chars={"ff31"}, indicate=true}  -- Control characteristic with Indicate
+    },
+    Mode = "EveryUpdate",
+    Callback = function(record)
+        local data = record.Values["ff31"]
+        if data and #data >= 2 then
+            local opcode = string.byte(data, 1)
+            local result = string.byte(data, 2)
+            print(string.format("Command 0x%02X result: 0x%02X", opcode, result))
+        end
+    end
+}
+```
+
+**Example: Mixed Indicate and Notify subscriptions**
+```lua
+-- Subscribe to multiple characteristics with different modes in one call
+blim.subscribe{
+    services = {
+        {service="ff30", chars={"ff31"}, indicate=true},  -- Control: Indicate
+        {service="ff30", chars={"ff32"}}                   -- Status: Notify (default)
+    },
+    Mode = "EveryUpdate",
+    Callback = function(record)
+        -- Handle control indicate (ff31)
+        local control_data = record.Values["ff31"]
+        if control_data then
+            local opcode = string.byte(control_data, 1)
+            local result = string.byte(control_data, 2)
+            print(string.format("Command 0x%02X result: 0x%02X", opcode, result))
+        end
+
+        -- Handle status notify (ff32)
+        local status_data = record.Values["ff32"]
+        if status_data then
+            print("Status:", string.byte(status_data, 1))
         end
     end
 }

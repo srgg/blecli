@@ -198,14 +198,15 @@ func (suite *ConnectionTestSuite) TestConnectionSubscriptionValidation() {
 	})
 
 	suite.Run("subscribe to characteristic with notify support", func() {
-		// GOAL: Verify subscription succeeds for characteristic with notify support
+		// GOAL: Verify Notify subscription succeeds for characteristic with notify support
 		//
-		// TEST SCENARIO: Subscribe to characteristic with notify → subscription succeeds → no error
+		// TEST SCENARIO: Subscribe to notify-supporting char without Indicate flag → subscription succeeds → no error
 
 		err := suite.connection.Subscribe([]*device.SubscribeOptions{
 			{
 				Service:         "180d",
 				Characteristics: []string{"2a37"},
+				Indicate:        false, // Notify mode (default)
 			},
 		}, device.StreamEveryUpdate, 0, func(record *device.Record) {
 			// Callback receives notifications
@@ -215,20 +216,120 @@ func (suite *ConnectionTestSuite) TestConnectionSubscriptionValidation() {
 	})
 
 	suite.Run("subscribe to characteristic with indicate support", func() {
-		// GOAL: Verify subscription succeeds for characteristic with indicate support
+		// GOAL: Verify Indicate subscription succeeds for characteristic with indicate support
 		//
-		// TEST SCENARIO: Subscribe to characteristic with indicate → subscription succeeds → no error
+		// TEST SCENARIO: Subscribe to indicate-supporting char with Indicate=true → subscription succeeds → no error
 
 		err := suite.connection.Subscribe([]*device.SubscribeOptions{
 			{
 				Service:         "180d",
-				Characteristics: []string{"2a37"},
+				Characteristics: []string{"2a3a"}, // Indicate-only characteristic
+				Indicate:        true,             // Indicate mode
+			},
+		}, device.StreamEveryUpdate, 0, func(record *device.Record) {
+			// Callback receives indications
+		})
+
+		suite.Assert().NoError(err, "subscription MUST succeed for characteristic with indicate support")
+	})
+
+	suite.Run("indicate subscription fails on notify-only characteristic", func() {
+		// GOAL: Verify Indicate subscription fails when characteristic only supports Notify
+		//
+		// TEST SCENARIO: Subscribe with Indicate=true to notify-only char → error "does not support indicate"
+
+		err := suite.connection.Subscribe([]*device.SubscribeOptions{
+			{
+				Service:         "180d",
+				Characteristics: []string{"2a37"}, // Notify-only characteristic
+				Indicate:        true,             // Request Indicate mode
+			},
+		}, device.StreamEveryUpdate, 0, func(record *device.Record) {
+			suite.Fail("callback MUST NOT be invoked when subscription fails")
+		})
+
+		suite.Assert().Error(err, "subscription MUST fail for indicate on notify-only char")
+		suite.Assert().ErrorIs(err, device.ErrUnsupported, "error MUST wrap device.ErrUnsupported")
+		suite.Assert().Contains(err.Error(), "does not support indicate", "error message MUST describe unsupported mode")
+		suite.Assert().Contains(err.Error(), "2a37", "error message MUST contain characteristic UUID")
+	})
+
+	suite.Run("notify subscription fails on indicate-only characteristic", func() {
+		// GOAL: Verify Notify subscription fails when characteristic only supports Indicate
+		//
+		// TEST SCENARIO: Subscribe without Indicate flag to indicate-only char → error "does not support notify"
+
+		err := suite.connection.Subscribe([]*device.SubscribeOptions{
+			{
+				Service:         "180d",
+				Characteristics: []string{"2a3a"}, // Indicate-only characteristic
+				Indicate:        false,            // Notify mode (default)
+			},
+		}, device.StreamEveryUpdate, 0, func(record *device.Record) {
+			suite.Fail("callback MUST NOT be invoked when subscription fails")
+		})
+
+		suite.Assert().Error(err, "subscription MUST fail for notify on indicate-only char")
+		suite.Assert().ErrorIs(err, device.ErrUnsupported, "error MUST wrap device.ErrUnsupported")
+		suite.Assert().Contains(err.Error(), "does not support notify", "error message MUST describe unsupported mode")
+		suite.Assert().Contains(err.Error(), "2a3a", "error message MUST contain characteristic UUID")
+	})
+
+	suite.Run("indicate subscription fails on read-only characteristic", func() {
+		// GOAL: Verify Indicate subscription fails when characteristic has no notification support
+		//
+		// TEST SCENARIO: Subscribe with Indicate=true to read-only char → error "does not support indicate"
+
+		err := suite.connection.Subscribe([]*device.SubscribeOptions{
+			{
+				Service:         "180f",
+				Characteristics: []string{"2a19"}, // Read-only characteristic (Battery Level)
+				Indicate:        true,             // Request Indicate mode
+			},
+		}, device.StreamEveryUpdate, 0, func(record *device.Record) {
+			suite.Fail("callback MUST NOT be invoked when subscription fails")
+		})
+
+		suite.Assert().Error(err, "subscription MUST fail for indicate on read-only char")
+		suite.Assert().ErrorIs(err, device.ErrUnsupported, "error MUST wrap device.ErrUnsupported")
+		suite.Assert().Contains(err.Error(), "does not support indicate", "error message MUST describe unsupported mode")
+		suite.Assert().Contains(err.Error(), "2a19", "error message MUST contain characteristic UUID")
+	})
+
+	suite.Run("both modes supported - indicate selected", func() {
+		// GOAL: Verify Indicate subscription works when characteristic supports both modes
+		//
+		// TEST SCENARIO: Subscribe with Indicate=true to char supporting both → subscription succeeds → no error
+
+		err := suite.connection.Subscribe([]*device.SubscribeOptions{
+			{
+				Service:         "180d",
+				Characteristics: []string{"2a3b"}, // Both notify and indicate
+				Indicate:        true,             // Explicitly select Indicate
+			},
+		}, device.StreamEveryUpdate, 0, func(record *device.Record) {
+			// Callback receives indications
+		})
+
+		suite.Assert().NoError(err, "subscription MUST succeed when char supports both and indicate selected")
+	})
+
+	suite.Run("both modes supported - notify selected", func() {
+		// GOAL: Verify Notify subscription works when characteristic supports both modes
+		//
+		// TEST SCENARIO: Subscribe without Indicate flag to char supporting both → subscription succeeds → no error
+
+		err := suite.connection.Subscribe([]*device.SubscribeOptions{
+			{
+				Service:         "180d",
+				Characteristics: []string{"2a3b"}, // Both notify and indicate
+				Indicate:        false,            // Notify mode (default)
 			},
 		}, device.StreamEveryUpdate, 0, func(record *device.Record) {
 			// Callback receives notifications
 		})
 
-		suite.Assert().NoError(err, "subscription MUST succeed for characteristic with indicate support")
+		suite.Assert().NoError(err, "subscription MUST succeed when char supports both and notify selected")
 	})
 
 	suite.Run("subscribe to non-existent service", func() {
@@ -237,11 +338,11 @@ func (suite *ConnectionTestSuite) TestConnectionSubscriptionValidation() {
 		// TEST SCENARIO: Subscribe to non-existent service → error returned → error does NOT wrap ErrUnsupported
 
 		// Provide valid callback so validation logic runs (not just nil check)
-		// Use service UUID that doesn't exist in device (180f is not in the peripheral)
+		// Use service UUID that doesn't exist in device
 		err := suite.connection.Subscribe([]*device.SubscribeOptions{
 			{
-				Service:         "180f",
-				Characteristics: []string{"2a19"},
+				Service:         "ffee",
+				Characteristics: []string{"ffef"},
 			},
 		}, device.StreamEveryUpdate, 0, func(record *device.Record) {
 			suite.Fail("callback MUST NOT be invoked when validation fails")
@@ -249,7 +350,7 @@ func (suite *ConnectionTestSuite) TestConnectionSubscriptionValidation() {
 
 		suite.Assert().Error(err, "subscription MUST fail for non-existent service")
 		suite.Assert().Contains(err.Error(), "service", "error message MUST mention service")
-		suite.Assert().Contains(err.Error(), "180f", "error message MUST contain service UUID")
+		suite.Assert().Contains(err.Error(), "ffee", "error message MUST contain service UUID")
 	})
 
 	suite.Run("subscribe to non-existent characteristic", func() {

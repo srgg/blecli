@@ -546,6 +546,7 @@ func (b *PeripheralDeviceBuilder) Build() blelib.Device {
 			charConfig := svcConfig.Characteristics[charIdx]
 
 			mockClient.On("Subscribe", char, false, mock.Anything).Return(nil)
+			mockClient.On("Subscribe", char, true, mock.Anything).Return(nil) // Indicate mode
 			mockClient.On("Unsubscribe", char, false).Return(nil)
 			mockClient.On("Unsubscribe", char, true).Return(nil)
 

@@ -2200,6 +2200,52 @@ func (suite *LuaApiTestSuite) TestManufacturerData() {
 	}
 }
 
+// TestSleepReleasesLuaStateMutex verifies that blim.sleep() releases the Lua state mutex,
+// allowing subscription callbacks to execute during the sleep period.
+func (suite *LuaApiTestSuite) TestSleepReleasesLuaStateMutex() {
+	// GOAL: Verify blim.sleep() releases Lua state mutex to allow callbacks during sleep
+	//
+	// TEST SCENARIO: Start delayed notification → setup subscription + sleep(100ms) → notification arrives at 50ms → callback executes during sleep → verified
+
+	// Start goroutine to inject notification at 50ms (during the 100ms sleep)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		suite.NewPeripheralDataSimulator().
+			WithService("1234").
+			WithCharacteristic("5678", []byte{0x42}).
+			Simulate(false)
+	}()
+
+	// NOTE: This test assumes subscription setup completes in < 50ms. The goroutine injects
+	// a notification at 50ms, which must arrive during the 100ms sleep window. If subscription
+	// setup becomes slow, increase the delays proportionally.
+	script := `
+		callback_received = false
+
+		blim.subscribe{
+			services = {
+				{
+					service = "1234",
+					chars = {"5678"}
+				}
+			},
+			Mode = "EveryUpdate",
+			MaxRate = 0,
+			Callback = function(record)
+				callback_received = true
+			end
+		}
+
+		-- Sleep for 100ms; notification arrives at 50ms
+		blim.sleep(100)
+
+		-- Callback MUST have been invoked during sleep (proves mutex was released)
+		assert(callback_received == true, "callback MUST be invoked during blim.sleep() (internal lua state mutex must be released durign sleep)")
+	`
+	err := suite.ExecuteScript(script)
+	suite.NoError(err, "Sleep should release mutex allowing callback execution")
+}
+
 // TestLuaAPITestSuite runs the test suite using testify/suite
 func TestLuaAPITestSuite(t *testing.T) {
 	suitelib.Run(t, new(LuaApiTestSuite))

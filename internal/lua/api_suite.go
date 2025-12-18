@@ -621,7 +621,12 @@ func (suite *LuaApiSuite) CreateSubscriptionJsonScript(pattern string, maxRate t
 		if i > 0 {
 			services.WriteString(",")
 		}
-		if _, err := fmt.Fprintf(&services, `{service="%s",chars={"%s"}}`, sub.Service, strings.Join(sub.Characteristics, `","`)); err != nil {
+		// Build service entry with optional indicate flag
+		indicateStr := ""
+		if sub.Indicate {
+			indicateStr = ",indicate=true"
+		}
+		if _, err := fmt.Fprintf(&services, `{service="%s",chars={"%s"}%s}`, sub.Service, strings.Join(sub.Characteristics, `","`), indicateStr); err != nil {
 			panic(fmt.Sprintf("CreateSubscriptionJsonScript: failed to build services string for subscription[%d] (service=%q, chars=%v): %v", i, sub.Service, sub.Characteristics, err))
 		}
 	}

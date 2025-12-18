@@ -251,7 +251,7 @@ func (c *BLEConnection) Connect(ctx context.Context, address string, opts *devic
 				// Create descriptors with values (reads are best-effort, won't fail characteristic creation)
 				descriptors := make([]device.Descriptor, 0, len(bleCharacteristic.Descriptors))
 				for idx, d := range bleCharacteristic.Descriptors {
-					descriptors = append(descriptors, newDescriptor(d, client, c.descriptorReadTimeout, uint8(idx), c.logger))
+					descriptors = append(descriptors, newDescriptor(d, c, client, c.descriptorReadTimeout, uint8(idx), c.logger))
 				}
 
 				// Parse well-known descriptor formats. if any
@@ -541,8 +541,21 @@ func (c *BLEConnection) validateSubscribeOptions(opts *device.SubscribeOptions, 
 			for charUUID, char := range service.Characteristics {
 				if char.BLEChar == nil {
 					missingChars = append(missingChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.Service))
-				} else if requireNotificationSupport && char.BLEChar.Property&ble.CharNotify == 0 && char.BLEChar.Property&ble.CharIndicate == 0 {
-					unsupportedChars = append(unsupportedChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.Service))
+				} else if requireNotificationSupport {
+					// Check specific mode support (Indicate vs Notify)
+					if opts.Indicate {
+						if char.BLEChar.Property&ble.CharIndicate == 0 {
+							unsupportedChars = append(unsupportedChars, fmt.Sprintf("%s: does not support indicate", charUUID))
+						} else {
+							characteristicsToProcess[charUUID] = char
+						}
+					} else {
+						if char.BLEChar.Property&ble.CharNotify == 0 {
+							unsupportedChars = append(unsupportedChars, fmt.Sprintf("%s: does not support notify", charUUID))
+						} else {
+							characteristicsToProcess[charUUID] = char
+						}
+					}
 				} else {
 					characteristicsToProcess[charUUID] = char
 				}
@@ -556,8 +569,21 @@ func (c *BLEConnection) validateSubscribeOptions(opts *device.SubscribeOptions, 
 					missingChars = append(missingChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.Service))
 				} else if char.BLEChar == nil {
 					missingChars = append(missingChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.Service))
-				} else if requireNotificationSupport && char.BLEChar.Property&ble.CharNotify == 0 && char.BLEChar.Property&ble.CharIndicate == 0 {
-					unsupportedChars = append(unsupportedChars, fmt.Sprintf("%s (in service %s)", charUUID, opts.Service))
+				} else if requireNotificationSupport {
+					// Check specific mode support (Indicate vs Notify)
+					if opts.Indicate {
+						if char.BLEChar.Property&ble.CharIndicate == 0 {
+							unsupportedChars = append(unsupportedChars, fmt.Sprintf("%s: does not support indicate", charUUID))
+						} else {
+							characteristicsToProcess[normalizedCharUUID] = char
+						}
+					} else {
+						if char.BLEChar.Property&ble.CharNotify == 0 {
+							unsupportedChars = append(unsupportedChars, fmt.Sprintf("%s: does not support notify", charUUID))
+						} else {
+							characteristicsToProcess[normalizedCharUUID] = char
+						}
+					}
 				} else {
 					characteristicsToProcess[normalizedCharUUID] = char
 				}
@@ -622,10 +648,16 @@ func (c *BLEConnection) BLESubscribe(opts *device.SubscribeOptions) error {
 
 	// All validation passed - proceed with subscriptions outside the lock
 	var subscriptionErrors []string
+	subscriptionMode := "notify"
+	if opts.Indicate {
+		subscriptionMode = "indicate"
+	}
+
 	for charUUID, char := range characteristicsCopy {
-		// create a local variable to capture the current char
+		// Mode validation already done in validateSubscribeOptions
+		// Create a local variable to capture the current char
 		charCapture := char
-		err := NormalizeError(client.Subscribe(char.BLEChar, false, func(data []byte) {
+		err := NormalizeError(client.Subscribe(char.BLEChar, opts.Indicate, func(data []byte) {
 			c.ProcessCharacteristicNotification(charCapture, data)
 		}))
 
@@ -635,15 +667,17 @@ func (c *BLEConnection) BLESubscribe(opts *device.SubscribeOptions) error {
 				c.logger.WithFields(logrus.Fields{
 					"serviceUUID": opts.Service,
 					"charUUID":    charUUID,
+					"mode":        subscriptionMode,
 					"error":       err,
-				}).Error("Failed to subscribe to characteristic notifications")
+				}).Error("Failed to subscribe to characteristic")
 			}
 		} else {
 			if c.logger != nil {
 				c.logger.WithFields(logrus.Fields{
 					"serviceUUID": opts.Service,
 					"charUUID":    charUUID,
-				}).Info("Successfully subscribed to characteristic notifications")
+					"mode":        subscriptionMode,
+				}).Info("Successfully subscribed to characteristic")
 			}
 		}
 	}

@@ -7,7 +7,6 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
-	"sync"
 	"time"
 
 	_ "embed"
@@ -80,10 +79,33 @@ func (e *LuaError) Is(target error) bool {
 	return false
 }
 
+// FairLock is a channel-based lock with FIFO fairness guarantees.
+// Unlike sync.Mutex, blocked goroutines are served in order they called Lock().
+// This prevents starvation when multiple goroutines compete for the lock.
+type FairLock chan struct{}
+
+// NewFairLock creates a new fair lock in unlocked state.
+func NewFairLock() FairLock {
+	lock := make(FairLock, 1)
+	lock <- struct{}{} // Start unlocked (token available)
+	return lock
+}
+
+// Lock acquires the lock. Blocks until lock is available.
+// Blocked goroutines are served in FIFO order.
+func (l FairLock) Lock() {
+	<-l // Receive token (FIFO queue for waiters)
+}
+
+// Unlock releases the lock.
+func (l FairLock) Unlock() {
+	l <- struct{}{} // Return token
+}
+
 // LuaEngine represents the Lua engine with full output capture
 type LuaEngine struct {
 	state      *lua.State
-	stateMutex sync.Mutex
+	stateMutex FairLock // Channel-based fair lock (FIFO) to prevent starvation
 	logger     *logrus.Logger
 	scriptCode string
 	outputChan *RingChannel[LuaOutputRecord] // ring buffer for Lua outputs
@@ -101,6 +123,7 @@ func NewLuaEngine(logger *logrus.Logger) *LuaEngine {
 func NewLuaEngineWithOutputChannelCapacity(logger *logrus.Logger, capacity int) *LuaEngine {
 	engine := &LuaEngine{
 		logger:     logger,
+		stateMutex: NewFairLock(),
 		outputChan: NewRingChannel[LuaOutputRecord](capacity),
 	}
 
@@ -136,7 +159,9 @@ func (e *LuaEngine) SafeWrapGoFunction(name string, fn func(*lua.State) int) fun
 }
 
 func (e *LuaEngine) DoWithState(callback func(*lua.State) interface{}) interface{} {
+	e.logger.Debug("[DoWithState] waiting for mutex...")
 	e.stateMutex.Lock()
+	e.logger.Debug("[DoWithState] mutex acquired")
 	defer e.stateMutex.Unlock()
 
 	if e.state == nil {

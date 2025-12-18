@@ -215,13 +215,9 @@ func performReadWithPrefix(char device.Characteristic, desc device.Descriptor, m
 
 	// Read descriptor or characteristic
 	if desc != nil {
-		data = desc.Value()
-		if data == nil {
-			// Descriptor value not available
-			if descErr, ok := desc.ParsedValue().(*device.DescriptorError); ok {
-				return fmt.Errorf("failed to read descriptor: %s", descErr.Reason)
-			}
-			return fmt.Errorf("descriptor value not available")
+		data, err = desc.Read(readTimeout)
+		if err != nil {
+			return fmt.Errorf("failed to read descriptor: %w", err)
 		}
 	} else {
 		// Read characteristic using the abstracted interface
@@ -274,14 +270,10 @@ func performSingleRead(char device.Characteristic, desc device.Descriptor, logge
 
 	// Read descriptor or characteristic
 	if desc != nil {
-		data = desc.Value()
-		if data == nil {
-			if descErr, ok := desc.ParsedValue().(*device.DescriptorError); ok {
-				logger.WithError(fmt.Errorf("%s", descErr.Reason)).Error("failed to read descriptor")
-			} else {
-				logger.Error("descriptor value not available")
-			}
-			return fmt.Errorf("descriptor value not available")
+		data, err = desc.Read(readTimeout)
+		if err != nil {
+			logger.WithError(err).Error("failed to read descriptor")
+			return err
 		}
 	} else {
 		data, err = char.Read(readTimeout)

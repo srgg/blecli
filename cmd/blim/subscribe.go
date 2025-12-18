@@ -55,6 +55,7 @@ var (
 	subscribeTimeout     time.Duration
 	subscribeMode        string
 	subscribeRate        time.Duration
+	subscribeIndicate    bool
 )
 
 func init() {
@@ -64,6 +65,7 @@ func init() {
 	subscribeCmd.Flags().DurationVar(&subscribeTimeout, "timeout", 30*time.Second, "Connection timeout")
 	subscribeCmd.Flags().StringVar(&subscribeMode, "mode", "live", "Stream mode: live, batched, or latest")
 	subscribeCmd.Flags().DurationVar(&subscribeRate, "rate", 1*time.Second, "Rate limit interval for batched/latest modes")
+	subscribeCmd.Flags().BoolVar(&subscribeIndicate, "indicate", false, "Use indications instead of notifications")
 }
 
 // parseStreamMode converts CLI mode string to device.StreamMode
@@ -212,6 +214,7 @@ func runSubscribe(cmd *cobra.Command, args []string) error {
 			subscribeOpts = append(subscribeOpts, &device.SubscribeOptions{
 				Service:         svcUUID,
 				Characteristics: chars,
+				Indicate:        subscribeIndicate,
 			})
 		}
 
